@@ -5,6 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-07-16
+
+### Added
+
+- **Verbosity-leveled descriptions.** Anywhere a description string is accepted
+  — a tool's `description:`/`title:`, a toolkit `@mcp description:`, a
+  `field ... description:` — a variant list is now also accepted, tailoring the
+  wording to a requested verbosity level (domain `0..9`, `0` = tersest):
+
+  ```elixir
+  use Noizu.MCP.Server.Tool,
+    description: [
+      {{:verbosity, {2, 3}}, "Medium description."},
+      {{:verbosity, 0},      "Terse."},
+      default: "Definitive fallback text"
+    ]
+  ```
+
+  Keys: `{:verbosity, n}`, `{:verbosity, {lo, hi}}`, `{:verbosity, [n, ...]}`,
+  `default:` (fallback text), and `default_verbosity:` (annotation-level default
+  level). Bare strings are unchanged and cover every level.
+- `Noizu.MCP.Description` — normalized variant struct compiled at
+  `@before_compile`; `compile/2` validates the domain and rejects malformed
+  keys, out-of-domain levels, duplicate level coverage, and inverted ranges at
+  compile time. `resolve/2` gap-fills uncovered levels to the nearest covered
+  level (ties prefer the lower level).
+- `Noizu.MCP.RenderCtx` — render context (`verbosity`, `runner`, `model`,
+  `defaults`) threaded through every description render site;
+  `effective_verbosity/1` resolves the defaults chain (built-in default `5`).
+  Server/global default verbosity via `use Noizu.MCP.Server, default_verbosity:
+  N` or the `:noizu_mcp, :default_verbosity` application env.
+- `Noizu.MCP.Types.Tool.to_map/2` and `Noizu.MCP.Server.Tool.Fields.to_json_schema/2`
+  take a `RenderCtx`; the arity-1 forms delegate with `RenderCtx.default/0`, so
+  single-string tools render exactly as before. `tools/list` derives the context
+  from session assigns (`:render_ctx`, or `:verbosity`/`:runner`/`:model`).
+
+Backwards compatible: `runner`/`model` are carried but not yet consulted (seam
+for per-runner descriptions).
+
+- **Inline `@eval` annotations (description tuning).** Attach eval specs to a
+  tool to continuously grade the *rendered* descriptions it advertises across
+  model × verbosity permutations. Classic tools take an `evals:` `use` option;
+  toolkit functions take an `@eval` module attribute that drains onto the
+  following `@mcp` tool (mirroring how `@mcp` is collected):
+
+  ```elixir
+  @eval name: :simple_task,
+        prompt: [%{role: "user", content: "Read config.exs"}],
+        rubric: [reads_path: "the call passes the requested path"]
+  @mcp description: "Read a file", input: [path: [type: :string, required: true]]
+  def read_file(%{path: path}, _ctx), do: File.read(path)
+  ```
+
+  `name` (atom/string, unique per tool), `prompt` (message list or string), and
+  `rubric` (non-empty keyword of `criterion: "description"`) are validated at
+  compile time.
+- `Noizu.MCP.Eval` — eval spec compilation (`compile_specs/2`) and introspection
+  (`list/1` → `[{tool_name, [%Noizu.MCP.Eval.Spec{}]}]`). Eval specs live on
+  `Noizu.MCP.Server.Tool.Spec.evals` and are **never** serialized onto the wire —
+  `Types.Tool.to_map/1,2` (including `_meta`) carries no eval content.
+- `mix noizu.mcp.eval --server Mod [--tool T] [--runner R --model M]
+  [--verbosity N|all] [--output path.json] [--gate]` — the eval harness
+  (`Noizu.MCP.Eval.Harness`). For each `(tool, eval, permutation)` it renders the
+  tool schema through the §0/§2/§3 pipeline for that `RenderCtx`, runs the prompt
+  via a pluggable `Noizu.MCP.Eval.Runner`, and grades each rubric criterion via a
+  pluggable `Noizu.MCP.Eval.Judge`, emitting a JSON report; `--gate` exits
+  non-zero on any failing criterion.
+- Runner/judge adapters are selected via the `:noizu_mcp` `:eval_runner` /
+  `:eval_judge` application env. A deterministic no-LLM stub pair
+  (`Noizu.MCP.Eval.Runner.Stub` / `Noizu.MCP.Eval.Judge.Stub`) ships for
+  tests/CI; real LLM adapters are app-layer follow-ups. Eval-score persistence
+  (the `mcp_description_evals` table, spec §4) is a backend follow-up, out of lib
+  scope.
+
 ## [0.1.0] — 2026-06-13
 
 Initial release. Targets MCP specification revision **2025-11-25**

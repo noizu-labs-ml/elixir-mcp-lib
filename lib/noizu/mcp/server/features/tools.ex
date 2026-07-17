@@ -26,7 +26,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   return values to wire maps.
   """
 
-  alias Noizu.MCP.{Error, Schema}
+  alias Noizu.MCP.{Error, RenderCtx, Schema}
   alias Noizu.MCP.Server.Features.Pagination
   alias Noizu.MCP.Server.Tool.{Fields, Spec}
   alias Noizu.MCP.Types.{Content, Tool, ToolResult}
@@ -37,10 +37,11 @@ defmodule Noizu.MCP.Server.Features.Tools do
 
   def list(server, params, ctx) do
     cursor = (params || %{})["cursor"]
+    render = render_ctx(ctx)
 
     case server.handle_list_tools(cursor, ctx) do
       {:ok, tools, next_cursor} ->
-        result = %{"tools" => Enum.map(tools, &Tool.to_map/1)}
+        result = %{"tools" => Enum.map(tools, &Tool.to_map(&1, render))}
         result = if next_cursor, do: Map.put(result, "nextCursor", next_cursor), else: result
         {:ok, result}
 
@@ -48,6 +49,33 @@ defmodule Noizu.MCP.Server.Features.Tools do
         {:error, error}
     end
   end
+
+  # Derive the description render context for a tools/list response.
+  #
+  # App-layer wiring seam: a fully-built `%RenderCtx{}` dropped into
+  # `ctx.assigns[:render_ctx]` (e.g. from a gateway plug or the server's
+  # `init/2`, keyed off session `verbosity`/`runner`/`model` or request headers)
+  # wins outright. Otherwise a context is assembled from the individual
+  # `:verbosity`/`:runner`/`:model` assigns, with the server/global
+  # default-verbosity chain resolved via `RenderCtx.server_defaults/1`. With no
+  # such assigns this is `RenderCtx.default/0` — single-string tools render
+  # exactly as before.
+  defp render_ctx(%{assigns: assigns} = ctx) when is_map(assigns) do
+    case assigns[:render_ctx] do
+      %RenderCtx{} = rc ->
+        rc
+
+      _ ->
+        %RenderCtx{
+          verbosity: assigns[:verbosity],
+          runner: assigns[:runner],
+          model: assigns[:model],
+          defaults: RenderCtx.server_defaults(Map.get(ctx, :server))
+        }
+    end
+  end
+
+  defp render_ctx(_ctx), do: RenderCtx.default()
 
   @doc """
   Expand a `[{module, opts}]` registration list into flat `[%Spec{}]`.

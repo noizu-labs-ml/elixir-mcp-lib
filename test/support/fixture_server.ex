@@ -422,6 +422,133 @@ defmodule Noizu.MCP.Fixtures.Server do
   end
 end
 
+defmodule Noizu.MCP.Fixtures.VerboseTool do
+  @moduledoc false
+  # Verbosity-leveled tool + field descriptions (spec §2).
+  use Noizu.MCP.Server.Tool,
+    name: "verbose",
+    description: [
+      {{:verbosity, {0, 2}}, "terse tool"},
+      {{:verbosity, {3, 6}}, "medium tool"},
+      {{:verbosity, {7, 9}}, "verbose tool"},
+      default: "definitive tool"
+    ]
+
+  input do
+    field :query, :string,
+      required: true,
+      description: [
+        {{:verbosity, 0}, "q"},
+        {{:verbosity, 5}, "the search query"},
+        {{:verbosity, 9}, "the full-text search query string to run against the index"}
+      ]
+  end
+
+  @impl true
+  def call(%{query: query}, _ctx), do: {:ok, query}
+end
+
+defmodule Noizu.MCP.Fixtures.VerboseKit do
+  @moduledoc false
+  use Noizu.MCP.Server.Toolkit
+
+  @mcp name: "vk.echo",
+       description: [
+         {{:verbosity, 0}, "terse kit"},
+         {{:verbosity, 9}, "verbose kit"},
+         default: "kit default"
+       ],
+       input: [
+         msg: [
+           type: :string,
+           required: true,
+           description: [
+             {{:verbosity, 0}, "m"},
+             {{:verbosity, 9}, "the message to echo verbatim"}
+           ]
+         ]
+       ]
+  def vk_echo(%{msg: msg}, _ctx), do: {:ok, msg}
+end
+
+defmodule Noizu.MCP.Fixtures.RunnerTool do
+  @moduledoc false
+  # Per-runner/model tagged descriptions (spec §3): named variants selected by a
+  # verbosity map and by {provider, model} runner rules, over both the tool
+  # description and a field description.
+  use Noizu.MCP.Server.Tool,
+    name: "runner_tool",
+    description: "definitive tool",
+    descriptions: [
+      base: "base variant",
+      grok_terse: "grok terse variant",
+      grok_rich: "grok rich variant",
+      codex_default: "codex default variant",
+      spark_hi: "spark high variant"
+    ],
+    verbosity_map: [{{0, 4}, :base}, {{5, 9}, :spark_hi}],
+    runners: [
+      {{:grok, :*}, [{{:verbosity, {0, 3}}, :grok_terse}, {{:verbosity, 9}, :grok_rich}]},
+      {{:codex, [:spark, :"5.4"]}, [default: :codex_default]}
+    ]
+
+  input do
+    field :query, :string,
+      required: true,
+      description: "definitive field",
+      descriptions: [q_base: "q base", q_codex: "q codex"],
+      verbosity_map: [{{0, 9}, :q_base}],
+      runners: [{{:codex, :*}, [default: :q_codex]}]
+  end
+
+  @impl true
+  def call(%{query: query}, _ctx), do: {:ok, query}
+end
+
+defmodule Noizu.MCP.Fixtures.RunnerKit do
+  @moduledoc false
+  use Noizu.MCP.Server.Toolkit
+
+  @mcp name: "rk.echo",
+       description: "definitive kit",
+       descriptions: [terse: "rk terse", codex: "rk codex"],
+       verbosity_map: [{{0, 9}, :terse}],
+       runners: [{{:codex, :*}, [default: :codex]}],
+       input: [msg: [type: :string, required: true, description: "the message"]]
+  def rk_echo(%{msg: msg}, _ctx), do: {:ok, msg}
+end
+
+defmodule Noizu.MCP.Fixtures.VerboseServer do
+  @moduledoc false
+  # Server-level default verbosity feeds RenderCtx.defaults.
+  use Noizu.MCP.Server,
+    name: "verbose_fixture",
+    version: "1.0.0",
+    default_verbosity: 1
+
+  tool Noizu.MCP.Fixtures.VerboseTool
+end
+
+defmodule Noizu.MCP.Fixtures.RunnerServer do
+  @moduledoc false
+  # Injects runner/model into the render context via session assigns, so
+  # tools/list resolves the {provider, model} runner rules on the wire.
+  use Noizu.MCP.Server,
+    name: "runner_fixture",
+    version: "1.0.0"
+
+  tool Noizu.MCP.Fixtures.RunnerTool
+
+  @impl Noizu.MCP.Server
+  def init(ctx, _init_params) do
+    {:ok,
+     ctx
+     |> Noizu.MCP.Ctx.assign(:runner, :codex)
+     |> Noizu.MCP.Ctx.assign(:model, :spark)
+     |> Noizu.MCP.Ctx.assign(:verbosity, 3)}
+  end
+end
+
 defmodule Noizu.MCP.Fixtures.BareServer do
   @moduledoc false
   # Behaviour-only server: no DSL registrations, callbacks implemented by hand.
@@ -466,4 +593,70 @@ defmodule Noizu.MCP.Fixtures.HiddenServer do
 
   resource_template Noizu.MCP.Fixtures.TableSchema
   resource_template Noizu.MCP.Fixtures.HiddenTemplate
+end
+
+defmodule Noizu.MCP.Fixtures.EvalTool do
+  @moduledoc false
+  # Inline @eval annotations (spec §4) via the classic-tool `evals:` option.
+  # The description is a verbosity variant set so the harness can prove the
+  # *rendered* text varies per permutation, and the stub judge (substring match)
+  # passes/fails deterministically per band.
+  use Noizu.MCP.Server.Tool,
+    name: "eval_tool",
+    description: [
+      {{:verbosity, {0, 2}}, "search"},
+      {{:verbosity, {3, 6}}, "run a search query"},
+      {{:verbosity, {7, 9}}, "run a full-text search query against the index"},
+      default: "search"
+    ],
+    evals: [
+      [
+        name: :simple_task,
+        prompt: [%{role: "user", content: "Find documents about elixir."}],
+        rubric: [
+          mentions_query: "search query",
+          mentions_index: "against the index"
+        ]
+      ],
+      [
+        name: :terse_ok,
+        prompt: "Just search.",
+        rubric: [mentions_search: "search"]
+      ]
+    ]
+
+  input do
+    field :query, :string, required: true, description: "the query"
+  end
+
+  @impl true
+  def call(%{query: query}, _ctx), do: {:ok, query}
+end
+
+defmodule Noizu.MCP.Fixtures.EvalKit do
+  @moduledoc false
+  # Toolkit @eval: the eval drains onto the following @mcp tool; a second tool
+  # with no @eval must NOT inherit it.
+  use Noizu.MCP.Server.Toolkit
+
+  @eval name: :kit_eval,
+        prompt: ["Echo hello via the kit."],
+        rubric: [echoes: "echo"]
+  @mcp name: "ek.echo",
+       description: "Echo a message via the eval kit",
+       input: [msg: [type: :string, required: true, description: "the message"]]
+  def ek_echo(%{msg: msg}, _ctx), do: {:ok, msg}
+
+  @mcp name: "ek.plain", description: "Plain tool with no evals"
+  def ek_plain(_args, _ctx), do: {:ok, "plain"}
+end
+
+defmodule Noizu.MCP.Fixtures.EvalServer do
+  @moduledoc false
+  use Noizu.MCP.Server, name: "eval_fixture", version: "1.0.0"
+
+  tool Noizu.MCP.Fixtures.EvalTool
+  tool Noizu.MCP.Fixtures.EvalKit
+  # A tool with no evals — Eval.list/1 must omit it.
+  tool Noizu.MCP.Fixtures.Echo
 end

@@ -44,7 +44,11 @@ defmodule Noizu.MCP.Server.Toolkit do
     * `:name` — wire name; defaults to the function name (`server_time` →
       `"server_time"`)
     * `:title` — human-readable display name
-    * `:description` — tells the model when and why to use the tool
+    * `:description` — tells the model when and why to use the tool. Accepts a
+      plain string or a verbosity variant list (see `Noizu.MCP.Description`)
+    * `:descriptions` / `:verbosity_map` / `:runners` — named description
+      variants and their verbosity/runner selection rules (spec §3); see
+      `Noizu.MCP.Description`
     * `:category` — grouping label; defaults to the toolkit-level
       `category:` `use` option. Rides on the wire in `_meta.category`.
     * `:input` — input schema as a data-form field spec (keyword list, see
@@ -60,6 +64,22 @@ defmodule Noizu.MCP.Server.Toolkit do
 
   Multiple `@mcp` lines before one function merge into a single option set
   (later lines win on key conflict).
+
+  ## Evals (`@eval`)
+
+  Attach description-tuning evals (spec §4) to a tool with the `@eval` module
+  attribute (`accumulate: true`). Each `@eval` drains onto the **following**
+  `@mcp` tool, mirroring how `@mcp` itself is collected — declare them together,
+  immediately before the function:
+
+      @eval name: :simple_task,
+            prompt: [%{role: "user", content: "Read config.exs"}],
+            rubric: [reads_path: "the call passes the requested path"]
+      @mcp description: "Read a file", input: [path: [type: :string, required: true]]
+      def read_file(%{path: path}, _ctx), do: File.read(path)
+
+  Eval specs are compile-time metadata for the `mix noizu.mcp.eval` harness and
+  never appear on the wire. See `Noizu.MCP.Eval` for the spec shape.
 
   ## Input forms
 
@@ -101,6 +121,7 @@ defmodule Noizu.MCP.Server.Toolkit do
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       Module.register_attribute(__MODULE__, :mcp, accumulate: true)
+      Module.register_attribute(__MODULE__, :eval, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_toolkit_tools__, accumulate: true)
       @__mcp_toolkit_opts__ opts
 
@@ -136,9 +157,13 @@ defmodule Noizu.MCP.Server.Toolkit do
 
           true ->
             merged = merge_attrs(env, fun, attrs)
-            Module.put_attribute(env.module, :__mcp_toolkit_tools__, {fun, arity, merged})
+            # Drain any accumulated @eval onto this tool, mirroring @mcp — the
+            # evals attach to the following @mcp function.
+            evals = Module.get_attribute(env.module, :eval) |> List.wrap() |> Enum.reverse()
+            Module.put_attribute(env.module, :__mcp_toolkit_tools__, {fun, arity, merged, evals})
             # Clear so later clauses of this function (and the next def) start clean.
             Module.delete_attribute(env.module, :mcp)
+            Module.delete_attribute(env.module, :eval)
         end
     end
   end
@@ -182,11 +207,12 @@ defmodule Noizu.MCP.Server.Toolkit do
     end
   end
 
-  defp build_spec(env, toolkit_opts, {fun, arity, opts}) do
+  defp build_spec(env, toolkit_opts, {fun, arity, opts, raw_evals}) do
     name = to_string(opts[:name] || fun)
 
-    {input_schema, cast_plan} = build_input(env, name, opts)
-    output_schema = build_output(env, name, opts)
+    {input_schema, cast_plan, input_fields} = build_input(env, name, opts)
+    {output_schema, output_fields} = build_output(env, name, opts)
+    evals = compile_evals!(env, name, raw_evals)
 
     hidden =
       cond do
@@ -204,12 +230,17 @@ defmodule Noizu.MCP.Server.Toolkit do
         {meta, category} -> Map.put(meta || %{}, "category", category)
       end
 
+    description = from_opts!(env, name, opts)
+    title = compile_description!(env, name, :title, opts[:title])
+
     definition = %Noizu.MCP.Types.Tool{
       name: name,
-      title: opts[:title],
-      description: opts[:description],
+      title: title,
+      description: description,
       input_schema: input_schema,
       output_schema: output_schema,
+      input_fields: input_fields,
+      output_fields: output_fields,
       annotations: opts[:annotations],
       icons: opts[:icons],
       meta: meta
@@ -222,47 +253,74 @@ defmodule Noizu.MCP.Server.Toolkit do
       definition: definition,
       cast_plan: cast_plan,
       output_schema: output_schema,
-      hidden: hidden
+      hidden: hidden,
+      evals: evals
     }
+  end
+
+  # Compile the @eval specs drained onto this tool (spec §4). Surfaced as a
+  # CompileError to match the rest of the toolkit DSL's error convention.
+  defp compile_evals!(env, name, raw_evals) do
+    Noizu.MCP.Eval.compile_specs(raw_evals, "@mcp tool #{name}")
+  rescue
+    e in ArgumentError ->
+      raise CompileError, file: env.file, description: Exception.message(e)
   end
 
   defp build_input(env, name, opts) do
     cond do
       Keyword.has_key?(opts, :input_schema) ->
-        {raw_schema!(env, name, :input_schema, opts[:input_schema]), nil}
+        {raw_schema!(env, name, :input_schema, opts[:input_schema]), nil, nil}
 
       Keyword.has_key?(opts, :input) ->
         case opts[:input] do
           spec when is_list(spec) ->
             fields = fields_from_spec!(env, name, :input, spec)
-            {Fields.to_json_schema(fields), Fields.to_cast_plan(fields)}
+            {Fields.to_json_schema(fields), Fields.to_cast_plan(fields), fields}
 
           other ->
-            {raw_schema!(env, name, :input, other), nil}
+            {raw_schema!(env, name, :input, other), nil, nil}
         end
 
       true ->
-        {%{"type" => "object"}, nil}
+        {%{"type" => "object"}, nil, nil}
     end
   end
 
   defp build_output(env, name, opts) do
     cond do
       Keyword.has_key?(opts, :output_schema) ->
-        raw_schema!(env, name, :output_schema, opts[:output_schema])
+        {raw_schema!(env, name, :output_schema, opts[:output_schema]), nil}
 
       Keyword.has_key?(opts, :output) ->
         case opts[:output] do
           spec when is_list(spec) ->
-            fields_from_spec!(env, name, :output, spec) |> Fields.to_json_schema()
+            fields = fields_from_spec!(env, name, :output, spec)
+            {Fields.to_json_schema(fields), fields}
 
           other ->
-            raw_schema!(env, name, :output, other)
+            {raw_schema!(env, name, :output, other), nil}
         end
 
       true ->
-        nil
+        {nil, nil}
     end
+  end
+
+  defp compile_description!(env, name, key, value) do
+    Noizu.MCP.Description.compile(value, "@mcp tool #{name} #{key}")
+  rescue
+    e in ArgumentError ->
+      raise CompileError, file: env.file, description: Exception.message(e)
+  end
+
+  # Compile `description:` together with the named-variant siblings
+  # (`descriptions:`, `verbosity_map:`, `runners:`) from the @mcp option set.
+  defp from_opts!(env, name, opts) do
+    Noizu.MCP.Description.from_opts(opts, "@mcp tool #{name} description")
+  rescue
+    e in ArgumentError ->
+      raise CompileError, file: env.file, description: Exception.message(e)
   end
 
   defp fields_from_spec!(env, name, key, spec) do

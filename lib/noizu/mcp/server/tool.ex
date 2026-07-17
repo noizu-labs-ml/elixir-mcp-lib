@@ -29,7 +29,14 @@ defmodule Noizu.MCP.Server.Tool do
 
     * `:name` — wire name; defaults to the module basename underscored
       (`MyApp.MCP.GetWeather` → `"get_weather"`)
-    * `:description` — tells the model when and why to use the tool
+    * `:description` — tells the model when and why to use the tool. Accepts a
+      plain string or a verbosity variant list (see `Noizu.MCP.Description`)
+    * `:descriptions` — named description variants (`[tag: "text", ...]`)
+      referenced by `:verbosity_map`/`:runners` (spec §3)
+    * `:verbosity_map` — `[{verbosity_spec, tag}, ...]` selecting a named variant
+      by verbosity level
+    * `:runners` — `[{{provider, model_matcher}, rules}, ...]` selecting a named
+      variant by `{runner, model}` (spec §3); see `Noizu.MCP.Description`
     * `:title` — human-readable display name
     * `:annotations` — keyword list of behavior hints (`:read_only_hint`,
       `:destructive_hint`, `:idempotent_hint`, `:open_world_hint`, `:title`)
@@ -39,6 +46,10 @@ defmodule Noizu.MCP.Server.Tool do
     * `:category` — free-form grouping label. Rides on the wire in
       `_meta.category` (merged into `:meta`) and is filterable through the
       built-in `Noizu.MCP.Server.Tools.Catalog` tool.
+    * `:evals` — a list of inline eval specs for description tuning (spec §4);
+      each is `[name: ..., prompt: ..., rubric: ...]`. See `Noizu.MCP.Eval`.
+      Evals are compile-time metadata for the `mix noizu.mcp.eval` harness and
+      never appear on the wire.
 
   Need several small tools in one module? See `Noizu.MCP.Server.Toolkit`.
 
@@ -100,8 +111,10 @@ defmodule Noizu.MCP.Server.Tool do
 
       @__mcp_tool_opts__ opts
       @__mcp_input_schema__ nil
+      @__mcp_input_fields__ nil
       @__mcp_input_cast_plan__ nil
       @__mcp_output_schema__ nil
+      @__mcp_output_fields__ nil
 
       @before_compile Noizu.MCP.Server.Tool
     end
@@ -109,12 +122,15 @@ defmodule Noizu.MCP.Server.Tool do
 
   @doc "Declare the input schema with the `field` DSL."
   defmacro input(do: block) do
+    # Retain the compiled fields (not a pre-rendered schema): field descriptions
+    # may be verbosity variants, so `Types.Tool.to_map/2` re-renders the schema
+    # per render context. The concrete `input_schema` map is derived once at
+    # `@before_compile` with the default context.
     fields = Noizu.MCP.Server.Tool.Fields.extract(block, __CALLER__)
-    schema = Noizu.MCP.Server.Tool.Fields.to_json_schema(fields)
     cast_plan = Noizu.MCP.Server.Tool.Fields.to_cast_plan(fields)
 
     quote do
-      @__mcp_input_schema__ unquote(Macro.escape(schema))
+      @__mcp_input_fields__ unquote(Macro.escape(fields))
       @__mcp_input_cast_plan__ unquote(Macro.escape(cast_plan))
     end
   end
@@ -123,6 +139,7 @@ defmodule Noizu.MCP.Server.Tool do
   defmacro input_schema(schema) do
     quote do
       @__mcp_input_schema__ unquote(schema)
+      @__mcp_input_fields__ nil
       @__mcp_input_cast_plan__ nil
     end
   end
@@ -130,10 +147,9 @@ defmodule Noizu.MCP.Server.Tool do
   @doc "Declare the output schema with the `field` DSL."
   defmacro output(do: block) do
     fields = Noizu.MCP.Server.Tool.Fields.extract(block, __CALLER__)
-    schema = Noizu.MCP.Server.Tool.Fields.to_json_schema(fields)
 
     quote do
-      @__mcp_output_schema__ unquote(Macro.escape(schema))
+      @__mcp_output_fields__ unquote(Macro.escape(fields))
     end
   end
 
@@ -141,6 +157,7 @@ defmodule Noizu.MCP.Server.Tool do
   defmacro output_schema(schema) do
     quote do
       @__mcp_output_schema__ unquote(schema)
+      @__mcp_output_fields__ nil
     end
   end
 
@@ -155,28 +172,37 @@ defmodule Noizu.MCP.Server.Tool do
 
     name = Keyword.get(opts, :name, default_name)
 
-    input_schema =
-      case Module.get_attribute(env.module, :__mcp_input_schema__) do
-        nil ->
-          %{"type" => "object"}
+    input_fields = Module.get_attribute(env.module, :__mcp_input_fields__)
+    output_fields = Module.get_attribute(env.module, :__mcp_output_fields__)
 
-        schema ->
+    input_schema =
+      cond do
+        is_list(input_fields) ->
+          Noizu.MCP.Server.Tool.Fields.to_json_schema(input_fields)
+
+        schema = Module.get_attribute(env.module, :__mcp_input_schema__) ->
           Noizu.MCP.Server.Tool.Fields.decode_schema!(
             schema,
             "#{inspect(env.module)} input_schema"
           )
+
+        true ->
+          %{"type" => "object"}
       end
 
     output_schema =
-      case Module.get_attribute(env.module, :__mcp_output_schema__) do
-        nil ->
-          nil
+      cond do
+        is_list(output_fields) ->
+          Noizu.MCP.Server.Tool.Fields.to_json_schema(output_fields)
 
-        schema ->
+        schema = Module.get_attribute(env.module, :__mcp_output_schema__) ->
           Noizu.MCP.Server.Tool.Fields.decode_schema!(
             schema,
             "#{inspect(env.module)} output_schema"
           )
+
+        true ->
+          nil
       end
 
     meta =
@@ -186,16 +212,25 @@ defmodule Noizu.MCP.Server.Tool do
         {meta, category} -> Map.put(meta || %{}, "category", category)
       end
 
+    description =
+      Noizu.MCP.Description.from_opts(opts, "#{inspect(env.module)} description")
+
+    title = Noizu.MCP.Description.compile(opts[:title], "#{inspect(env.module)} title")
+
     definition = %Noizu.MCP.Types.Tool{
       name: name,
-      title: opts[:title],
-      description: opts[:description],
+      title: title,
+      description: description,
       input_schema: input_schema,
       output_schema: output_schema,
+      input_fields: input_fields,
+      output_fields: output_fields,
       annotations: opts[:annotations],
       icons: opts[:icons],
       meta: meta
     }
+
+    evals = Noizu.MCP.Eval.compile_specs(opts[:evals], "#{inspect(env.module)} evals")
 
     spec = %Noizu.MCP.Server.Tool.Spec{
       module: env.module,
@@ -204,7 +239,8 @@ defmodule Noizu.MCP.Server.Tool do
       definition: definition,
       cast_plan: Module.get_attribute(env.module, :__mcp_input_cast_plan__),
       output_schema: output_schema,
-      hidden: opts[:hidden] == true
+      hidden: opts[:hidden] == true,
+      evals: evals
     }
 
     quote do

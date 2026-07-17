@@ -9,9 +9,23 @@ defmodule Noizu.MCP.Server.Tool.Spec do
   the `definition` is what `tools/list` advertises, `module`/`fun`/`arity`
   are how `tools/call` invokes the handler, and `cast_plan`/`output_schema`
   drive argument casting and structured-output checking.
+
+  `evals` holds compiled `Noizu.MCP.Eval.Spec` structs (spec §4) —
+  description-tuning eval definitions attached via the tool DSL. They are
+  compile-time metadata for the `mix noizu.mcp.eval` harness and are **never**
+  serialized onto the wire: only `definition` reaches `tools/list` / the catalog.
   """
 
-  defstruct [:module, :fun, :arity, :definition, :cast_plan, :output_schema, hidden: false]
+  defstruct [
+    :module,
+    :fun,
+    :arity,
+    :definition,
+    :cast_plan,
+    :output_schema,
+    hidden: false,
+    evals: []
+  ]
 
   @type t :: %__MODULE__{
           module: module(),
@@ -20,6 +34,7 @@ defmodule Noizu.MCP.Server.Tool.Spec do
           definition: Noizu.MCP.Types.Tool.t(),
           cast_plan: list() | nil,
           output_schema: map() | nil,
-          hidden: boolean()
+          hidden: boolean(),
+          evals: [Noizu.MCP.Eval.Spec.t()]
         }
 end

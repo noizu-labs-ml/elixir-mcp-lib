@@ -11,10 +11,15 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   # `to_json_schema/1` and to a cast plan (`to_cast_plan/1`) used at runtime to
   # atomize keys, apply defaults, and cast enum values.
 
+  alias Noizu.MCP.{Description, RenderCtx}
+
   @scalar_types [:string, :integer, :number, :boolean]
 
   defmodule Field do
     @moduledoc false
+    # `opts[:description]`, when present, is normalized to a `String.t()` or a
+    # `Noizu.MCP.Description.t()` at build time so malformed variant lists fail
+    # at compile time and rendering is a plain `Description.resolve/2`.
     defstruct [:name, :type, :opts, children: nil]
   end
 
@@ -83,8 +88,35 @@ defmodule Noizu.MCP.Server.Tool.Fields do
     children = block && extract(block, caller)
 
     validate_type!(name, type, opts, children, caller)
+    opts = normalize_ast_description(opts, name, caller)
 
     %Field{name: name, type: type, opts: opts, children: children}
+  end
+
+  @description_opts [:description, :descriptions, :verbosity_map, :runners]
+
+  # Normalize a field's `description:` (bare string or §2 verbosity variant list)
+  # together with the §3 named-variant siblings (`descriptions:`,
+  # `verbosity_map:`, `runners:`) into a single `String.t()`/`Description.t()`
+  # stored under `:description`; the sibling keys are consumed so they don't leak
+  # into the JSON Schema. Shared by both front ends; the AST path converts the
+  # raised `ArgumentError` into a `CompileError`.
+  defp normalize_field_description(opts, name) do
+    if Enum.any?(@description_opts, &Keyword.has_key?(opts, &1)) do
+      compiled = Description.from_opts(opts, "field #{name} description")
+
+      opts
+      |> Keyword.drop(@description_opts)
+      |> Keyword.put(:description, compiled)
+    else
+      opts
+    end
+  end
+
+  defp normalize_ast_description(opts, name, caller) do
+    normalize_field_description(opts, name)
+  rescue
+    e in ArgumentError -> compile_error!(caller, Exception.message(e))
   end
 
   defp normalize_type(type, _caller) when is_atom(type), do: type
@@ -208,8 +240,11 @@ defmodule Noizu.MCP.Server.Tool.Fields do
     type = spec_type(name, type)
 
     case check_type(name, type, opts, children) do
-      :ok -> %Field{name: name, type: type, opts: opts, children: children}
-      {:error, message} -> raise ArgumentError, message
+      :ok ->
+        %Field{name: name, type: type, opts: normalize_field_description(opts, name), children: children}
+
+      {:error, message} ->
+        raise ArgumentError, message
     end
   end
 
@@ -250,74 +285,96 @@ defmodule Noizu.MCP.Server.Tool.Fields do
 
   # ── JSON Schema compilation ───────────────────────────────────────────────
 
-  @doc "Compile `[%Field{}]` to a JSON Schema object map (string keys)."
-  def to_json_schema(fields) do
-    properties = Map.new(fields, fn field -> {to_string(field.name), field_schema(field)} end)
+  @doc """
+  Compile `[%Field{}]` to a JSON Schema object map (string keys).
+
+  Field descriptions are resolved through `ctx` (`to_json_schema/1` uses
+  `RenderCtx.default/0`); a verbosity-tailored description renders the string for
+  the context's effective level. Structure and constraints are independent of
+  the context.
+  """
+  def to_json_schema(fields), do: to_json_schema(fields, RenderCtx.default())
+
+  def to_json_schema(fields, ctx) do
+    properties = Map.new(fields, fn field -> {to_string(field.name), field_schema(field, ctx)} end)
     required = for field <- fields, field.opts[:required], do: to_string(field.name)
 
     %{"type" => "object", "properties" => properties}
     |> then(&if required == [], do: &1, else: Map.put(&1, "required", required))
   end
 
-  defp field_schema(%Field{type: :object, children: children, opts: opts}) do
+  defp field_schema(%Field{type: :object, children: children, opts: opts}, ctx) do
     children
-    |> to_json_schema()
-    |> apply_common_opts(opts)
+    |> to_json_schema(ctx)
+    |> apply_common_opts(opts, ctx)
   end
 
-  defp field_schema(%Field{type: {:array, :object}, children: children, opts: opts}) do
-    %{"type" => "array", "items" => to_json_schema(children)}
-    |> apply_array_opts(opts)
+  defp field_schema(%Field{type: {:array, :object}, children: children, opts: opts}, ctx) do
+    %{"type" => "array", "items" => to_json_schema(children, ctx)}
+    |> apply_array_opts(opts, ctx)
   end
 
-  defp field_schema(%Field{type: {:array, inner}, opts: opts}) do
-    %{"type" => "array", "items" => scalar_schema(inner, [])}
-    |> apply_array_opts(opts)
+  defp field_schema(%Field{type: {:array, inner}, opts: opts}, ctx) do
+    %{"type" => "array", "items" => scalar_schema(inner, [], ctx)}
+    |> apply_array_opts(opts, ctx)
   end
 
-  defp field_schema(%Field{type: type, opts: opts}), do: scalar_schema(type, opts)
+  defp field_schema(%Field{type: type, opts: opts}, ctx), do: scalar_schema(type, opts, ctx)
 
-  defp scalar_schema(:enum, opts) do
+  defp scalar_schema(:enum, opts, ctx) do
     %{"type" => "string", "enum" => Enum.map(opts[:values], &to_string/1)}
-    |> apply_common_opts(opts)
+    |> apply_common_opts(opts, ctx)
   end
 
-  defp scalar_schema(:string, opts) do
+  defp scalar_schema(:string, opts, ctx) do
     %{"type" => "string"}
     |> put_opt(opts, :min_length, "minLength")
     |> put_opt(opts, :max_length, "maxLength")
     |> put_opt(opts, :pattern, "pattern")
     |> put_opt(opts, :format, "format")
-    |> apply_common_opts(opts)
+    |> apply_common_opts(opts, ctx)
   end
 
-  defp scalar_schema(type, opts) when type in [:integer, :number] do
+  defp scalar_schema(type, opts, ctx) when type in [:integer, :number] do
     %{"type" => to_string(type)}
     |> put_opt(opts, :min, "minimum")
     |> put_opt(opts, :max, "maximum")
-    |> apply_common_opts(opts)
+    |> apply_common_opts(opts, ctx)
   end
 
-  defp scalar_schema(:boolean, opts) do
-    apply_common_opts(%{"type" => "boolean"}, opts)
+  defp scalar_schema(:boolean, opts, ctx) do
+    apply_common_opts(%{"type" => "boolean"}, opts, ctx)
   end
 
-  defp apply_array_opts(schema, opts) do
+  defp apply_array_opts(schema, opts, ctx) do
     schema
     |> put_opt(opts, :min, "minItems")
     |> put_opt(opts, :max, "maxItems")
-    |> apply_common_opts(opts)
+    |> apply_common_opts(opts, ctx)
   end
 
-  defp apply_common_opts(schema, opts) do
+  defp apply_common_opts(schema, opts, ctx) do
     schema
-    |> put_opt(opts, :description, "description")
+    |> put_description(opts, ctx)
     |> then(fn s ->
       case Keyword.fetch(opts, :default) do
         {:ok, default} -> Map.put(s, "default", encode_default(default))
         :error -> s
       end
     end)
+  end
+
+  defp put_description(schema, opts, ctx) do
+    case Keyword.fetch(opts, :description) do
+      {:ok, desc} ->
+        case Description.resolve(desc, ctx) do
+          nil -> schema
+          text -> Map.put(schema, "description", text)
+        end
+
+      :error ->
+        schema
+    end
   end
 
   defp encode_default(value) when is_atom(value) and not is_boolean(value) and not is_nil(value),
