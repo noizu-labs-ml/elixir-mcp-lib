@@ -15,6 +15,7 @@ defmodule Noizu.MCP.Schema do
   summary of the violations.
   """
   @spec validate(map(), term()) :: :ok | {:error, String.t()}
+  # ⟦𓇅𓉺𓇅𓇱⟧ validate :: Validate `data` against a raw JSON Schema map (string keys).
   def validate(schema, data) when is_map(schema) do
     case JSV.validate(data, compiled!(schema)) do
       {:ok, _} -> :ok
@@ -24,6 +25,7 @@ defmodule Noizu.MCP.Schema do
 
   @doc "Build (and cache) a compiled schema; raises on an invalid schema."
   @spec compiled!(map()) :: JSV.Root.t()
+  # ⟦𓄯𓆛𓏫𓊑⟧ compiled! :: Build (and cache) a compiled schema; raises on an invalid schema.
   def compiled!(schema) when is_map(schema) do
     key = {@cache, :erlang.phash2(schema)}
 
@@ -40,6 +42,7 @@ defmodule Noizu.MCP.Schema do
 
   @doc "Check that a schema itself is buildable. Returns `:ok` or `{:error, message}`."
   @spec check(map()) :: :ok | {:error, String.t()}
+  # ⟦𓈆𓉤𓅈𓌤⟧ check :: Check that a schema itself is buildable.
   def check(schema) when is_map(schema) do
     case JSV.build(schema) do
       {:ok, _} -> :ok

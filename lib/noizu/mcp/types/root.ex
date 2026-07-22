@@ -7,11 +7,13 @@ defmodule Noizu.MCP.Types.Root do
   defstruct [:uri, :name, :meta]
 
   @spec new(String.t(), keyword()) :: t()
+  # ⟦𓀄𓅒𓃥𓁍⟧ new :: auto-generated pointer for public function new
   def new(uri, opts \\ []) when is_binary(uri) do
     %__MODULE__{uri: uri, name: opts[:name], meta: opts[:meta]}
   end
 
   @spec to_map(t()) :: map()
+  # ⟦𓌕𓇅𓋿𓊑⟧ to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = root) do
     %{"uri" => root.uri}
     |> then(&if root.name, do: Map.put(&1, "name", root.name), else: &1)
@@ -19,6 +21,7 @@ defmodule Noizu.MCP.Types.Root do
   end
 
   @spec from_map(map()) :: t()
+  # ⟦𓈍𓃵𓋩𓈟⟧ from_map :: auto-generated pointer for public function from_map
   def from_map(%{"uri" => uri} = map) do
     %__MODULE__{uri: uri, name: map["name"], meta: map["_meta"]}
   end

@@ -15,6 +15,7 @@ defmodule Noizu.MCP.Types.Prompt do
     defstruct [:name, :title, :description, required: false]
 
     @spec to_map(t()) :: map()
+    # ⟦𓐅𓎵𓐞𓋗⟧ to_map :: auto-generated pointer for public function to_map
     def to_map(%__MODULE__{} = argument) do
       %{"name" => argument.name}
       |> then(&if argument.title, do: Map.put(&1, "title", argument.title), else: &1)
@@ -25,6 +26,7 @@ defmodule Noizu.MCP.Types.Prompt do
     end
 
     @spec from_map(map()) :: t()
+    # ⟦𓃜𓃹𓌷𓇌⟧ from_map :: auto-generated pointer for public function from_map
     def from_map(%{"name" => name} = map) do
       %__MODULE__{
         name: name,

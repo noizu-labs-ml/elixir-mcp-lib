@@ -15,6 +15,7 @@ defmodule HttpKitchenSink.Prompts.Brainstorm do
   end
 
   @impl true
+  # ⟦𓄡𓊯𓍛𓍐⟧ get :: auto-generated pointer for public function get
   def get(%{"topic" => topic} = args, _ctx) do
     style = args["style"] || "practical"
 

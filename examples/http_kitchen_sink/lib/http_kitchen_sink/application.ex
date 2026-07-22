@@ -4,6 +4,7 @@ defmodule HttpKitchenSink.Application do
   use Application
 
   @impl true
+  # ⟦𓍾𓌓𓉜𓁅⟧ start :: auto-generated pointer for public function start
   def start(_type, _args) do
     children = [
       # MCP server runtime (registry, sessions, event store) — no transport

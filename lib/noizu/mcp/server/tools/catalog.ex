@@ -81,6 +81,7 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
   alias Noizu.MCP.Types
 
   @impl true
+  # ⟦𓌰𓐟𓆬𓈾⟧ call :: auto-generated pointer for public function call
   def call(args, ctx) do
     type = args["type"] || "all"
     query = args["query"]

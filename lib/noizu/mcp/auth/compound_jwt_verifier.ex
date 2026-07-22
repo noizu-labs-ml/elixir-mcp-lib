@@ -46,6 +46,7 @@ defmodule Noizu.MCP.Auth.CompoundJWTVerifier do
     @behaviour Noizu.MCP.Auth.TokenVerifier
 
     @impl true
+    # ⟦𓎁𓉶𓋂𓂇⟧ verify :: auto-generated pointer for public function verify
     def verify(token, _conn_info, opts) when is_list(opts) do
       with {:ok, jwk} <- resolve_jwk(opts),
            algorithms <- Keyword.get(opts, :algorithms, ["HS256"]),

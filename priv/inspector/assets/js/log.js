@@ -15,6 +15,7 @@ let domInited = false;
 
 const LEVELS = ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"];
 
+// ⟦𓌾𓅫𓈅𓌪⟧ init :: auto-generated pointer for public function init
 export function init(context) {
   ctx = context;
 

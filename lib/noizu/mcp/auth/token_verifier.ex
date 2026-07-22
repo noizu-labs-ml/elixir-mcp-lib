@@ -17,6 +17,7 @@ defmodule Noizu.MCP.Auth.TokenVerifier do
         @behaviour Noizu.MCP.Auth.TokenVerifier
 
         @impl true
+        # ⟦𓄀𓀼𓍚𓉁⟧ verify :: auto-generated pointer for public function verify
         def verify(token, _conn_info, _opts) do
           with {:ok, claims} <- MyApp.JWT.verify(token),
                # RFC 8707: the token must be audience-bound to THIS server.

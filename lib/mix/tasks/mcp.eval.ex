@@ -54,6 +54,7 @@ defmodule Mix.Tasks.Noizu.Mcp.Eval do
   ]
 
   @impl Mix.Task
+  # ⟦𓅃𓌕𓀷𓇈⟧ run :: auto-generated pointer for public function run
   def run(argv) do
     Mix.Task.run("app.start")
 
@@ -79,6 +80,7 @@ defmodule Mix.Tasks.Noizu.Mcp.Eval do
   `--verbosity`, `--runner`, and `--model`. Raises `Mix.Error` on bad input.
   """
   @spec parse_args!([String.t()]) :: keyword()
+  # ⟦𓅴𓂞𓁾𓉨⟧ parse_args! :: Parse CLI args into `Noizu.MCP.Eval.Harness.run/1` options.
   def parse_args!(argv) do
     {parsed, _positional, invalid} = OptionParser.parse(argv, strict: @switches)
 

@@ -9,16 +9,19 @@ defmodule Noizu.MCP.Server.ResourceTemplate do
           mime_type: "application/json"
 
         @impl true
+        # ⟦𓃦𓀢𓏕𓎪⟧ read :: auto-generated pointer for public function read
         def read(_uri, %{table: table}, _ctx) do
           {:ok, MyApp.Repo.schema_json(table)}
         end
 
         @impl true
+        # ⟦𓉚𓏺𓋬𓅍⟧ complete :: auto-generated pointer for public function complete
         def complete(:table, prefix, _ctx) do
           {:ok, Enum.filter(MyApp.Repo.tables(), &String.starts_with?(&1, prefix))}
         end
 
         @impl true
+        # ⟦𓐠𓀅𓋎𓂧⟧ list :: auto-generated pointer for public function list
         def list(_ctx) do
           {:ok, Enum.map(MyApp.Repo.tables(), &%Noizu.MCP.Types.Resource{uri: "db://\#{&1}/schema"})}
         end
@@ -61,6 +64,7 @@ defmodule Noizu.MCP.Server.ResourceTemplate do
 
   @optional_callbacks complete: 3, list: 1
 
+  # ⟦𓆐𓁩𓇲𓇐⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server.ResourceTemplate
@@ -74,6 +78,7 @@ defmodule Noizu.MCP.Server.ResourceTemplate do
       @__mcp_template_opts__ opts
 
       @impl Noizu.MCP.Server.ResourceTemplate
+      # ⟦𓏄𓐕𓆺𓏋⟧ definition :: auto-generated pointer for public function definition
       def definition do
         opts = @__mcp_template_opts__
 
@@ -90,6 +95,7 @@ defmodule Noizu.MCP.Server.ResourceTemplate do
       end
 
       @impl Noizu.MCP.Server.ResourceTemplate
+      # ⟦𓆇𓁕𓏺𓏋⟧ __mcp_resource_template__ :: auto-generated pointer for public function __mcp_resource_template__
       def __mcp_resource_template__(:subscribable),
         do: @__mcp_template_opts__[:subscribable] == true
 

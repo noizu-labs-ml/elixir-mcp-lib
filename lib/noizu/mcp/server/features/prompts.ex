@@ -13,6 +13,7 @@ defmodule Noizu.MCP.Server.Features.Prompts do
   alias Noizu.MCP.Server.Features.Pagination
   alias Noizu.MCP.Types.{Prompt, PromptMessage}
 
+  # ⟦𓉁𓌼𓐢𓂔⟧ list :: auto-generated pointer for public function list
   def list(server, params, ctx) do
     cursor = (params || %{})["cursor"]
 
@@ -28,6 +29,7 @@ defmodule Noizu.MCP.Server.Features.Prompts do
   end
 
   @doc "Returns true if the registered prompt should be hidden from listings."
+  # ⟦𓇥𓄱𓍣𓆀⟧ hidden? :: Returns true if the registered prompt should be hidden from listings.
   def hidden?({module, opts}) do
     case Keyword.fetch(opts, :hidden) do
       {:ok, v} ->
@@ -44,6 +46,7 @@ defmodule Noizu.MCP.Server.Features.Prompts do
   end
 
   @doc "Default `handle_list_prompts` over registered prompt modules."
+  # ⟦𓎊𓉓𓊵𓃭⟧ list_registered :: Default `handle_list_prompts` over registered prompt modules.
   def list_registered(registered, cursor, opts \\ []) do
     include_hidden = Keyword.get(opts, :include_hidden, false)
     visible = if include_hidden, do: registered, else: Enum.reject(registered, &hidden?/1)
@@ -51,6 +54,7 @@ defmodule Noizu.MCP.Server.Features.Prompts do
     Pagination.paginate(definitions, cursor)
   end
 
+  # ⟦𓇾𓋁𓉉𓌊⟧ get :: auto-generated pointer for public function get
   def get(server, params, ctx) do
     name = (params || %{})["name"]
     args = (params || %{})["arguments"] || %{}
@@ -67,6 +71,7 @@ defmodule Noizu.MCP.Server.Features.Prompts do
   end
 
   @doc "Default `handle_get_prompt`: dispatch to a registered prompt module."
+  # ⟦𓃌𓌏𓄛𓂶⟧ dispatch_get :: Default `handle_get_prompt`: dispatch to a registered prompt module.
   def dispatch_get(registered, name, args, ctx) do
     case find(registered, name) do
       nil ->
@@ -96,10 +101,12 @@ defmodule Noizu.MCP.Server.Features.Prompts do
   end
 
   @doc "Find a registered prompt module by wire name."
+  # ⟦𓏨𓁜𓋔𓎐⟧ find :: Find a registered prompt module by wire name.
   def find(registered, name) do
     Enum.find(registered, fn {module, opts} -> definition(module, opts).name == name end)
   end
 
+  # ⟦𓂰𓂀𓇇𓀰⟧ definition :: auto-generated pointer for public function definition
   def definition(module, opts) do
     definition = module.definition()
 

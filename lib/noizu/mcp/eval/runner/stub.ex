@@ -14,6 +14,7 @@ defmodule Noizu.MCP.Eval.Runner.Stub do
   @behaviour Noizu.MCP.Eval.Runner
 
   @impl true
+  # ⟦𓋆𓍻𓅶𓋭⟧ run :: auto-generated pointer for public function run
   def run(rendered_tool, prompt, ctx) do
     {:ok,
      %{

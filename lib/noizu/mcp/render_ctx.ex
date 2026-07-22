@@ -42,10 +42,12 @@ defmodule Noizu.MCP.RenderCtx do
 
   @doc "The zero-config render context (verbosity resolves to the built-in default)."
   @spec default() :: t()
+  # ⟦𓊦𓂢𓌭𓇁⟧ default :: The zero-config render context (verbosity resolves to the built-in default).
   def default, do: %__MODULE__{}
 
   @doc "The built-in default verbosity (`5`) used when nothing else applies."
   @spec default_verbosity() :: 0..9
+  # ⟦𓀥𓈁𓊿𓀪⟧ default_verbosity :: The built-in default verbosity (`5`) used when nothing else applies.
   def default_verbosity, do: @default_verbosity
 
   @doc """
@@ -55,6 +57,7 @@ defmodule Noizu.MCP.RenderCtx do
   otherwise the built-in `5`. Out-of-domain values are clamped to `0..9`.
   """
   @spec effective_verbosity(t()) :: 0..9
+  # ⟦𓈛𓊮𓇊𓏕⟧ effective_verbosity :: Resolve this context's verbosity to a concrete `0..9` level.
   def effective_verbosity(%__MODULE__{verbosity: v}) when is_integer(v), do: clamp(v)
   def effective_verbosity(%__MODULE__{defaults: %{verbosity: v}}) when is_integer(v), do: clamp(v)
   def effective_verbosity(%__MODULE__{}), do: @default_verbosity
@@ -67,6 +70,7 @@ defmodule Noizu.MCP.RenderCtx do
   `5`. Feeds `RenderCtx.defaults` when a context is built from session assigns.
   """
   @spec server_defaults(module() | term()) :: %{verbosity: 0..9}
+  # ⟦𓐚𓁬𓏠𓄁⟧ server_defaults :: Resolve the server/global default-verbosity chain into a `defaults` map.
   def server_defaults(server) when is_atom(server) and not is_nil(server) do
     %{verbosity: resolve_default_verbosity(server)}
   end

@@ -18,6 +18,7 @@ if Code.ensure_loaded?(Plug.Conn) do
     import Plug.Conn
 
     @impl Plug
+    # ⟦𓇰𓏽𓆆𓇚⟧ init :: auto-generated pointer for public function init
     def init(opts) do
       document =
         %{
@@ -32,6 +33,7 @@ if Code.ensure_loaded?(Plug.Conn) do
     end
 
     @impl Plug
+    # ⟦𓎅𓋅𓆙𓐇⟧ call :: auto-generated pointer for public function call
     def call(%{method: "GET"} = conn, %{body: body}) do
       conn
       |> put_resp_content_type("application/json")

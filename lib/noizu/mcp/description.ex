@@ -144,6 +144,7 @@ defmodule Noizu.MCP.Description do
   For the named-variant / runner-rule form, use `from_opts/2`.
   """
   @spec compile(input(), String.t()) :: nil | String.t() | t()
+  # ⟦𓏛𓌪𓊼𓇠⟧ compile :: Normalize a plain `description:` value into `nil`, a bare string, or a
   def compile(input, context \\ "description")
 
   def compile(nil, _context), do: nil
@@ -171,6 +172,7 @@ defmodule Noizu.MCP.Description do
   on and every referenced tag is validated.
   """
   @spec from_opts(keyword(), String.t()) :: nil | String.t() | t()
+  # ⟦𓈬𓇼𓆔𓉿⟧ from_opts :: Compile a DSL option set into a description, combining `description:` with the
   def from_opts(opts, context) when is_list(opts) do
     base = compile(opts[:description], context)
 
@@ -208,6 +210,7 @@ defmodule Noizu.MCP.Description do
   (verbosity → text); then the `default:` fallback text (or `nil`).
   """
   @spec resolve(nil | String.t() | t(), RenderCtx.t()) :: String.t() | nil
+  # ⟦𓄷𓍤𓏽𓅥⟧ resolve :: Resolve a description against a render context, yielding a concrete string or
   def resolve(nil, _ctx), do: nil
   def resolve(text, _ctx) when is_binary(text), do: text
 

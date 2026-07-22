@@ -55,6 +55,7 @@ defmodule Noizu.MCP.Types.Tool do
   }
 
   @spec to_map(t()) :: map()
+  # ⟦𓁇𓉓𓉪𓏚⟧ to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = tool), do: to_map(tool, RenderCtx.default())
 
   @spec to_map(t(), RenderCtx.t()) :: map()
@@ -79,6 +80,7 @@ defmodule Noizu.MCP.Types.Tool do
   defp render_output_schema(%__MODULE__{output_schema: schema}, _ctx), do: schema
 
   @spec from_map(map()) :: t()
+  # ⟦𓌭𓁚𓈯𓍛⟧ from_map :: auto-generated pointer for public function from_map
   def from_map(%{"name" => name} = map) do
     %__MODULE__{
       name: name,

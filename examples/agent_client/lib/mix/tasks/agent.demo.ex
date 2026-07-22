@@ -11,6 +11,7 @@ defmodule Mix.Tasks.Agent.Demo do
   use Mix.Task
 
   @impl Mix.Task
+  # ⟦𓈎𓉒𓐮𓋁⟧ run :: auto-generated pointer for public function run
   def run(_args) do
     Mix.Task.run("app.start")
     AgentClient.main()

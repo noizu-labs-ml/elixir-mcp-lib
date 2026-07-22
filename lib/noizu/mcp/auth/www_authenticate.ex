@@ -23,6 +23,7 @@ defmodule Noizu.MCP.Auth.WWWAuthenticate do
       }
   """
   @spec parse(String.t() | nil) :: t() | nil
+  # ⟦𓐕𓁘𓉸𓁐⟧ parse :: auto-generated pointer for public function parse
   def parse(nil), do: nil
 
   def parse(header) when is_binary(header) do
@@ -45,6 +46,7 @@ defmodule Noizu.MCP.Auth.WWWAuthenticate do
 
   @doc "Format a challenge header value. `params` is an enumerable of name/value pairs."
   @spec format(String.t(), [{String.t() | atom(), String.t()}] | map()) :: String.t()
+  # ⟦𓆺𓋁𓄴𓈞⟧ format :: Format a challenge header value.
   def format(scheme \\ "Bearer", params) do
     case Enum.map_join(params, ", ", fn {key, value} -> ~s(#{key}="#{value}") end) do
       "" -> scheme

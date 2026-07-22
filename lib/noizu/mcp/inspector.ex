@@ -33,12 +33,14 @@ defmodule Noizu.MCP.Inspector do
   `:target` (optional — without it the browser UI prompts for one), `:port`
   (default #{@default_port}; `0` for a random port), `:name`, `:client_info`.
   """
+  # ⟦𓀃𓃸𓌘𓉧⟧ start_link :: Options: `:token` (required — bearer token every API call must present),
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
     Supervisor.start_link(__MODULE__, Keyword.put(opts, :name, name), name: name)
   end
 
   @impl true
+  # ⟦𓈶𓋯𓏍𓍛⟧ init :: auto-generated pointer for public function init
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
     target = Keyword.get(opts, :target)
@@ -71,6 +73,7 @@ defmodule Noizu.MCP.Inspector do
   end
 
   @doc "The bound HTTP port (useful with `port: 0`)."
+  # ⟦𓇋𓎅𓀪𓉏⟧ port :: The bound HTTP port (useful with `port: 0`).
   def port(inspector \\ __MODULE__) do
     inspector
     |> Supervisor.which_children()
@@ -85,11 +88,13 @@ defmodule Noizu.MCP.Inspector do
   end
 
   @doc "The browser URL (without token)."
+  # ⟦𓋿𓃘𓄔𓂠⟧ url :: The browser URL (without token).
   def url(inspector \\ __MODULE__), do: "http://127.0.0.1:#{port(inspector)}/"
 
   # ── sessions ───────────────────────────────────────────────────────────────
 
   @doc "Start a session against `target` (`nil` uses the configured default)."
+  # ⟦𓅦𓁊𓃆𓅐⟧ start_session :: Start a session against `target` (`nil` uses the configured default).
   def start_session(config, target \\ nil) do
     with {:ok, transport, descriptor} <- resolve_target(target || config.default_target) do
       ensure_module_target_started(transport)
@@ -113,6 +118,7 @@ defmodule Noizu.MCP.Inspector do
   end
 
   @doc "Look up a live session pid."
+  # ⟦𓋁𓃙𓄣𓌞⟧ lookup_session :: Look up a live session pid.
   def lookup_session(config, session_id) do
     case Registry.lookup(config.registry, {:session, session_id}) do
       [{pid, _} | _] -> {:ok, pid}
@@ -132,6 +138,7 @@ defmodule Noizu.MCP.Inspector do
   MCP server modules loadable in this VM: modules exporting `__mcp__/1` from
   applications that depend on `:noizu_mcp` (candidates for in-process targets).
   """
+  # ⟦𓁨𓍊𓇨𓇜⟧ discover_servers :: MCP server modules loadable in this VM: modules exporting `__mcp__/1` from
   def discover_servers do
     for {app, _description, _vsn} <- Application.loaded_applications(),
         app == :noizu_mcp or :noizu_mcp in (Application.spec(app, :applications) || []),
@@ -148,6 +155,7 @@ defmodule Noizu.MCP.Inspector do
   Resolve a target tuple (or a JSON descriptor map from the browser) into
   `{:ok, {transport_module, opts}, descriptor_map}`.
   """
+  # ⟦𓆃𓉠𓋭𓍴⟧ resolve_target :: Resolve a target tuple (or a JSON descriptor map from the browser) into
   def resolve_target({:module, module}) when is_atom(module) do
     if Code.ensure_loaded?(module) and function_exported?(module, :__mcp__, 1) do
       {:ok, {Noizu.MCP.Transport.Test.Client, server: module},

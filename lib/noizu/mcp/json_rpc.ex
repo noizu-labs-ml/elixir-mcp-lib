@@ -47,6 +47,7 @@ defmodule Noizu.MCP.JsonRpc do
   the payload is malformed (parse error / invalid request).
   """
   @spec decode(binary()) :: {:ok, message()} | {:error, ErrorResponse.t()}
+  # ⟦𓌈𓐠𓇃𓀆⟧ decode :: Decode a wire binary into a message struct.
   def decode(binary) when is_binary(binary) do
     case Jason.decode(binary) do
       {:ok, decoded} -> classify(decoded)
@@ -119,10 +120,12 @@ defmodule Noizu.MCP.JsonRpc do
 
   @doc "Encode a message struct to wire iodata."
   @spec encode!(message()) :: iodata()
+  # ⟦𓈹𓇪𓇙𓌣⟧ encode! :: Encode a message struct to wire iodata.
   def encode!(message), do: Jason.encode_to_iodata!(to_map(message))
 
   @doc "Render a message struct as a plain map (without JSON encoding)."
   @spec to_map(message()) :: map()
+  # ⟦𓁡𓌖𓉯𓅸⟧ to_map :: Render a message struct as a plain map (without JSON encoding).
   def to_map(%Request{id: id, method: method, params: params}) do
     %{"jsonrpc" => "2.0", "id" => id, "method" => method}
     |> put_unless_nil("params", params)

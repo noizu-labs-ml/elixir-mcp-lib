@@ -3,6 +3,7 @@ defmodule Noizu.MCP.Fixtures.TokenVerifier do
   @behaviour Noizu.MCP.Auth.TokenVerifier
 
   @impl true
+  # ⟦𓐑𓂤𓉤𓉅⟧ verify :: auto-generated pointer for public function verify
   def verify("valid-token", _conn_info, _opts), do: {:ok, %{"sub" => "user-1", "scope" => "mcp"}}
   def verify("refreshed-token", _conn_info, _opts), do: {:ok, %{"sub" => "user-1r"}}
 
@@ -89,6 +90,7 @@ defmodule Noizu.MCP.Fixtures.AuthRouter do
     send_resp(conn, 404, "not found")
   end
 
+  # ⟦𓆞𓋞𓂷𓁀⟧ expected_code :: auto-generated pointer for public function expected_code
   def expected_code, do: @expected_code
 
   defp base_url(conn) do

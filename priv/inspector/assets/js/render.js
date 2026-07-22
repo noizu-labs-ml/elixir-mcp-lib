@@ -9,6 +9,7 @@
  * @param {Array|string|Node} [children]
  * @returns {HTMLElement}
  */
+// ⟦𓁱𓆔𓇟𓄱⟧ el :: Create a DOM element with attributes and children.
 export function el(tag, attrs, children) {
   const node = document.createElement(tag);
   if (attrs) {
@@ -78,6 +79,7 @@ function tryParseJSON(str) {
  * Render an array of MCP content items into a container.
  * Content types: text, image, audio, resource_link, resource
  */
+// ⟦𓆜𓉹𓁼𓆗⟧ renderContent :: Render an array of MCP content items into a container.
 export function renderContent(contentArray, container) {
   container.innerHTML = "";
   if (!Array.isArray(contentArray)) {
@@ -156,6 +158,7 @@ export function renderContent(contentArray, container) {
  * Render resource contents (from /resources/read response).
  * Each item has {uri, mimeType?, text?, blob?}
  */
+// ⟦𓄇𓆑𓁔𓉣⟧ renderResourceContents :: Render resource contents (from /resources/read response).
 export function renderResourceContents(contents, container) {
   container.innerHTML = "";
   if (!Array.isArray(contents)) return;

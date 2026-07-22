@@ -72,6 +72,7 @@ defmodule Noizu.MCP.Peer do
   map), `:instructions` (server only).
   """
   @spec new(keyword()) :: t()
+  # ⟦𓆗𓈖𓋃𓀀⟧ new :: Build a new peer.
   def new(opts) do
     %__MODULE__{
       role: Keyword.fetch!(opts, :role),
@@ -89,6 +90,7 @@ defmodule Noizu.MCP.Peer do
   (adds `_meta.progressToken` and routes inbound progress notifications).
   """
   @spec request(t(), String.t(), map() | nil, keyword()) :: {t(), JsonRpc.id(), Request.t()}
+  # ⟦𓈠𓁀𓄒𓆶⟧ request :: Issue an outbound request.
   def request(%__MODULE__{} = peer, method, params, opts \\ []) do
     id = peer.next_id
     tag = Keyword.get(opts, :tag, id)
@@ -121,6 +123,7 @@ defmodule Noizu.MCP.Peer do
 
   @doc "Build a notification struct (stateless helper)."
   @spec notification(String.t(), map() | nil) :: Notification.t()
+  # ⟦𓌃𓅟𓂍𓆭⟧ notification :: Build a notification struct (stateless helper).
   def notification(method, params \\ nil), do: %Notification{method: method, params: params}
 
   @doc """
@@ -128,12 +131,14 @@ defmodule Noizu.MCP.Peer do
   by the remote (the spec forbids responding after cancellation).
   """
   @spec respond(t(), JsonRpc.id(), map()) :: {t(), {:ok, Response.t()} | :drop}
+  # ⟦𓏜𓌡𓃱𓈷⟧ respond :: Respond to an inbound request.
   def respond(%__MODULE__{} = peer, id, result) when is_map(result) do
     finish_inbound(peer, id, fn -> %Response{id: id, result: result} end)
   end
 
   @doc "Respond to an inbound request with a protocol error. See `respond/3`."
   @spec respond_error(t(), JsonRpc.id(), Error.t()) :: {t(), {:ok, ErrorResponse.t()} | :drop}
+  # ⟦𓏨𓏳𓇎𓆅⟧ respond_error :: Respond to an inbound request with a protocol error.
   def respond_error(%__MODULE__{} = peer, id, %Error{} = error) do
     finish_inbound(peer, id, fn -> %ErrorResponse{id: id, error: error} end)
   end
@@ -159,6 +164,7 @@ defmodule Noizu.MCP.Peer do
   """
   @spec cancel_out(t(), JsonRpc.id(), String.t() | nil) ::
           {t(), Notification.t() | nil, tag() | nil}
+  # ⟦𓉄𓃏𓎣𓌔⟧ cancel_out :: auto-generated pointer for public function cancel_out
   def cancel_out(%__MODULE__{} = peer, id, reason \\ nil) do
     case Map.pop(peer.pending_out, id) do
       {nil, _} ->
@@ -183,6 +189,7 @@ defmodule Noizu.MCP.Peer do
 
   @doc "(client) Build the `initialize` request."
   @spec init_request(t()) :: {t(), Request.t()}
+  # ⟦𓃌𓁩𓋱𓐢⟧ init_request :: (client) Build the `initialize` request.
   def init_request(%__MODULE__{role: :client, phase: :handshake} = peer) do
     params = %{
       "protocolVersion" => Version.latest(),
@@ -196,6 +203,7 @@ defmodule Noizu.MCP.Peer do
 
   @doc "(client) Complete the handshake: build `notifications/initialized`."
   @spec initialized(t()) :: {t(), Notification.t(), [effect()]}
+  # ⟦𓉂𓇃𓎤𓐦⟧ initialized :: (client) Complete the handshake: build `notifications/initialized`.
   def initialized(%__MODULE__{role: :client, phase: :initializing} = peer) do
     peer = %{peer | phase: :ready}
 
@@ -206,6 +214,7 @@ defmodule Noizu.MCP.Peer do
 
   @doc "Process one decoded inbound message; returns `{peer, effects}`."
   @spec ingest(t(), JsonRpc.message()) :: {t(), [effect()]}
+  # ⟦𓋫𓍚𓅃𓃖⟧ ingest :: Process one decoded inbound message; returns `{peer, effects}`.
   def ingest(peer, message)
 
   # initialize (server)

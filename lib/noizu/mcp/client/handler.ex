@@ -6,6 +6,7 @@ defmodule Noizu.MCP.Client.Handler do
         @behaviour Noizu.MCP.Client.Handler
 
         @impl true
+        # ⟦𓋉𓂂𓎖𓌮⟧ handle_sampling :: auto-generated pointer for public function handle_sampling
         def handle_sampling(params, _state) do
           messages = params["messages"]
           {:ok, text} = MyApp.LLM.complete(messages, max_tokens: params["maxTokens"])
@@ -19,6 +20,7 @@ defmodule Noizu.MCP.Client.Handler do
         end
 
         @impl true
+        # ⟦𓊴𓊱𓏡𓉙⟧ handle_elicitation :: auto-generated pointer for public function handle_elicitation
         def handle_elicitation(%{"message" => _msg}, _state), do: {:ok, :decline}
       end
 

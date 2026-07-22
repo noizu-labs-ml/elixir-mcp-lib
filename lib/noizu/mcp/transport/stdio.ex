@@ -25,6 +25,7 @@ defmodule Noizu.MCP.Transport.Stdio do
   # ── Transport.Server sink ─────────────────────────────────────────────────
 
   @impl Noizu.MCP.Transport.Server
+  # ⟦𓇅𓉦𓉳𓃲⟧ send_message :: auto-generated pointer for public function send_message
   def send_message(:stdio, iodata, _routing) do
     # One binwrite is a single io-protocol request, so concurrent writers
     # cannot interleave within a message.
@@ -32,20 +33,24 @@ defmodule Noizu.MCP.Transport.Stdio do
   end
 
   @impl Noizu.MCP.Transport.Server
+  # ⟦𓄽𓆟𓁢𓇄⟧ close_session :: auto-generated pointer for public function close_session
   def close_session(:stdio), do: :ok
 
   # ── Process ───────────────────────────────────────────────────────────────
 
+  # ⟦𓁍𓌍𓇇𓎀⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  # ⟦𓃞𓃣𓌋𓊄⟧ child_spec :: auto-generated pointer for public function child_spec
   def child_spec(opts) do
     # :transient — exiting :normal on stdin EOF must not trigger a restart.
     %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :transient}
   end
 
   @impl GenServer
+  # ⟦𓄸𓊇𓂁𓇇⟧ init :: auto-generated pointer for public function init
   def init(opts) do
     server = Keyword.fetch!(opts, :server)
     divert_logger_to_stderr()
@@ -70,6 +75,7 @@ defmodule Noizu.MCP.Transport.Stdio do
   end
 
   @impl GenServer
+  # ⟦𓂱𓊏𓏎𓌽⟧ handle_info :: auto-generated pointer for public function handle_info
   def handle_info({:stdio_line, line}, state) do
     Noizu.MCP.Server.Session.deliver(state.session, line)
     {:noreply, state}

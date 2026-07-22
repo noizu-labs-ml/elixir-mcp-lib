@@ -12,6 +12,7 @@ defmodule AgentClient.Handler do
   @behaviour Noizu.MCP.Client.Handler
 
   @impl true
+  # ⟦𓅷𓊅𓅙𓂆⟧ handle_elicitation :: auto-generated pointer for public function handle_elicitation
   def handle_elicitation(params, _state) do
     message = params["message"] || "(no message)"
     properties = get_in(params, ["requestedSchema", "properties"]) || %{}
@@ -27,6 +28,7 @@ defmodule AgentClient.Handler do
   end
 
   @impl true
+  # ⟦𓅂𓍥𓌟𓈂⟧ handle_notification :: auto-generated pointer for public function handle_notification
   def handle_notification(method, params, _state) do
     IO.puts(:stderr, "[notification] #{method} #{inspect(params)}")
     :ok

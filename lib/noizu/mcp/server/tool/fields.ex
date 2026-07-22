@@ -24,6 +24,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   end
 
   @doc "Extract `[%Field{}]` from the AST of an `input`/`output` block."
+  # ⟦𓌮𓄡𓁮𓍘⟧ extract :: Extract `[%Field{}]` from the AST of an `input`/`output` block.
   def extract(block, caller) do
     block
     |> statements()
@@ -194,6 +195,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   through as field options. Raises `ArgumentError` on invalid specs (callers
   invoke this at compile time, so errors still surface during compilation).
   """
+  # ⟦𓄷𓁀𓊖𓍶⟧ from_spec :: Build `[%Field{}]` from a plain data spec (no AST) — the data equivalent of
   def from_spec(spec) do
     unless Keyword.keyword?(spec) do
       raise ArgumentError,
@@ -261,6 +263,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   decoded at the call site's compile time; the result must be a JSON object.
   `context` names the owning tool/module for error messages.
   """
+  # ⟦𓏰𓍪𓌘𓄼⟧ decode_schema! :: Normalize a raw schema given as a map or as JSON text.
   def decode_schema!(%{} = schema, _context), do: schema
 
   def decode_schema!(schema, context) when is_binary(schema) do
@@ -293,6 +296,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   the context's effective level. Structure and constraints are independent of
   the context.
   """
+  # ⟦𓁎𓄋𓁮𓇆⟧ to_json_schema :: Compile `[%Field{}]` to a JSON Schema object map (string keys).
   def to_json_schema(fields), do: to_json_schema(fields, RenderCtx.default())
 
   def to_json_schema(fields, ctx) do
@@ -397,6 +401,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   values cast to atoms. Safe — only field names declared at compile time are
   atomized.
   """
+  # ⟦𓎎𓉇𓋛𓎡⟧ to_cast_plan :: Compile `[%Field{}]` to a cast plan: instructions for converting validated
   def to_cast_plan(fields) do
     Enum.map(fields, fn field ->
       %{
@@ -418,6 +423,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   defp cast_type(%Field{type: type}), do: type
 
   @doc "Apply a cast plan to validated string-keyed arguments."
+  # ⟦𓏔𓍇𓅳𓉯⟧ cast :: Apply a cast plan to validated string-keyed arguments.
   def cast(plan, args) when is_list(plan) and is_map(args) do
     Enum.reduce(plan, %{}, fn entry, acc ->
       case Map.fetch(args, entry.key) do

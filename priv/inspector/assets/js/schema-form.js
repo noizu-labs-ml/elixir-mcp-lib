@@ -14,6 +14,7 @@ let formIdCounter = 0;
  * @param {Object} [options] - {completionFn?}
  * @returns {{getValue: function, setValue: function}}
  */
+// ⟦𓁋𓃗𓎩𓌽⟧ buildForm :: Build a form from a JSON Schema, appending to container.
 export function buildForm(schema, container, options = {}) {
   container.innerHTML = "";
   const formId = `sf-${++formIdCounter}`;

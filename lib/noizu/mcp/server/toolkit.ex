@@ -8,6 +8,7 @@ defmodule Noizu.MCP.Server.Toolkit do
         @mcp name: "files.read", category: "Files", description: "Read a file",
              input: [path: [type: :string, required: true]],
              output: [data: [type: :string, required: true]]
+        # ⟦𓋅𓈎𓀋𓊦⟧ read_file :: auto-generated pointer for public function read_file
         def read_file(%{path: path}, _ctx) do
           case File.read(path) do
             {:ok, data} -> {:ok, %{data: data}}
@@ -16,12 +17,14 @@ defmodule Noizu.MCP.Server.Toolkit do
         end
 
         @mcp description: "Server time (name derives from the function)"
+        # ⟦𓆾𓊿𓃮𓇫⟧ server_time :: auto-generated pointer for public function server_time
         def server_time, do: {:ok, to_string(DateTime.utc_now())}
 
         @mcp visible: false
         @mcp input: \"\"\"
         {"type": "object", "properties": {"q": {"type": "string"}}}
         \"\"\"
+        # ⟦𓊒𓉠𓅧𓏉⟧ lookup :: auto-generated pointer for public function lookup
         def lookup(args, _ctx), do: {:ok, args["q"] || ""}
       end
 
@@ -118,6 +121,7 @@ defmodule Noizu.MCP.Server.Toolkit do
   alias Noizu.MCP.Server.Tool.Fields
   alias Noizu.MCP.Server.Tool.Spec
 
+  # ⟦𓈇𓉘𓋯𓀇⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       Module.register_attribute(__MODULE__, :mcp, accumulate: true)
@@ -131,6 +135,7 @@ defmodule Noizu.MCP.Server.Toolkit do
   end
 
   @doc false
+  # ⟦𓀑𓂉𓊶𓊾⟧ __on_definition__ :: auto-generated pointer for public function __on_definition__
   def __on_definition__(env, kind, fun, args, _guards, _body) do
     case Module.get_attribute(env.module, :mcp) do
       attrs when attrs in [nil, []] ->
@@ -182,6 +187,7 @@ defmodule Noizu.MCP.Server.Toolkit do
     attrs |> Enum.reverse() |> Enum.reduce([], &Keyword.merge(&2, &1))
   end
 
+  # ⟦𓇢𓆎𓅳𓊎⟧ __before_compile__ :: auto-generated pointer for public function __before_compile__
   defmacro __before_compile__(env) do
     toolkit_opts = Module.get_attribute(env.module, :__mcp_toolkit_opts__) || []
 
@@ -203,6 +209,7 @@ defmodule Noizu.MCP.Server.Toolkit do
 
     quote do
       @doc "Normalized runtime descriptors for every `@mcp`-annotated function."
+      # ⟦𓏁𓏸𓀶𓈄⟧ __mcp_tools__ :: Normalized runtime descriptors for every `@mcp`-annotated function.
       def __mcp_tools__, do: unquote(Macro.escape(specs))
     end
   end

@@ -30,6 +30,7 @@ defmodule Noizu.MCP.Eval do
 
       @eval name: :simple_task, prompt: [...], rubric: [...]
       @mcp description: "...", input: [...]
+      # ⟦𓉧𓀞𓊆𓉥⟧ read_file :: auto-generated pointer for public function read_file
       def read_file(args, ctx), do: ...
 
   Each eval spec is a keyword list:
@@ -74,6 +75,7 @@ defmodule Noizu.MCP.Eval do
   report an empty list.
   """
   @spec list(module()) :: [{String.t(), [Spec.t()]}]
+  # ⟦𓌛𓁋𓎝𓋡⟧ list :: List the evals declared on a server module.
   def list(server) when is_atom(server) do
     server.__mcp__(:tools)
     |> Features.Tools.expand()
@@ -89,6 +91,7 @@ defmodule Noizu.MCP.Eval do
   duplicate eval name / rubric criterion. `nil` compiles to `[]`.
   """
   @spec compile_specs(nil | list(), String.t()) :: [Spec.t()]
+  # ⟦𓉔𓈽𓇺𓅣⟧ compile_specs :: Compile and validate a list of raw eval specs into `[%Noizu.MCP.Eval.Spec{}]`.
   def compile_specs(nil, _context), do: []
 
   def compile_specs(specs, context) when is_list(specs) do

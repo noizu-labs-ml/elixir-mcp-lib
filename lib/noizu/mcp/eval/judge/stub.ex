@@ -16,6 +16,7 @@ defmodule Noizu.MCP.Eval.Judge.Stub do
   @behaviour Noizu.MCP.Eval.Judge
 
   @impl true
+  # ⟦𓏼𓅘𓆈𓍏⟧ grade :: auto-generated pointer for public function grade
   def grade(criterion, description, transcript) do
     haystack = transcript |> flatten() |> String.downcase()
     needle = description |> to_string() |> String.downcase()

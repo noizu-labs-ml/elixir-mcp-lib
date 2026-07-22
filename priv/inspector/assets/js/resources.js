@@ -12,6 +12,7 @@ let domInited = false;
 // session() is a function returning the current session id
 function sid() { return ctx?.session(); }
 
+// ⟦𓀠𓈣𓊷𓂓⟧ init :: auto-generated pointer for public function init
 export function init(context) {
   ctx = context;
 

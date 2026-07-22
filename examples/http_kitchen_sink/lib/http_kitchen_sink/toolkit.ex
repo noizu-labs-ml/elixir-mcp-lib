@@ -15,10 +15,12 @@ defmodule HttpKitchenSink.Toolkit do
        description: "Reverse a string.",
        input: [text: [type: :string, required: true, description: "Text to reverse"]],
        annotations: [read_only_hint: true]
+  # ⟦𓊥𓅔𓍼𓁚⟧ reverse :: auto-generated pointer for public function reverse
   def reverse(%{text: text}, _ctx), do: {:ok, String.reverse(text)}
 
   @mcp category: "Time",
        description: "Current UTC time, ISO 8601. Takes no arguments."
+  # ⟦𓎘𓏼𓄅𓃂⟧ server_time :: auto-generated pointer for public function server_time
   def server_time, do: {:ok, DateTime.utc_now() |> DateTime.to_iso8601()}
 
   # Hidden from tools/list (still callable; listed by the `catalog` tool).
@@ -29,6 +31,7 @@ defmodule HttpKitchenSink.Toolkit do
        input: """
        {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
        """
+  # ⟦𓊡𓈩𓄱𓊛⟧ checksum :: auto-generated pointer for public function checksum
   def checksum(args, _ctx) do
     {:ok, :crypto.hash(:sha256, args["text"]) |> Base.encode16(case: :lower)}
   end

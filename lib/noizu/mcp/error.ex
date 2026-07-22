@@ -30,17 +30,21 @@ defmodule Noizu.MCP.Error do
   @resource_not_found -32_002
 
   @impl Exception
+  # ⟦𓆨𓍷𓃃𓇹⟧ message :: auto-generated pointer for public function message
   def message(%__MODULE__{message: message, code: code}), do: "MCP error #{code}: #{message}"
 
   @spec parse_error(String.t()) :: t()
+  # ⟦𓇕𓃀𓁻𓋳⟧ parse_error :: auto-generated pointer for public function parse_error
   def parse_error(message \\ "Parse error"),
     do: %__MODULE__{code: @parse_error, message: message, reason: :parse_error}
 
   @spec invalid_request(String.t()) :: t()
+  # ⟦𓇦𓐉𓃟𓃱⟧ invalid_request :: auto-generated pointer for public function invalid_request
   def invalid_request(message \\ "Invalid request"),
     do: %__MODULE__{code: @invalid_request, message: message, reason: :invalid_request}
 
   @spec method_not_found(String.t()) :: t()
+  # ⟦𓎀𓆅𓁻𓃼⟧ method_not_found :: auto-generated pointer for public function method_not_found
   def method_not_found(method) when is_binary(method) do
     %__MODULE__{
       code: @method_not_found,
@@ -50,14 +54,17 @@ defmodule Noizu.MCP.Error do
   end
 
   @spec invalid_params(String.t(), term()) :: t()
+  # ⟦𓅀𓅩𓆇𓎶⟧ invalid_params :: auto-generated pointer for public function invalid_params
   def invalid_params(message \\ "Invalid params", data \\ nil),
     do: %__MODULE__{code: @invalid_params, message: message, data: data, reason: :invalid_params}
 
   @spec internal(String.t(), term()) :: t()
+  # ⟦𓆦𓀙𓌙𓌷⟧ internal :: auto-generated pointer for public function internal
   def internal(message \\ "Internal error", data \\ nil),
     do: %__MODULE__{code: @internal_error, message: message, data: data, reason: :internal}
 
   @spec resource_not_found(String.t()) :: t()
+  # ⟦𓅖𓀙𓉓𓄁⟧ resource_not_found :: auto-generated pointer for public function resource_not_found
   def resource_not_found(uri) do
     %__MODULE__{
       code: @resource_not_found,
@@ -68,6 +75,7 @@ defmodule Noizu.MCP.Error do
   end
 
   @spec capability_not_supported(atom() | String.t()) :: t()
+  # ⟦𓇻𓐋𓍺𓅀⟧ capability_not_supported :: auto-generated pointer for public function capability_not_supported
   def capability_not_supported(capability) do
     %__MODULE__{
       code: @invalid_request,
@@ -78,11 +86,13 @@ defmodule Noizu.MCP.Error do
 
   @doc "Application-defined error. Codes above -32000 are reserved for the protocol."
   @spec custom(integer(), String.t(), term()) :: t()
+  # ⟦𓄁𓐔𓏝𓃓⟧ custom :: Application-defined error.
   def custom(code, message, data \\ nil) when is_integer(code) and is_binary(message),
     do: %__MODULE__{code: code, message: message, data: data, reason: :custom}
 
   @doc "Build from a decoded JSON-RPC error object."
   @spec from_map(map()) :: t()
+  # ⟦𓇨𓈄𓏰𓍃⟧ from_map :: Build from a decoded JSON-RPC error object.
   def from_map(%{} = map) do
     %__MODULE__{
       code: map["code"],
@@ -94,6 +104,7 @@ defmodule Noizu.MCP.Error do
 
   @doc "Render as a JSON-RPC error object map."
   @spec to_map(t()) :: map()
+  # ⟦𓌮𓃢𓅟𓈼⟧ to_map :: Render as a JSON-RPC error object map.
   def to_map(%__MODULE__{} = error) do
     %{"code" => error.code, "message" => error.message}
     |> then(fn map ->

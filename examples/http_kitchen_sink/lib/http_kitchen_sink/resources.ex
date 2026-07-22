@@ -14,6 +14,7 @@ defmodule HttpKitchenSink.Resources.AppConfig do
     subscribable: true
 
   @impl true
+  # ⟦𓊌𓌥𓎀𓄈⟧ read :: auto-generated pointer for public function read
   def read("config://app", _ctx) do
     {:ok, Jason.encode!(%{env: "dev", port: 4040, features: ["sse", "sampling"]})}
   end
@@ -43,11 +44,13 @@ defmodule HttpKitchenSink.Resources.Note do
   end
 
   @impl true
+  # ⟦𓈛𓉷𓏟𓀔⟧ complete :: auto-generated pointer for public function complete
   def complete(:id, prefix, _ctx) do
     {:ok, @notes |> Map.keys() |> Enum.filter(&String.starts_with?(&1, prefix)) |> Enum.sort()}
   end
 
   @impl true
+  # ⟦𓍔𓈊𓁣𓈥⟧ list :: auto-generated pointer for public function list
   def list(_ctx) do
     {:ok,
      Enum.map(Map.keys(@notes), fn id ->

@@ -11,6 +11,7 @@ defmodule Noizu.MCP.Fixtures.Echo do
   end
 
   @impl true
+  # ⟦𓉬𓊌𓏌𓀳⟧ call :: auto-generated pointer for public function call
   def call(%{message: message, repeat: repeat, mode: mode}, _ctx) do
     text = String.duplicate(message, repeat)
     {:ok, if(mode == :loud, do: String.upcase(text), else: text)}
@@ -154,6 +155,7 @@ defmodule Noizu.MCP.Fixtures.ClientHandler do
   @behaviour Noizu.MCP.Client.Handler
 
   @impl true
+  # ⟦𓀶𓀀𓎆𓎩⟧ handle_sampling :: auto-generated pointer for public function handle_sampling
   def handle_sampling(params, test_pid) do
     if is_pid(test_pid), do: send(test_pid, {:sampling_request, params})
 
@@ -166,12 +168,14 @@ defmodule Noizu.MCP.Fixtures.ClientHandler do
   end
 
   @impl true
+  # ⟦𓄞𓆌𓐝𓄀⟧ handle_elicitation :: auto-generated pointer for public function handle_elicitation
   def handle_elicitation(params, test_pid) do
     if is_pid(test_pid), do: send(test_pid, {:elicitation_request, params})
     {:ok, :accept, %{"confirm" => true}}
   end
 
   @impl true
+  # ⟦𓄰𓁯𓊛𓏍⟧ handle_notification :: auto-generated pointer for public function handle_notification
   def handle_notification(method, params, test_pid) do
     if is_pid(test_pid), do: send(test_pid, {:handler_note, method, params})
     :ok
@@ -188,6 +192,7 @@ defmodule Noizu.MCP.Fixtures.ConfigResource do
     subscribable: true
 
   @impl true
+  # ⟦𓂿𓉃𓁙𓉣⟧ read :: auto-generated pointer for public function read
   def read("config://app", _ctx), do: {:ok, ~s({"env":"test"})}
 end
 
@@ -221,11 +226,13 @@ defmodule Noizu.MCP.Fixtures.TableSchema do
   end
 
   @impl true
+  # ⟦𓏰𓌎𓎛𓂄⟧ complete :: auto-generated pointer for public function complete
   def complete(:table, prefix, _ctx) do
     {:ok, Enum.filter(@tables, &String.starts_with?(&1, prefix))}
   end
 
   @impl true
+  # ⟦𓁡𓆨𓋘𓐪⟧ list :: auto-generated pointer for public function list
   def list(_ctx) do
     {:ok,
      Enum.map(@tables, fn table ->
@@ -246,6 +253,7 @@ defmodule Noizu.MCP.Fixtures.CodeReviewPrompt do
   end
 
   @impl true
+  # ⟦𓂞𓂔𓎤𓀕⟧ get :: auto-generated pointer for public function get
   def get(%{"code" => code} = args, _ctx) do
     style = args["style"] || "strict"
 
@@ -354,19 +362,23 @@ defmodule Noizu.MCP.Fixtures.Kit do
          mode: [type: :enum, values: [:plain, :loud], default: :plain]
        ],
        output: [text: [type: :string, required: true]]
+  # ⟦𓄒𓏐𓁘𓁑⟧ kit_echo :: auto-generated pointer for public function kit_echo
   def kit_echo(%{message: message, mode: mode}, _ctx) do
     {:ok, %{text: if(mode == :loud, do: String.upcase(message), else: message)}}
   end
 
   @mcp description: "Minimal arity-1 tool (name derives from the function)"
+  # ⟦𓉟𓉭𓉾𓋑⟧ kit_min :: auto-generated pointer for public function kit_min
   def kit_min(args), do: {:ok, "min:#{map_size(args)}"}
 
   @mcp description: "Arity-0 tool"
+  # ⟦𓁤𓐜𓂖𓀤⟧ kit_zero :: auto-generated pointer for public function kit_zero
   def kit_zero, do: {:ok, "zero"}
 
   # Multiple @mcp lines merge (later wins on conflict).
   @mcp visible: false
   @mcp description: "Hidden toolkit tool"
+  # ⟦𓋝𓄟𓋯𓁒⟧ kit_hidden :: auto-generated pointer for public function kit_hidden
   def kit_hidden(_args, _ctx), do: {:ok, "kit hidden"}
 
   @mcp name: "kit.raw",
@@ -374,6 +386,7 @@ defmodule Noizu.MCP.Fixtures.Kit do
        input: """
        {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
        """
+  # ⟦𓍽𓎌𓐊𓉄⟧ kit_raw :: auto-generated pointer for public function kit_raw
   def kit_raw(args, _ctx), do: {:ok, "raw:#{args["q"]}"}
 end
 
@@ -417,6 +430,7 @@ defmodule Noizu.MCP.Fixtures.Server do
   prompt Noizu.MCP.Fixtures.DynamicPrompt
 
   @impl Noizu.MCP.Server
+  # ⟦𓐃𓁚𓉦𓍍⟧ init :: auto-generated pointer for public function init
   def init(ctx, _init_params) do
     {:ok, Noizu.MCP.Ctx.assign(ctx, :tenant, :default)}
   end
@@ -468,6 +482,7 @@ defmodule Noizu.MCP.Fixtures.VerboseKit do
            ]
          ]
        ]
+  # ⟦𓍼𓍓𓋸𓅸⟧ vk_echo :: auto-generated pointer for public function vk_echo
   def vk_echo(%{msg: msg}, _ctx), do: {:ok, msg}
 end
 
@@ -515,6 +530,7 @@ defmodule Noizu.MCP.Fixtures.RunnerKit do
        verbosity_map: [{{0, 9}, :terse}],
        runners: [{{:codex, :*}, [default: :codex]}],
        input: [msg: [type: :string, required: true, description: "the message"]]
+  # ⟦𓆏𓐀𓏭𓊥⟧ rk_echo :: auto-generated pointer for public function rk_echo
   def rk_echo(%{msg: msg}, _ctx), do: {:ok, msg}
 end
 
@@ -555,11 +571,13 @@ defmodule Noizu.MCP.Fixtures.BareServer do
   use Noizu.MCP.Server, name: "bare", version: "0.1.0"
 
   @impl Noizu.MCP.Server
+  # ⟦𓊔𓏝𓉎𓃁⟧ handle_list_tools :: auto-generated pointer for public function handle_list_tools
   def handle_list_tools(_cursor, _ctx) do
     {:ok, [%Noizu.MCP.Types.Tool{name: "shout", description: "Upcase text"}], nil}
   end
 
   @impl Noizu.MCP.Server
+  # ⟦𓂻𓍵𓋩𓀷⟧ handle_call_tool :: auto-generated pointer for public function handle_call_tool
   def handle_call_tool("shout", args, _ctx) do
     {:ok, String.upcase(args["text"] || "")}
   end
@@ -645,9 +663,11 @@ defmodule Noizu.MCP.Fixtures.EvalKit do
   @mcp name: "ek.echo",
        description: "Echo a message via the eval kit",
        input: [msg: [type: :string, required: true, description: "the message"]]
+  # ⟦𓆻𓌈𓐣𓈺⟧ ek_echo :: auto-generated pointer for public function ek_echo
   def ek_echo(%{msg: msg}, _ctx), do: {:ok, msg}
 
   @mcp name: "ek.plain", description: "Plain tool with no evals"
+  # ⟦𓁦𓁛𓏀𓄣⟧ ek_plain :: auto-generated pointer for public function ek_plain
   def ek_plain(_args, _ctx), do: {:ok, "plain"}
 end
 

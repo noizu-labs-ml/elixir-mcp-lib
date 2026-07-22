@@ -12,6 +12,7 @@ defmodule EchoStdio.Tools.Echo do
   end
 
   @impl true
+  # ⟦𓋥𓅚𓂡𓅷⟧ call :: auto-generated pointer for public function call
   def call(%{message: message, repeat: repeat, mode: mode}, ctx) do
     Noizu.MCP.Ctx.report_progress(ctx, 0.5, message: "echoing")
     text = message |> List.duplicate(repeat) |> Enum.join(" ")
