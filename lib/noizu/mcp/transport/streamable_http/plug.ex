@@ -218,17 +218,117 @@ if Code.ensure_loaded?(Plug.Conn) do
 
     defp unauthorized(conn, auth, error) do
       challenge =
-        Noizu.MCP.Auth.WWWAuthenticate.format(resource_params(auth) ++ [{"error", error}])
+        Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge(
+          resource_metadata: resource_metadata_url(conn, auth),
+          scope: Keyword.get(auth, :scope),
+          error: error
+        )
 
       conn
       |> put_resp_header("www-authenticate", challenge)
       |> send_resp(401, "Unauthorized")
     end
 
-    defp resource_params(auth) do
+    defp resource_metadata_url(conn, auth) do
       case Keyword.get(auth, :resource_metadata) do
-        nil -> []
-        url -> [{"resource_metadata", url}]
+        nil -> nil
+        url when is_binary(url) -> url
+        :derive -> derive_resource_metadata(conn)
+        {module, fun} when is_atom(module) and is_atom(fun) -> apply(module, fun, [conn])
+        {module, fun, args} when is_list(args) -> apply(module, fun, args)
+        fun when is_function(fun, 1) -> fun.(conn)
+      end
+    end
+
+    # RFC 9728 path insertion: the mount path of this forward becomes the
+    # well-known suffix, so `https://host/mcp/learning` is described by
+    # `https://host/.well-known/oauth-protected-resource/mcp/learning`.
+    defp derive_resource_metadata(conn) do
+      base = "#{conn.scheme}://#{authority(conn)}/.well-known/oauth-protected-resource"
+
+      case Enum.join(conn.script_name, "/") do
+        "" -> base
+        suffix -> base <> "/" <> suffix
+      end
+    end
+
+    defp authority(%{host: host, port: port, scheme: scheme}) do
+      cond do
+        scheme == :https and port == 443 -> host
+        scheme == :http and port == 80 -> host
+        true -> "#{host}:#{port}"
+      end
+    end
+
+    # ── CORS ─────────────────────────────────────────────────────────────────
+
+    defp normalize_cors(false), do: nil
+    defp normalize_cors(nil), do: nil
+    defp normalize_cors(true), do: %{allow_headers: @default_allow_headers, max_age: 600}
+
+    defp normalize_cors(opts) when is_list(opts) or is_map(opts) do
+      opts = Enum.into(opts, [])
+
+      %{
+        allow_headers: Keyword.get(opts, :allow_headers, @default_allow_headers),
+        max_age: Keyword.get(opts, :max_age, 600)
+      }
+    end
+
+    defp put_cors_headers(conn, nil), do: conn
+
+    defp put_cors_headers(conn, _cors) do
+      # Reached only after `origin_allowed?/2`, so echoing the origin cannot
+      # widen the allowlist. No `allow-credentials`: MCP authenticates with a
+      # bearer header, never a cookie.
+      case get_req_header(conn, "origin") do
+        [origin | _] ->
+          conn
+          |> put_resp_header("access-control-allow-origin", origin)
+          |> put_resp_header("access-control-expose-headers", @exposed_headers)
+          |> put_resp_header("vary", "origin")
+
+        [] ->
+          conn
+      end
+    end
+
+    defp preflight(conn, cors) do
+      requested =
+        conn |> get_req_header("access-control-request-headers") |> List.first()
+
+      conn
+      |> put_resp_header("access-control-allow-methods", "GET, POST, DELETE, OPTIONS")
+      |> put_resp_header("access-control-allow-headers", requested || cors.allow_headers)
+      |> put_resp_header("access-control-max-age", to_string(cors.max_age))
+      |> send_resp(204, "")
+    end
+
+    # ── init-time diagnostics ────────────────────────────────────────────────
+
+    defp warn_unauthenticated(opts, nil) do
+      if prod_env?() do
+        Logger.warning("""
+        Noizu.MCP.Transport.StreamableHTTP.Plug mounted without `auth:` for \
+        #{inspect(Keyword.get(opts, :server))}. Every tool on this mount is \
+        reachable unauthenticated. Pass `auth: [verifier: ..., resource_metadata: ...]` \
+        or set `origins:` so only trusted callers can reach it.\
+        """)
+      end
+    end
+
+    defp warn_unauthenticated(_opts, _auth), do: :ok
+
+    defp prod_env? do
+      case Application.get_env(:noizu_mcp, :env) do
+        nil ->
+          # `init/1` normally runs at compile time (Plug's `:compile` init
+          # mode), where Mix is available; in a release it is not, and a
+          # release is prod.
+          not (Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0)) or Mix.env() == :prod
+
+        env ->
+          env == :prod
       end
     end
 
@@ -548,14 +648,21 @@ if Code.ensure_loaded?(Plug.Conn) do
               true
 
             :localhost ->
-              case URI.parse(origin) do
-                %URI{host: host} when host in ["localhost", "127.0.0.1", "[::1]", "::1"] -> true
-                _ -> false
-              end
+              loopback_origin?(origin)
+
+            :mcp_clients ->
+              loopback_origin?(origin) or origin in @mcp_client_origins
 
             allowed when is_list(allowed) ->
               origin in allowed
           end
+      end
+    end
+
+    defp loopback_origin?(origin) do
+      case URI.parse(origin) do
+        %URI{host: host} when host in ["localhost", "127.0.0.1", "[::1]", "::1"] -> true
+        _ -> false
       end
     end
   end

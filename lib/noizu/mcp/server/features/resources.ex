@@ -133,10 +133,10 @@ defmodule Noizu.MCP.Server.Features.Resources do
             {:error, error}
 
           result ->
-            case normalize_contents(result, uri, nil) do
-              {:error, %Error{} = error} -> {:error, error}
-              contents -> {:ok, %{"contents" => Enum.map(contents, &ResourceContents.to_map/1)}}
-            end
+            # An `{:error, %Error{}}` return is handled above, so what is left
+            # here always normalizes to contents.
+            contents = normalize_contents(result, uri, nil)
+            {:ok, %{"contents" => Enum.map(contents, &ResourceContents.to_map/1)}}
         end
 
       _ ->

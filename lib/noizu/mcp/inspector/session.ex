@@ -15,7 +15,6 @@ defmodule Noizu.MCP.Inspector.Session do
   # auto-restarted: the browser owns its lifecycle, and a permanent restart
   # loop would exhaust the DynamicSupervisor and kill every other session.
   use GenServer, restart: :temporary
-  require Logger
 
   alias Noizu.MCP.{Client, Error}
   alias Noizu.MCP.Inspector.{Handler, TapTransport}
