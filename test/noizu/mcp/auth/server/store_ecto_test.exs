@@ -26,17 +26,23 @@ defmodule Noizu.MCP.Auth.Server.Store.EctoTest do
     alias Noizu.MCP.Auth.Server.TestSchema
 
     setup_all do
-      {:ok, pid} = Repo.start_link(url: @database_url, pool_size: 25, log: false)
+      # `start_supervised!`, not `Repo.start_link`. A linked repo is owned by the
+      # setup_all process, which ExUnit terminates *before* running on_exit — the
+      # teardown DROP then dies with `DBConnection.Holder.checkout ... (EXIT)
+      # shutdown`, ExUnit reports "failure on setup_all callback", and every test
+      # in this module is invalidated. That turns a 2-failure run into a
+      # 36-failure one and buries whatever actually broke.
+      start_supervised!({Repo, url: @database_url, pool_size: 25, log: false})
 
+      # Cleanup happens HERE, on the way in, not in an on_exit on the way out.
+      # By the time an on_exit callback runs the repo is already stopped — linked
+      # or supervised, either way — so a teardown `DROP` raises ("could not lookup
+      # Ecto repo ... because it was not started"), ExUnit reports "failure on
+      # setup_all callback", and all 31 tests in this module are invalidated.
+      # Dropping first is idempotent and leaves the tables around afterwards for
+      # inspection when something fails.
       Ecto.Adapters.SQL.query!(Repo, TestSchema.drop_sql(), [])
       Enum.each(TestSchema.create_sql(), &Ecto.Adapters.SQL.query!(Repo, &1, []))
-
-      on_exit(fn ->
-        if Process.alive?(pid) do
-          Ecto.Adapters.SQL.query!(Repo, TestSchema.drop_sql(), [])
-          Repo.stop()
-        end
-      end)
 
       :ok
     end

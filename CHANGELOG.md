@@ -101,6 +101,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An incomplete test run no longer reports success.** The `Store.Ecto`
+  conformance battery (gated on `MCP_OAUTH_TEST_DATABASE_URL`) and every `:e2e`
+  suite are opt-in, and a plain `mix test` skipped both *in silence* — the
+  skipped run and the full run printed the same passing count in the same words.
+  A `Store.Ecto` that had never performed a single `INSERT` shipped behind that
+  number. `test/test_helper.exs` now prints a banner naming what did not execute
+  and fails the run via `Noizu.MCP.CoverageGateTest`; set
+  `MCP_SKIP_FULL_COVERAGE=1` to acknowledge a deliberately partial run. The full
+  command is in `guides/authorization_server.md`:
+
+  ```bash
+  MCP_OAUTH_TEST_DATABASE_URL="postgres://USER:PASS@127.0.0.1:5432/noizu_mcp_test" \
+    mix test --include e2e --include slow
+  ```
+
+- **`Store.EctoTest` no longer invalidates its own module on teardown.** The test
+  repo was dropped from an `on_exit` callback, but the repo is already stopped by
+  then; the resulting raise was reported as "failure on setup_all callback" and
+  invalidated all 31 tests in the module — 31 phantom failures per run, in which a
+  real one could hide. Cleanup now happens on the way in, where it is idempotent.
+
 - **Header injection in `WWW-Authenticate`.** `WWWAuthenticate.format/2`
   interpolated parameter values into the header unescaped. Values now go through
   `escape_quoted/1`, which escapes `\` and `"` and *rejects* CR/LF/NUL and other

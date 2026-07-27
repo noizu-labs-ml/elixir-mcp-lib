@@ -230,13 +230,36 @@ A cron job cannot open a browser. Two options:
 
 ## Testing your integration
 
-```
-# the library's own suite
-cd libs/elixir-mcp && mix test
+### Running the library's own suite
 
-# the Store.Ecto conformance suite needs a database
-MCP_OAUTH_TEST_DATABASE_URL=postgres://localhost/noizu_mcp_test mix test
+Two batteries are opt-in, and a plain `mix test` runs **neither**: the
+`Store.Ecto` conformance battery needs a database, and every `:e2e` suite is
+excluded by default because it spawns subprocesses and a real listener. This is
+the only command that verifies the whole library:
+
+```bash
+cd libs/elixir-mcp
+MCP_OAUTH_TEST_DATABASE_URL="postgres://USER:PASS@127.0.0.1:5432/noizu_mcp_test" \
+  mix test --include e2e --include slow
 ```
+
+| Flag / variable | Without it |
+|---|---|
+| `MCP_OAUTH_TEST_DATABASE_URL` | The entire `Store.Ecto` adapter is unverified |
+| `--include e2e` | The end-to-end OAuth flow and the stdio transport are unverified |
+| `--include slow` | Expiry tests (which sleep) do not run |
+
+A run missing either of the first two **fails on purpose**, with a
+`Noizu.MCP.CoverageGateTest` failure naming what did not execute. That gate
+exists because it was once possible for a `Store.Ecto` that had never performed a
+single `INSERT` to sit behind a green suite: the skipped run and the real run
+reported the same passing count, in the same words. If you genuinely want a
+partial run — a fast single-file loop, a machine with no Postgres — set
+`MCP_SKIP_FULL_COVERAGE=1`. It still prints the banner; it just stops failing.
+
+Read the skip and exclude counts, not only the passing one.
+
+### Verifying a live mount
 
 Before calling a mount healthy, each of these catches a specific failure:
 
