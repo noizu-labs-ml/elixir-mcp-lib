@@ -67,14 +67,16 @@ defmodule Noizu.MCP.AuthTest do
       }
     }
 
-    test "missing token is 401 with a resource_metadata challenge" do
+    test "missing token is 401 with a resource_metadata challenge and no error code" do
       conn = auth_post(@initialize, [])
       assert conn.status == 401
 
       [challenge] = get_resp_header(conn, "www-authenticate")
       parsed = WWWAuthenticate.parse(challenge)
       assert parsed.params["resource_metadata"] =~ "oauth-protected-resource"
-      assert parsed.params["error"] == "invalid_request"
+      # RFC 6750 §3.1: `error` is for a *failed* request. A client that has not
+      # presented a credential yet has not failed at anything.
+      refute Map.has_key?(parsed.params, "error")
     end
 
     test "invalid token is 401 invalid_token" do

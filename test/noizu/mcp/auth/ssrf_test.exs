@@ -100,7 +100,10 @@ defmodule Noizu.MCP.Auth.Server.SSRFTest do
   describe "check_url/2 scheme and shape" do
     test "https to a public host passes" do
       assert {:ok, %{addresses: [{93, 184, 216, 34}]}} =
-               SSRF.check_url("https://public.example.com/.well-known/mcp", Fixtures.OAuth.ssrf_opts())
+               SSRF.check_url(
+                 "https://public.example.com/.well-known/mcp",
+                 Fixtures.OAuth.ssrf_opts()
+               )
     end
 
     test "http is refused" do
@@ -139,7 +142,10 @@ defmodule Noizu.MCP.Auth.Server.SSRFTest do
   describe "check_url/2 address checks" do
     test "a host resolving to the cloud metadata address is refused" do
       assert {:error, :blocked_address} =
-               SSRF.check_url("https://metadata.example.com/latest/meta-data/", Fixtures.OAuth.ssrf_opts())
+               SSRF.check_url(
+                 "https://metadata.example.com/latest/meta-data/",
+                 Fixtures.OAuth.ssrf_opts()
+               )
     end
 
     test "a host resolving to a private address is refused" do
@@ -169,7 +175,10 @@ defmodule Noizu.MCP.Auth.Server.SSRFTest do
                SSRF.check_url("https://169.254.169.254/latest/", Fixtures.OAuth.ssrf_opts())
 
       assert {:error, :blocked_address} =
-               SSRF.check_url("https://[::ffff:169.254.169.254]/latest/", Fixtures.OAuth.ssrf_opts())
+               SSRF.check_url(
+                 "https://[::ffff:169.254.169.254]/latest/",
+                 Fixtures.OAuth.ssrf_opts()
+               )
 
       assert {:error, :blocked_address} =
                SSRF.check_url("https://[::1]/x", Fixtures.OAuth.ssrf_opts())

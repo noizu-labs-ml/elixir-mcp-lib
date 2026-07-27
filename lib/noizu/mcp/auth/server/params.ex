@@ -53,13 +53,22 @@ defmodule Noizu.MCP.Auth.Server.Params do
     max = Keyword.get(opts, :max, @max_value)
 
     case Map.get(params, key) do
-      nil -> {:ok, nil}
-      "" -> {:ok, nil}
-      value when is_binary(value) and byte_size(value) > max -> {:error, error(opts, {:too_long, key})}
-      value when is_binary(value) -> {:ok, value}
+      nil ->
+        {:ok, nil}
+
+      "" ->
+        {:ok, nil}
+
+      value when is_binary(value) and byte_size(value) > max ->
+        {:error, error(opts, {:too_long, key})}
+
+      value when is_binary(value) ->
+        {:ok, value}
+
       # A list means the parameter was repeated; a map means it was sent in
       # bracket form. Neither is a valid OAuth parameter.
-      _other -> {:error, error(opts, {:not_single, key})}
+      _other ->
+        {:error, error(opts, {:not_single, key})}
     end
   end
 

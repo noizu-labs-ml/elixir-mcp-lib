@@ -49,7 +49,8 @@ defmodule Noizu.MCP.Auth.Server.Errors do
 
   # {description, http status}. Descriptions are deliberately generic.
   @catalog %{
-    invalid_request: {"The request is missing a required parameter or is otherwise malformed.", 400},
+    invalid_request:
+      {"The request is missing a required parameter or is otherwise malformed.", 400},
     invalid_client: {"Client authentication failed.", 401},
     invalid_grant: {"The grant is invalid, expired, or has already been used.", 400},
     unauthorized_client: {"This client is not authorized to use this grant type.", 400},

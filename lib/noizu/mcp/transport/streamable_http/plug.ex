@@ -325,7 +325,8 @@ if Code.ensure_loaded?(Plug.Conn) do
           # `init/1` normally runs at compile time (Plug's `:compile` init
           # mode), where Mix is available; in a release it is not, and a
           # release is prod.
-          not (Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0)) or Mix.env() == :prod
+          not (Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0)) or
+            Mix.env() == :prod
 
         env ->
           env == :prod

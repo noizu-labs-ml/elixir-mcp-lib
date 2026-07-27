@@ -21,7 +21,10 @@ defmodule Noizu.MCP.Auth.Server.RedirectURITest do
 
     test "matches when the registration carries a port and the request does not" do
       assert RedirectURI.matches?("http://127.0.0.1/callback", ["http://127.0.0.1:1410/callback"])
-      assert RedirectURI.matches?("http://127.0.0.1:9999/callback", ["http://127.0.0.1:1410/callback"])
+
+      assert RedirectURI.matches?("http://127.0.0.1:9999/callback", [
+               "http://127.0.0.1:1410/callback"
+             ])
     end
 
     test "only the port is loose — path still has to match" do

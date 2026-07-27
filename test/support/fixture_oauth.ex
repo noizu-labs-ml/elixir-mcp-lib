@@ -104,3 +104,15 @@ defmodule Noizu.MCP.Fixtures.OAuth do
 
   defp stringify(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 end
+
+defmodule Noizu.MCP.Fixtures.OptionsVerifier do
+  @moduledoc false
+  # Reports insufficient_scope *without* naming a scope, so the transport falls
+  # back to the statically configured one.
+  @behaviour Noizu.MCP.Auth.TokenVerifier
+
+  @impl true
+  def verify("noscope-token", _conn_info, _opts), do: {:error, :insufficient_scope, %{}}
+  def verify("valid-token", _conn_info, _opts), do: {:ok, %{"sub" => "user-1"}}
+  def verify(_token, _conn_info, _opts), do: {:error, :invalid_token}
+end

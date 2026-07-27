@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-07-27
+
+### Added
+
+- **Resource-server verifiers.** `Noizu.MCP.Auth.JWTVerifier` binds a mount to a
+  single canonical resource URI: a token minted for `https://host/mcp` is
+  rejected at `https://host/mcp/learning` and vice versa, so one mount cannot be
+  used as a confused deputy for its neighbour. The algorithm allowlist comes from
+  config only, never from the token header.
+  `Noizu.MCP.Auth.ApiKeyVerifier` accepts a raw API key presented as a bearer
+  token, validated by a host-supplied `{module, function}` against its own key
+  store. `Noizu.MCP.Auth.ChainVerifier` tries verifiers in order and takes the
+  first success — one mount serving an interactive agent holding an OAuth token
+  *and* a headless script holding an API key. Chain failure is uniform: no
+  indication of which link rejected the credential.
+- `Noizu.MCP.Auth.Resource` — canonical resource-URI normalization and
+  comparison (RFC 8707/9728). Byte-exact matching is the contract; only
+  scheme/host case and the default port normalize. No trailing-slash coercion.
+- **Authorization-server security core** under `Noizu.MCP.Auth.Server` (the rest
+  of the facade — store, clients, tokens, plugs — lands next):
+  `PKCE` (S256 only, verified against the RFC 7636 test vector),
+  `RedirectURI` (exact matching, port-agnostic for loopback callbacks because
+  Claude Code binds an ephemeral port; label-boundary host matching, so
+  `evil-claude.ai` never matches `claude.ai`),
+  `SSRF` (https-only, IPv4/IPv6/v4-mapped denylist including `169.254.169.254`,
+  no redirects, 64 KiB cap, 5 s timeout),
+  `Secret` (PBKDF2-HMAC-SHA256 with an overridable `:secret_hasher`, SHA-256
+  token hashes, constant-time compare via `:crypto.hash_equals/2`),
+  `Errors` (RFC 6749/8414 codes; `error_description` never reflects input),
+  and `Params` (single-value extraction — a repeated parameter is rejected, not
+  resolved to one arm).
+- **Multi-resource protected-resource metadata.** `ProtectedResourceMetadataPlug`
+  takes a `resources:` map of path suffix to per-resource options plus
+  `default_resource`, so one forward answers several RFC 9728 path-inserted
+  suffixes each with its own `resource` value. An unknown suffix is a 404, never
+  another mount's document. The document is now served with
+  `Access-Control-Allow-Origin` (default `*`) and answers `OPTIONS` with 204 —
+  without CORS, claude.ai's browser-context discovery fails silently.
+- **Transport plug options.** `origins: :mcp_clients` (localhost plus the browser
+  MCP hosts, see `mcp_client_origins/0`); `cors:` — answers preflights and, on
+  every response, sets `Access-Control-Expose-Headers: WWW-Authenticate,
+  Mcp-Session-Id, Mcp-Protocol-Version`, without which a browser client cannot
+  read the 401 challenge at all and so can never start OAuth; `auth[:scope]`,
+  advertised in the challenge; and a derivable `auth[:resource_metadata]`,
+  accepting a binary, `{module, function}` (called with the conn),
+  `{module, function, args}`, a 1-arity fun, or `:derive` (built from the request
+  and the forward's mount path). Mounting without `auth:` now logs a warning in
+  `:prod`.
+- `Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge/1` — builds a challenge from a
+  keyword list, dropping `nil` values.
+
+### Fixed
+
+- **Header injection in `WWW-Authenticate`.** `WWWAuthenticate.format/2`
+  interpolated parameter values into the header unescaped. Values now go through
+  `escape_quoted/1`, which escapes `\` and `"` and *rejects* CR/LF/NUL and other
+  control characters (raising rather than emitting a header whose shape an
+  attacker chose); parameter names are validated as HTTP tokens. The most
+  exposed value is a derived `resource_metadata` URL, which can carry whatever
+  the `Host` header said.
+
+### Changed
+
+- **The 401 challenge no longer carries `error="invalid_request"` when no
+  credential was presented** (RFC 6750 §3.1: `error` describes a *failed*
+  request, and a client that has not presented a token yet has not failed at
+  anything). `error="invalid_token"` for a rejected token is unchanged. This is
+  the one behavioral change for existing consumers: a client asserting on
+  `error` in the no-credential 401 needs updating; clients that read
+  `resource_metadata` — which is every conformant MCP client — are unaffected.
+- `{:ecto_sql, "~> 3.11", optional: true}` added for the forthcoming
+  `Store.Ecto` adapter. A no-op for every current consumer.
+
 ## [0.1.4] — 2026-07-16
 
 ### Added

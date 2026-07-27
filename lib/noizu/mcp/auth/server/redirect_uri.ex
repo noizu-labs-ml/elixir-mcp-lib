@@ -139,13 +139,24 @@ defmodule Noizu.MCP.Auth.Server.RedirectURI do
     scheme = String.downcase(parsed.scheme)
 
     cond do
-      scheme == "https" -> validate_host(uri, parsed, opts)
-      scheme == "http" and loopback_host?(parsed.host) -> validate_host(uri, parsed, opts)
-      scheme == "http" and parsed.host in Keyword.get(opts, :allow_http_hosts, []) -> {:ok, uri}
-      scheme in ["http", "https"] -> {:error, :insecure_scheme}
+      scheme == "https" ->
+        validate_host(uri, parsed, opts)
+
+      scheme == "http" and loopback_host?(parsed.host) ->
+        validate_host(uri, parsed, opts)
+
+      scheme == "http" and parsed.host in Keyword.get(opts, :allow_http_hosts, []) ->
+        {:ok, uri}
+
+      scheme in ["http", "https"] ->
+        {:error, :insecure_scheme}
+
       # A private-use scheme has no authority to check.
-      Keyword.get(opts, :allow_custom_scheme, false) and String.contains?(scheme, ".") -> {:ok, uri}
-      true -> {:error, :invalid_redirect_uri}
+      Keyword.get(opts, :allow_custom_scheme, false) and String.contains?(scheme, ".") ->
+        {:ok, uri}
+
+      true ->
+        {:error, :invalid_redirect_uri}
     end
   end
 
@@ -159,8 +170,13 @@ defmodule Noizu.MCP.Auth.Server.RedirectURI do
 
       true ->
         case Keyword.get(opts, :allowed_hosts) do
-          nil -> {:ok, uri}
-          allowed -> if host_allowed?(parsed.host, allowed), do: {:ok, uri}, else: {:error, :host_not_allowed}
+          nil ->
+            {:ok, uri}
+
+          allowed ->
+            if host_allowed?(parsed.host, allowed),
+              do: {:ok, uri},
+              else: {:error, :host_not_allowed}
         end
     end
   end
