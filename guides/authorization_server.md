@@ -259,6 +259,20 @@ partial run — a fast single-file loop, a machine with no Postgres — set
 
 Read the skip and exclude counts, not only the passing one.
 
+### Known failures
+
+A clean run reports exactly one failure and **nothing else**:
+
+| Test | Why |
+|---|---|
+| `StdioE2ETest` "handshake, tools/list, tools/call over a real subprocess" | Known; stdio transport work in progress separately. Only runs under `--include e2e`. |
+
+**Anything else is a real regression.** There are no known intermittent
+failures: three that previously appeared at random were diagnosed as
+test-harness timing artifacts and fixed, not suppressed. A suite that fails
+randomly makes every future "green" unfalsifiable, which is the same disease as
+a silent skip.
+
 ### Verifying a live mount
 
 Before calling a mount healthy, each of these catches a specific failure:

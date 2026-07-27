@@ -99,7 +99,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge/1` — builds a challenge from a
   keyword list, dropping `nil` values.
 
+### Known test failures
+
+Running the full suite (see `guides/authorization_server.md`) reports exactly
+one failure:
+
+| Test | Status |
+|---|---|
+| `Noizu.MCP.StdioE2ETest` "handshake, tools/list, tools/call over a real subprocess" | Known; stdio transport work in progress separately. Only appears under `--include e2e`. |
+
+**Anything else is a real regression.** There are no known intermittent
+failures.
+
 ### Fixed
+
+- **`Store.Ecto.revoke_access_token/2` no longer reports a revocation it did not
+  perform.** `:track_access_tokens` defaults to `false`, so a caller reaching the
+  adapter directly — an admin "sign out everywhere", a purge job — without
+  threading the option got `:ok` back while nothing was revoked. Silent-success
+  revocation is a security claim, not a convenience. An **absent** option now
+  raises with an actionable message; an **explicit** `false` keeps its deliberate
+  no-op. Scoped to this function: `access_token_revoked?/2` still answers `false`
+  on absence (the documented "untracked is not revoked" degradation, matching
+  `Store.ETS`, which callers fail closed on) and `purge_expired/2` is unchanged.
+  Callers going through `Server.config/1` always have the option threaded and are
+  unaffected.
+
+- **The whole `Store` conformance battery now runs a second time under
+  `subject_type: :uuid`** against real `uuid` columns
+  (`test/noizu/mcp/auth/server/store_ecto_uuid_test.exs`). The `put_consent/2`
+  bug below was one missed coercion out of eight call sites, and a text-only
+  battery structurally could not catch it — a text bind against a text column is
+  valid whether or not it was coerced. Any future write that forgets
+  `dump_subject/2` now fails in the library rather than in a host application's
+  authorize leg. Conformance subjects come from the test context; the text pass
+  is unchanged.
 
 - **`Store.Ecto.put_consent/2` did not encode a uuid `subject`.** With
   `subject_type: :uuid` — the shape both first-party host apps run — recording
@@ -110,6 +144,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host completely non-functional. It was the one subject write of eight that
   missed `dump_subject/2`; the codes, refresh-token, access-token and consent
   *read* paths all had it. Found by the new Postgres-backed E2E suite below.
+
+- **Three intermittent test failures eliminated.** All were test-harness timing
+  artifacts; none was a transport race and none could affect a real client.
+  `StreamableHTTPTest` asserted the JSON fast path while the plug's
+  `sse_commit_after` window (200ms) could legitimately elapse under full-suite
+  load, upgrading to SSE exactly as designed — the matrix tests now use an
+  explicit generous window, and the timer-driven upgrade, which previously had
+  no deliberate coverage and was reached only by accident, is now pinned by its
+  own test. Both inspector failures shared one cause: `collect_until` returned
+  on a 300ms receive gap, discarding both its deadline and its condition at the
+  first quiet moment in the stream; it now waits for the deadline. A suite that
+  fails at random makes every subsequent "green" unfalsifiable, which is the
+  same defect as a silent skip wearing different clothes.
 
 - **An incomplete test run no longer reports success.** The `Store.Ecto`
   conformance battery (gated on `MCP_OAUTH_TEST_DATABASE_URL`) and every `:e2e`
