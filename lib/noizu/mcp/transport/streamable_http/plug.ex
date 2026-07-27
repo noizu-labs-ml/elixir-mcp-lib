@@ -21,8 +21,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       * `:server` (required) — the `use Noizu.MCP.Server` module
       * `:origins` — `:localhost` (default; allows non-browser clients and
-        localhost origins), `:any`, or an explicit allowlist of origins.
-        Origin validation guards against DNS-rebinding attacks.
+        localhost origins), `:mcp_clients` (localhost plus the known browser
+        MCP hosts, see `mcp_client_origins/0`), `:any`, or an explicit
+        allowlist of origins. Origin validation guards against DNS-rebinding
+        attacks.
       * `:idle_timeout` — session idle expiry in ms (default 30 minutes)
       * `:request_timeout` — max time to wait for a handler response
         (default 300_000)
@@ -30,10 +32,38 @@ if Code.ensure_loaded?(Plug.Conn) do
       * `:context` — `{module, function}` invoked as `fun.(conn)` returning a
         map merged into session assigns at initialize (how plug-level auth
         reaches handlers)
+      * `:auth` — resource-server enforcement, see below
+      * `:cors` — `false` (default) or `true`/keyword to answer browser
+        preflights, see below
+
+    ## Authorization (`:auth`)
+
+      * `:verifier` (required) — `Noizu.MCP.Auth.TokenVerifier` module or
+        `{module, opts}`
+      * `:resource_metadata` — the RFC 9728 URL advertised in the 401
+        challenge. A binary, `{module, function}` (called with the conn),
+        `{module, function, args}`, a 1-arity fun, or `:derive` (built from the
+        request and the forward's mount path).
+      * `:scope` — scope advertised in the challenge, so a client that has
+        never seen a token knows what to ask for
+
+    ## CORS (`:cors`)
+
+    A browser MCP client (claude.ai) cannot read the 401 challenge — and so
+    cannot start OAuth — unless `WWW-Authenticate` is exposed, and cannot
+    continue a session unless `Mcp-Session-Id` is. Enabling `:cors` answers
+    `OPTIONS` with `204` and adds, to every response:
+
+        access-control-allow-origin: <origin>
+        access-control-expose-headers: WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version
+
+    Only origins that pass `:origins` are answered, so CORS never widens the
+    DNS-rebinding guard. Options: `allow_headers:`, `max_age:`.
     """
 
     @behaviour Plug
     import Plug.Conn
+    require Logger
 
     alias Noizu.MCP.Protocol.Version
     alias Noizu.MCP.Server.EventStore
@@ -41,9 +71,37 @@ if Code.ensure_loaded?(Plug.Conn) do
     alias Noizu.MCP.Transport.SSE
     alias Noizu.MCP.Transport.StreamableHTTP.Sink
 
+    @exposed_headers "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version"
+    @default_allow_headers "authorization, content-type, accept, mcp-session-id, mcp-protocol-version, last-event-id"
+
+    # Browser-context MCP hosts. Non-browser clients (Claude Desktop, Claude
+    # Code, Codex) send no Origin at all and are unaffected by this list.
+    @mcp_client_origins [
+      "https://claude.ai",
+      "https://www.claude.ai",
+      "https://claude.com",
+      "https://www.claude.com",
+      "https://chatgpt.com",
+      "https://inspector.modelcontextprotocol.io"
+    ]
+
+    @doc """
+    The origins allowed by `origins: :mcp_clients` — the browser MCP hosts,
+    which `:mcp_clients` allows in addition to localhost.
+
+    Extend it rather than replacing it when a host needs one more origin:
+
+        origins: ["https://mcp.internal" | Noizu.MCP.Transport.StreamableHTTP.Plug.mcp_client_origins()]
+    """
+    @spec mcp_client_origins() :: [String.t()]
+    def mcp_client_origins, do: @mcp_client_origins
+
     @impl Plug
     # ⟦𓈟𓌖𓀽𓃤⟧ init :: auto-generated pointer for public function init
     def init(opts) do
+      auth = Keyword.get(opts, :auth)
+      warn_unauthenticated(opts, auth)
+
       %{
         server: Keyword.fetch!(opts, :server),
         origins: Keyword.get(opts, :origins, :localhost),
@@ -53,7 +111,8 @@ if Code.ensure_loaded?(Plug.Conn) do
         keepalive: Keyword.get(opts, :keepalive, 25_000),
         sse_commit_after: Keyword.get(opts, :sse_commit_after, 200),
         context: Keyword.get(opts, :context),
-        auth: Keyword.get(opts, :auth)
+        auth: auth,
+        cors: normalize_cors(Keyword.get(opts, :cors, false))
       }
     end
 
@@ -68,9 +127,16 @@ if Code.ensure_loaded?(Plug.Conn) do
           send_resp(conn, 404, "Not found")
 
         true ->
-          case authenticate(conn, opts.auth) do
-            {:ok, conn} -> route(conn, opts)
-            {:halt, conn} -> conn
+          conn = put_cors_headers(conn, opts.cors)
+
+          # A preflight carries no Authorization header — answer it before auth.
+          if opts.cors && conn.method == "OPTIONS" do
+            preflight(conn, opts.cors)
+          else
+            case authenticate(conn, opts.auth) do
+              {:ok, conn} -> route(conn, opts)
+              {:halt, conn} -> conn
+            end
           end
       end
     end
@@ -102,7 +168,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       case bearer_token(conn) do
         nil ->
-          {:halt, unauthorized(conn, auth, "invalid_request")}
+          # No credential presented: per RFC 6750 §3.1 the challenge carries no
+          # `error` — the client hasn't done anything wrong yet, it just needs
+          # to be told where the authorization server is.
+          {:halt, unauthorized(conn, auth, nil)}
 
         token ->
           conn_info = %{method: conn.method, peer: conn.remote_ip, headers: conn.req_headers}
@@ -115,11 +184,17 @@ if Code.ensure_loaded?(Plug.Conn) do
               {:halt, unauthorized(conn, auth, "invalid_token")}
 
             {:error, :insufficient_scope, meta} ->
+              # A `scope` in meta names what the caller is missing and wins over
+              # the statically advertised scope.
+              meta = Map.new(meta, fn {key, value} -> {to_string(key), to_string(value)} end)
+
               challenge =
-                Noizu.MCP.Auth.WWWAuthenticate.format(
-                  resource_params(auth) ++
-                    [{"error", "insufficient_scope"}] ++
-                    Enum.map(meta, fn {key, value} -> {to_string(key), to_string(value)} end)
+                Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge(
+                  [
+                    {"resource_metadata", resource_metadata_url(conn, auth)},
+                    {"scope", meta["scope"] || Keyword.get(auth, :scope)},
+                    {"error", "insufficient_scope"}
+                  ] ++ Enum.reject(meta, fn {key, _} -> key == "scope" end)
                 )
 
               conn
