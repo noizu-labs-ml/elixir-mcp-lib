@@ -8,20 +8,18 @@ both halves of that — enforcement on the server, the full flow on the client.
 > #### The authorization server {: .info}
 >
 > Until 0.1.5 this guide said the library never implements an authorization
-> server. That is changing: an OAuth 2.1 **AS facade** is landing under
-> `Noizu.MCP.Auth.Server`, because the alternative was worse. Claude Desktop and
-> claude.ai accept OAuth+DCR (RFC 7591), OAuth+CIMD, or a pre-registered
-> `client_id` — and Authentik, the IdP behind these apps, has not supported DCR
-> since the request was filed in 2024. The facade delegates *end-user
-> authentication* to the host's existing IdP login and owns only the OAuth
-> client, code and token semantics.
+> server. As of 0.1.5 it does: `Noizu.MCP.Auth.Server` is an OAuth 2.1 **AS
+> facade**, because the alternative was worse. Claude Desktop and claude.ai
+> accept OAuth+DCR (RFC 7591), OAuth+CIMD, or a pre-registered `client_id` — and
+> Authentik, the IdP behind these apps, has not supported DCR since the request
+> was filed in 2024. The facade delegates *end-user authentication* to the host's
+> existing IdP login and owns only the OAuth client, code and token semantics.
 >
-> 0.1.5 ships the security core — PKCE, redirect-URI matching, SSRF guards,
-> secret hashing, error rendering (`Noizu.MCP.Auth.Server.*`) — and the
-> resource-server verifiers below. The endpoints, the `Store` behaviour and the
-> mountable router follow. Nothing here documents a module that does not exist
-> yet; if you need the AS today, watch this space rather than building against
-> the pieces.
+> See [Authorization Server](authorization_server.md) to mount it, and
+> [MCP client compatibility](mcp_client_compatibility.md) for what each real
+> client needs. This guide stays about the **resource server** half — enforcing
+> tokens on your MCP mounts — which is what you need whether the tokens come from
+> the facade or from an IdP that can already do the job.
 
 ## Server side: enforcing tokens
 

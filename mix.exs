@@ -48,6 +48,8 @@ defmodule Noizu.MCP.MixProject do
       {:req, "~> 0.5", optional: true},
       # Authorization-server store adapter (raw SQL; no Ecto schemas)
       {:ecto_sql, "~> 3.11", optional: true},
+      # Only to run the DB-gated Store.Ecto conformance suite locally
+      {:postgrex, "~> 0.19", only: [:dev, :test]},
       # JWT verification (CompoundJWTVerifier)
       {:jose, "~> 1.11"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
@@ -92,6 +94,8 @@ defmodule Noizu.MCP.MixProject do
         "guides/streamable_http.md",
         "guides/stdio.md",
         "guides/authentication.md",
+        "guides/authorization_server.md",
+        "guides/mcp_client_compatibility.md",
         "guides/testing.md",
         "guides/inspector.md",
         "cheatsheets/mcp.cheatmd"

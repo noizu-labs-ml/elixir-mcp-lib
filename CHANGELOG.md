@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OAuth 2.1 authorization-server facade** — `Noizu.MCP.Auth.Server`. The library
+  now implements an authorization server, because the alternative was worse:
+  Claude Desktop and claude.ai authenticate to an MCP server with dynamic client
+  registration (RFC 7591) or a client-id metadata document, and Authentik has not
+  supported DCR since the request was filed in 2024. The facade owns OAuth client,
+  code and token semantics and delegates *authenticating the human* to the host's
+  existing IdP login, so the IdP never sees an MCP client.
+
+  One forward mounts the whole thing:
+
+  ```elixir
+  scope "/oauth" do
+    pipe_through :browser_session          # session YES, require_authenticated NO
+    forward "/", Noizu.MCP.Auth.Server.Router, MCPConfig.as_opts()
+  end
+  ```
+
+  `Server.config/1` + `%Server.Config{}` (raises at boot on an issuer with a path,
+  a resource outside it, or a missing key — every one of which otherwise presents
+  in production as *every client silently refusing to authenticate*);
+  `MetadataPlug` (RFC 8414, aliased at `/.well-known/openid-configuration`),
+  `RegistrationPlug` (RFC 7591), `AuthorizePlug` (+ the consent decision),
+  `TokenPlug`, `RevokePlug` (RFC 7009), `JWKSPlug`, `ApiKeyTokenPlug` and `Router`;
+  `Client`, `Tokens`, `Consent`, `CIMD` (+ `CIMD.ReqFetcher`), `Upstream`
+  (+ `Upstream.HostSession`, `Upstream.OIDC`).
+- **`Store` behaviour with two adapters.** `Store.ETS` (in-memory; mutations run
+  through a GenServer, which is what makes single-use redemption atomic) and
+  `Store.Ecto` (Postgres, **raw SQL, zero Ecto schemas** — the library owns no
+  tables). Adapters receive raw codes and tokens and MUST hash them before
+  persisting or comparing. `take_authorization_code/2` and
+  `rotate_refresh_token/3` are atomic *and* distinguish "never existed" from
+  "already used" — the second is a replay, and a replay revokes the whole refresh
+  family. `Noizu.MCP.Auth.Server.StoreConformanceCase` is the shared battery,
+  including 20-task races on both.
+- `priv/liquibase/noizu_mcp_oauth.yaml` — the host table template (six tables,
+  `subject` as plain `text` with an optional FK block commented out).
+- `guides/authorization_server.md` and `guides/mcp_client_compatibility.md`. The
+  compatibility guide records the verified client matrix and the failures that are
+  silent on the server: Claude offers CIMD only when the metadata advertises both
+  the flag *and* `"none"`; Claude Code fails the connection on a rejected
+  `Authorization` header instead of falling back to OAuth; Claude egresses from
+  `160.79.104.0/21`; loopback redirect URIs must be matched port-agnostically.
+
 - **Resource-server verifiers.** `Noizu.MCP.Auth.JWTVerifier` binds a mount to a
   single canonical resource URI: a token minted for `https://host/mcp` is
   rejected at `https://host/mcp/learning` and vice versa, so one mount cannot be
