@@ -440,7 +440,12 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       """
 
       params = [
-        consent.subject,
+        # `dump_subject`, not the raw value. This was the one subject write of
+        # eight that missed it, and with `subject_type: :uuid` it took down the
+        # whole authorize leg: recording consent is the first thing that touches
+        # the subject column, so every authorization 500'd with "expected a
+        # binary of 16 bytes" before a code was ever issued.
+        dump_subject(consent.subject, opts),
         consent.client_id,
         scope_text(consent.scope),
         consent.resource,

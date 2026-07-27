@@ -101,6 +101,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Store.Ecto.put_consent/2` did not encode a uuid `subject`.** With
+  `subject_type: :uuid` — the shape both first-party host apps run — recording
+  consent was the *first* statement in the authorize leg to touch the subject
+  column, and it passed the subject through raw. Every authorization request
+  therefore died with `DBConnection.EncodeError: Postgrex expected a binary of
+  16 bytes` before a code was ever issued, making OAuth against a uuid-keyed
+  host completely non-functional. It was the one subject write of eight that
+  missed `dump_subject/2`; the codes, refresh-token, access-token and consent
+  *read* paths all had it. Found by the new Postgres-backed E2E suite below.
+
 - **An incomplete test run no longer reports success.** The `Store.Ecto`
   conformance battery (gated on `MCP_OAUTH_TEST_DATABASE_URL`) and every `:e2e`
   suite are opt-in, and a plain `mix test` skipped both *in silence* — the
@@ -115,6 +125,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP_OAUTH_TEST_DATABASE_URL="postgres://USER:PASS@127.0.0.1:5432/noizu_mcp_test" \
     mix test --include e2e --include slow
   ```
+
+- **The authorization-server E2E now also runs against `Store.Ecto` on real
+  Postgres, with a uuid subject** (`test/noizu/mcp/auth/server/e2e_ecto_test.exs`).
+  The existing E2E ran against `Store.ETS` only, which exercises none of the SQL
+  and none of the uuid encoding — which is how a `Store.Ecto` defect reached two
+  mounted applications behind a green suite. The new suite covers discovery →
+  DCR → authorize → token → `tools/call` → refresh, the CIMD variant, code and
+  refresh replay, and the headline cross-mount assertion: a token minted for
+  `/mcp` is rejected at `/mcp/learning` and vice versa. It failed on its first
+  run, which is how the `put_consent/2` bug above was found.
 
 - **`Store.EctoTest` no longer invalidates its own module on teardown.** The test
   repo was dropped from an `on_exit` callback, but the repo is already stopped by

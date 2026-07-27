@@ -39,8 +39,8 @@ not_run =
     if e2e_included?,
       do: acc,
       else: [
-        "`--include e2e` was not passed — the authorization-server E2E and stdio " <>
-          "E2E suites did not run. The end-to-end OAuth flow is UNVERIFIED in this run." | acc
+        "`--include e2e` was not passed — the stdio transport E2E suite " <>
+          "(real subprocesses) did not run. The stdio transport is UNVERIFIED in this run." | acc
       ]
   end)
 

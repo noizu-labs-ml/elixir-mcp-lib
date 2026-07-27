@@ -20,7 +20,20 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
 
   def truncate_sql, do: "TRUNCATE #{Enum.join(@tables, ", ")}"
 
-  def create_sql do
+  @doc """
+  DDL with a `text` subject column.
+
+  Hosts differ on this: the library treats `subject` as opaque text (it may be an
+  email), but an app whose users table is keyed by uuid will have declared the
+  column `uuid`, and `Store.Ecto` is told which via `subject_type:`. Both shapes
+  are exercised — `create_sql/1` builds either — because a uuid subject column is
+  precisely where the adapter used to fail, with "expected a binary of 16 bytes".
+  """
+  def create_sql, do: create_sql(:text)
+
+  def create_sql(subject_type) when subject_type in [:text, :uuid] do
+    subject = subject_column(subject_type)
+
     [
       """
       CREATE TABLE mcp_oauth_clients (
@@ -64,7 +77,7 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
       CREATE TABLE mcp_oauth_authorization_codes (
         code_hash char(64) PRIMARY KEY,
         client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
-        subject text NOT NULL,
+        subject #{subject} NOT NULL,
         redirect_uri text NOT NULL,
         scope text NOT NULL DEFAULT '',
         resource text,
@@ -84,7 +97,7 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         token_hash char(64) NOT NULL UNIQUE,
         client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
-        subject text NOT NULL,
+        subject #{subject} NOT NULL,
         scope text NOT NULL DEFAULT '',
         resource text,
         family_id uuid NOT NULL,
@@ -99,7 +112,7 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
       """
       CREATE TABLE mcp_oauth_consents (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        subject text NOT NULL,
+        subject #{subject} NOT NULL,
         client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
         scope text NOT NULL DEFAULT '',
         resource text,
@@ -108,9 +121,12 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
         CONSTRAINT uq_mcp_oauth_consents_subject_client UNIQUE (subject, client_id)
       )
       """,
-      access_tokens_sql()
+      access_tokens_sql(subject_type)
     ]
   end
+
+  defp subject_column(:text), do: "text"
+  defp subject_column(:uuid), do: "uuid"
 
   @doc """
   The optional access-tokens table on its own.
@@ -119,12 +135,16 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
   `track_access_tokens: false` are told the table is optional, and
   `purge_expired/2` must not name it in that case.
   """
-  def access_tokens_sql do
+  def access_tokens_sql, do: access_tokens_sql(:text)
+
+  def access_tokens_sql(subject_type) when subject_type in [:text, :uuid] do
+    subject = subject_column(subject_type)
+
     """
     CREATE TABLE mcp_oauth_access_tokens (
       jti_hash char(64) PRIMARY KEY,
       client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
-      subject text NOT NULL,
+      subject #{subject} NOT NULL,
       scope text NOT NULL DEFAULT '',
       resource text,
       family_id uuid,

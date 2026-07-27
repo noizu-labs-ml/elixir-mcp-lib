@@ -246,7 +246,7 @@ MCP_OAUTH_TEST_DATABASE_URL="postgres://USER:PASS@127.0.0.1:5432/noizu_mcp_test"
 | Flag / variable | Without it |
 |---|---|
 | `MCP_OAUTH_TEST_DATABASE_URL` | The entire `Store.Ecto` adapter is unverified |
-| `--include e2e` | The end-to-end OAuth flow and the stdio transport are unverified |
+| `--include e2e` | The stdio transport (real subprocesses) is unverified |
 | `--include slow` | Expiry tests (which sleep) do not run |
 
 A run missing either of the first two **fails on purpose**, with a

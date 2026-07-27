@@ -15,6 +15,10 @@ defmodule Noizu.MCP.Fixtures.AS do
     :persistent_term.put(@key, %{
       issuer: issuer,
       store_name: store_name,
+      # nil means "the ETS store named above". A test that wants the whole flow
+      # driven by a different adapter — `Store.Ecto` against real Postgres —
+      # overrides this with `put(:store, {Store.Ecto, repo: ..., subject_type: ...})`.
+      store: nil,
       subject: "user-1",
       cimd_document: nil,
       upstream_log: nil
@@ -36,7 +40,7 @@ defmodule Noizu.MCP.Fixtures.AS do
 
     Noizu.MCP.Auth.Server.config(
       issuer: state.issuer,
-      store: {Store.ETS, name: state.store_name},
+      store: state[:store] || {Store.ETS, name: state.store_name},
       signing: {:hs256, "e2e-hmac-secret-that-is-long-enough-32"},
       scopes_supported: ["mcp", "mcp:admin"],
       default_scope: ["mcp"],
