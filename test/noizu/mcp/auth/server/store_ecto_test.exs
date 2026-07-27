@@ -53,6 +53,49 @@ defmodule Noizu.MCP.Auth.Server.Store.EctoTest do
       assert_raise ArgumentError, fn -> Store.Ecto.get_client("c1", []) end
     end
 
+    describe "purge_expired with no access-tokens table" do
+      setup do
+        # The template calls `mcp_oauth_access_tokens` optional and tells hosts
+        # running `track_access_tokens: false` they may drop it. Prove a sweep
+        # survives that, because naming the table unconditionally made the
+        # host's 15-minute purge job fail forever on an undefined relation.
+        Ecto.Adapters.SQL.query!(Repo, "DROP TABLE mcp_oauth_access_tokens", [])
+
+        on_exit(fn ->
+          Ecto.Adapters.SQL.query!(Repo, TestSchema.access_tokens_sql(), [])
+        end)
+
+        :ok
+      end
+
+      test "succeeds and reports no access-token count", %{store_opts: store_opts} do
+        opts = Keyword.put(store_opts, :track_access_tokens, false)
+
+        assert {:ok, counts} = Store.Ecto.purge_expired(DateTime.utc_now(), opts)
+        refute Map.has_key?(counts, :access_tokens)
+        assert Map.has_key?(counts, :refresh_tokens)
+      end
+
+      test "answers untracked tokens without touching the table", %{store_opts: store_opts} do
+        opts = Keyword.put(store_opts, :track_access_tokens, false)
+
+        refute Store.Ecto.access_token_revoked?(Store.generate_token(), opts)
+        assert :ok = Store.Ecto.revoke_access_token(Store.generate_token(), opts)
+      end
+
+      test "still fails loudly when tracking is on and the table is gone", %{
+        store_opts: store_opts
+      } do
+        # The flag must not become a blanket try/rescue: with tracking on, a
+        # missing table is a real misconfiguration and has to surface.
+        opts = Keyword.put(store_opts, :track_access_tokens, true)
+
+        assert_raise Postgrex.Error, fn ->
+          Store.Ecto.purge_expired(DateTime.utc_now(), opts)
+        end
+      end
+    end
+
     use Noizu.MCP.Auth.Server.StoreConformanceCase
   else
     @tag :skip

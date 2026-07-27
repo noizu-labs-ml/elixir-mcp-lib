@@ -108,19 +108,30 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
         CONSTRAINT uq_mcp_oauth_consents_subject_client UNIQUE (subject, client_id)
       )
       """,
-      """
-      CREATE TABLE mcp_oauth_access_tokens (
-        jti_hash char(64) PRIMARY KEY,
-        client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
-        subject text NOT NULL,
-        scope text NOT NULL DEFAULT '',
-        resource text,
-        family_id uuid,
-        expires_at timestamptz NOT NULL,
-        revoked_at timestamptz,
-        inserted_at timestamptz NOT NULL DEFAULT now()
-      )
-      """
+      access_tokens_sql()
     ]
+  end
+
+  @doc """
+  The optional access-tokens table on its own.
+
+  Broken out so a test can drop it and put it back — hosts running
+  `track_access_tokens: false` are told the table is optional, and
+  `purge_expired/2` must not name it in that case.
+  """
+  def access_tokens_sql do
+    """
+    CREATE TABLE mcp_oauth_access_tokens (
+      jti_hash char(64) PRIMARY KEY,
+      client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+      subject text NOT NULL,
+      scope text NOT NULL DEFAULT '',
+      resource text,
+      family_id uuid,
+      expires_at timestamptz NOT NULL,
+      revoked_at timestamptz,
+      inserted_at timestamptz NOT NULL DEFAULT now()
+    )
+    """
   end
 end

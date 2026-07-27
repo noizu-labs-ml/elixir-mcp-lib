@@ -20,6 +20,23 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       * `:repo` (required) — an `Ecto.Repo`
       * `:prefix` — Postgres schema qualifier, e.g. `"mcp"`
       * `:timeout` — query timeout, default 5s
+      * `:subject_type` — `:text` (default) or `:uuid`
+      * `:track_access_tokens` — set for you by `Noizu.MCP.Auth.Server.config/1`
+
+    ## `:subject_type`
+
+    `subject` is opaque text to this library — it is whatever the upstream
+    callback returns, which may be an email or any other identifier — and the
+    shipped template declares it `text`. The template's optional `subject_fk`
+    changeSets change it to `uuid` so it can reference `users(id)`. Postgres will
+    not accept a string bind param for a `uuid` column, so a host that
+    uncommented those changeSets must say so:
+
+        store: {Store.Ecto, repo: MyApp.Repo, subject_type: :uuid}
+
+    Values stay strings on both sides of the boundary either way; this option only
+    tells the adapter how to bind them. Leaving it `:text` against a `uuid` column
+    fails loudly on the first write rather than corrupting anything.
 
     ## Atomicity
 
@@ -225,14 +242,14 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       params = [
         Secret.token_hash(code.code),
         code.client_id,
-        code.subject,
+        dump_subject(code.subject, opts),
         code.redirect_uri,
         scope_text(code.scope),
         code.resource,
         code.code_challenge,
         code.code_challenge_method,
         code.nonce,
-        code.refresh_family_id,
+        dump_uuid(code.refresh_family_id),
         json(code.upstream_ref),
         code.expires_at
       ]
@@ -271,7 +288,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       UPDATE #{table(opts, "authorization_codes")} SET refresh_family_id = $2 WHERE code_hash = $1
       """
 
-      case query(opts, sql, [Secret.token_hash(code), family_id]) do
+      case query(opts, sql, [Secret.token_hash(code), dump_uuid(family_id)]) do
         {:ok, %{num_rows: 0}} -> {:error, :not_found}
         {:ok, _} -> :ok
         error -> error
@@ -334,7 +351,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
                   link =
                     "UPDATE #{table(opts, "refresh_tokens")} SET rotated_to = $2 WHERE id = $1"
 
-                  case query(opts, link, [old.id, new.id]) do
+                  case query(opts, link, [dump_uuid(old.id), dump_uuid(new.id)]) do
                     {:ok, _} -> {:ok, old}
                     {:error, reason} -> repo.rollback(reason)
                   end
@@ -374,7 +391,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       WHERE family_id = $1 AND revoked_at IS NULL
       """
 
-      with {:ok, _} <- query(opts, sql, [family_id]), do: :ok
+      with {:ok, _} <- query(opts, sql, [dump_uuid(family_id)]), do: :ok
     end
 
     @impl Store
@@ -384,7 +401,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       WHERE subject = $1 AND revoked_at IS NULL
       """
 
-      with {:ok, _} <- query(opts, sql, [subject]), do: :ok
+      with {:ok, _} <- query(opts, sql, [dump_subject(subject, opts)]), do: :ok
     end
 
     def revoke_subject_tokens(subject, client_id, opts) do
@@ -393,7 +410,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       WHERE subject = $1 AND client_id = $2 AND revoked_at IS NULL
       """
 
-      with {:ok, _} <- query(opts, sql, [subject, client_id]), do: :ok
+      with {:ok, _} <- query(opts, sql, [dump_subject(subject, opts), client_id]), do: :ok
     end
 
     # ── consent ────────────────────────────────────────────────────────────
@@ -405,7 +422,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       WHERE subject = $1 AND client_id = $2 AND (expires_at IS NULL OR expires_at > now())
       """
 
-      case query(opts, sql, [subject, client_id]) do
+      case query(opts, sql, [dump_subject(subject, opts), client_id]) do
         {:ok, %{rows: [row]}} -> {:ok, to_consent(row)}
         {:ok, %{rows: []}} -> {:error, :not_found}
         error -> error
@@ -436,7 +453,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     @impl Store
     def revoke_consent(subject, client_id, opts) do
       sql = "DELETE FROM #{table(opts, "consents")} WHERE subject = $1 AND client_id = $2"
-      with {:ok, _} <- query(opts, sql, [subject, client_id]), do: :ok
+      with {:ok, _} <- query(opts, sql, [dump_subject(subject, opts), client_id]), do: :ok
     end
 
     # ── access tokens ──────────────────────────────────────────────────────
@@ -453,10 +470,10 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       params = [
         Secret.token_hash(token.jti),
         token.client_id,
-        token.subject,
+        dump_subject(token.subject, opts),
         scope_text(token.scope),
         token.resource,
-        token.family_id,
+        dump_uuid(token.family_id),
         token.expires_at
       ]
 
@@ -465,40 +482,63 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
     @impl Store
     def access_token_revoked?(jti, opts) do
-      sql = """
-      SELECT revoked_at IS NOT NULL FROM #{table(opts, "access_tokens")} WHERE jti_hash = $1
-      """
+      if tracking_access_tokens?(opts) do
+        sql = """
+        SELECT revoked_at IS NOT NULL FROM #{table(opts, "access_tokens")} WHERE jti_hash = $1
+        """
 
-      case query(opts, sql, [Secret.token_hash(jti)]) do
-        {:ok, %{rows: [[revoked]]}} -> revoked
-        # No row: either tracking is off or the row was purged. Not revoked.
-        {:ok, %{rows: []}} -> false
-        error -> error
+        case query(opts, sql, [Secret.token_hash(jti)]) do
+          {:ok, %{rows: [[revoked]]}} -> revoked
+          # No row: the row was purged. Not revoked.
+          {:ok, %{rows: []}} -> false
+          error -> error
+        end
+      else
+        # Untracked is not revoked — matching `Store.ETS`. With tracking off
+        # there is no row for any token, and the table may not even exist, so
+        # querying it would 500 every request instead of answering `false`.
+        false
       end
     end
 
     @impl Store
     def revoke_access_token(jti, opts) do
-      sql = """
-      UPDATE #{table(opts, "access_tokens")} SET revoked_at = now()
-      WHERE jti_hash = $1 AND revoked_at IS NULL
-      """
+      if tracking_access_tokens?(opts) do
+        sql = """
+        UPDATE #{table(opts, "access_tokens")} SET revoked_at = now()
+        WHERE jti_hash = $1 AND revoked_at IS NULL
+        """
 
-      with {:ok, _} <- query(opts, sql, [Secret.token_hash(jti)]), do: :ok
+        with {:ok, _} <- query(opts, sql, [Secret.token_hash(jti)]), do: :ok
+      else
+        # Nothing is tracked, so there is nothing to revoke. `RevokePlug`
+        # already gates on the same flag; this keeps a direct caller from
+        # hitting an undefined relation.
+        :ok
+      end
     end
 
     @impl Store
     def purge_expired(now, opts) do
       # Codes are kept past expiry only as long as replay detection needs them;
       # once expired they can never be redeemed, so there is nothing to detect.
-      purges = [
-        login_states: "DELETE FROM #{table(opts, "login_states")} WHERE expires_at < $1",
-        authorization_codes:
-          "DELETE FROM #{table(opts, "authorization_codes")} WHERE expires_at < $1",
-        refresh_tokens:
-          "DELETE FROM #{table(opts, "refresh_tokens")} WHERE expires_at < $1 AND rotated_to IS NULL",
-        access_tokens: "DELETE FROM #{table(opts, "access_tokens")} WHERE expires_at < $1"
-      ]
+      purges =
+        [
+          login_states: "DELETE FROM #{table(opts, "login_states")} WHERE expires_at < $1",
+          authorization_codes:
+            "DELETE FROM #{table(opts, "authorization_codes")} WHERE expires_at < $1",
+          refresh_tokens:
+            "DELETE FROM #{table(opts, "refresh_tokens")} WHERE expires_at < $1 AND rotated_to IS NULL"
+        ] ++
+          if tracking_access_tokens?(opts) do
+            # Only reachable with tracking on: `mcp_oauth_access_tokens` is
+            # optional and hosts that leave tracking off are told they may drop
+            # it. Naming it unconditionally makes every sweep fail forever with
+            # an undefined relation.
+            [access_tokens: "DELETE FROM #{table(opts, "access_tokens")} WHERE expires_at < $1"]
+          else
+            []
+          end
 
       Enum.reduce_while(purges, {:ok, %{}}, fn {name, sql}, {:ok, counts} ->
         case query(opts, sql, [now]) do
@@ -520,13 +560,13 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       """
 
       params = [
-        token.id || Store.generate_id(),
+        dump_uuid(token.id || Store.generate_id()),
         Secret.token_hash(token.token),
         token.client_id,
-        token.subject,
+        dump_subject(token.subject, opts),
         scope_text(token.scope),
         token.resource,
-        token.family_id,
+        dump_uuid(token.family_id),
         token.expires_at,
         token.family_expires_at
       ]
@@ -689,7 +729,54 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     defp json(nil), do: nil
     defp json(value), do: value
 
-    defp cols(columns), do: Enum.join(columns, ", ")
+    # Columns the shipped template declares `uuid`, plus `subject`, which is
+    # `text` by default but becomes `uuid` when the host uncomments the optional
+    # FK changeSet. Postgrex returns a `uuid` column as a raw 16-byte binary, so
+    # every read casts to text in SQL. That keeps the adapter text-in/text-out
+    # regardless of which schema it is pointed at, and avoids guessing on read —
+    # a 16-character *text* subject is indistinguishable from a uuid otherwise.
+    @text_on_read ~w(id family_id rotated_to refresh_family_id subject)
+
+    defp cols(columns) do
+      Enum.map_join(columns, ", ", fn col ->
+        if col in @text_on_read, do: "#{col}::text AS #{col}", else: col
+      end)
+    end
+
+    # Writes go the other way: a `uuid` column will not accept a string bind
+    # param ("expected a binary of 16 bytes"), so uuid-typed values are dumped
+    # here. `nil` stays `nil` — these columns are nullable.
+    defp dump_uuid(nil), do: nil
+    defp dump_uuid(<<_::128>> = raw), do: raw
+
+    defp dump_uuid(
+           <<a::binary-8, "-", b::binary-4, "-", c::binary-4, "-", d::binary-4, "-",
+             e::binary-12>> = value
+         ) do
+      case Base.decode16(a <> b <> c <> d <> e, case: :mixed) do
+        {:ok, raw} -> raw
+        :error -> raise ArgumentError, "Store.Ecto: not a uuid: #{inspect(value)}"
+      end
+    end
+
+    defp dump_uuid(other), do: raise(ArgumentError, "Store.Ecto: not a uuid: #{inspect(other)}")
+
+    # `subject` is opaque text to the library — it can be an email or any other
+    # identifier — so it is only dumped when the host says the column is `uuid`.
+    # Casting unconditionally would reject every non-uuid subject.
+    defp dump_subject(subject, opts) do
+      case Keyword.get(opts, :subject_type, :text) do
+        :text -> subject
+        :uuid -> dump_uuid(subject)
+      end
+    end
+
+    # `Noizu.MCP.Auth.Server.config/1` copies the server's `:track_access_tokens`
+    # into the store opts so the two can never disagree. A host calling the
+    # adapter directly (a purge job, typically) may also pass it itself.
+    # Defaults to `false`, matching the server default and the shipped Liquibase
+    # template, where the access-tokens table is optional.
+    defp tracking_access_tokens?(opts), do: Keyword.get(opts, :track_access_tokens, false)
 
     defp table(opts, name) do
       case Keyword.get(opts, :prefix) do

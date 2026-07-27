@@ -123,10 +123,11 @@ defmodule Noizu.MCP.Auth.Server do
 
   def config(opts) when is_list(opts) do
     issuer = issuer!(opts)
+    track_access_tokens = Keyword.get(opts, :track_access_tokens, false)
 
     %Config{
       issuer: issuer,
-      store: store!(opts),
+      store: store!(opts, track_access_tokens),
       signing: signing!(opts),
       access_token_ttl: ttl(opts, :access_token_ttl, 900, @max_access_token_ttl),
       refresh_token_ttl: ttl(opts, :refresh_token_ttl, 2_592_000, nil),
@@ -143,7 +144,7 @@ defmodule Noizu.MCP.Auth.Server do
       consent: Keyword.get(opts, :consent, []),
       api_keys: Keyword.get(opts, :api_keys),
       rate_limit: Keyword.get(opts, :rate_limit),
-      track_access_tokens: Keyword.get(opts, :track_access_tokens, false),
+      track_access_tokens: track_access_tokens,
       leeway: Keyword.get(opts, :leeway, 0),
       paths: Map.merge(@default_paths, Map.new(Keyword.get(opts, :paths, []))),
       extra_metadata: Keyword.get(opts, :extra_metadata, %{})
@@ -283,12 +284,19 @@ defmodule Noizu.MCP.Auth.Server do
     end
   end
 
-  defp store!(opts) do
-    case Keyword.get(opts, :store) do
-      {module, store_opts} when is_atom(module) and is_list(store_opts) -> {module, store_opts}
-      module when is_atom(module) and not is_nil(module) -> {module, []}
-      _ -> raise ArgumentError, "Auth.Server: :store is required, as {module, opts}"
-    end
+  # `:track_access_tokens` is threaded into the store opts because adapters are
+  # handed opts, never the `%Config{}` — `Store.Ecto` must know not to name the
+  # optional `mcp_oauth_access_tokens` table, which hosts running with tracking
+  # off are told they may drop.
+  defp store!(opts, track_access_tokens) do
+    {module, store_opts} =
+      case Keyword.get(opts, :store) do
+        {module, store_opts} when is_atom(module) and is_list(store_opts) -> {module, store_opts}
+        module when is_atom(module) and not is_nil(module) -> {module, []}
+        _ -> raise ArgumentError, "Auth.Server: :store is required, as {module, opts}"
+      end
+
+    {module, Keyword.put(store_opts, :track_access_tokens, track_access_tokens)}
   end
 
   defp signing!(opts) do
