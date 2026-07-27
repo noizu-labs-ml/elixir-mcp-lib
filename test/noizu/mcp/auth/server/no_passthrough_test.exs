@@ -182,7 +182,162 @@ defmodule Noizu.MCP.Auth.Server.NoPassthroughTest do
     assert relaying == []
   end
 
+  # ── the exhaustive version ───────────────────────────────────────────────
+
+  @sentinel "Bearer sentinel-inbound-credential-do-not-forward"
+
+  test "across a complete flow, ZERO outbound upstream calls carry the client's credential", %{
+    base: base
+  } do
+    # The tests above each check one place a credential could leak. This one
+    # checks *every* place at once, by recording everything the AS hands to the
+    # host and refusing to find the credential in any of it. It is the difference
+    # between asserting the confused-deputy property and demonstrating it.
+    client = register(base)
+    verifier = PKCE.generate_verifier()
+    {:ok, challenge} = PKCE.challenge(verifier)
+
+    # The sentinel rides on every request in the flow, including the ones with no
+    # business carrying it.
+    authorize_page =
+      Req.get!(
+        base <>
+          "/oauth/authorize?" <>
+          URI.encode_query(%{
+            "response_type" => "code",
+            "client_id" => client["client_id"],
+            "redirect_uri" => "https://claude.ai/api/mcp/auth_callback",
+            "code_challenge" => challenge,
+            "code_challenge_method" => "S256",
+            "scope" => "mcp",
+            "resource" => base <> "/mcp/learning"
+          }),
+        headers: [{"authorization", @sentinel}],
+        redirect: false,
+        retry: false
+      )
+
+    location = consent_location(base, authorize_page)
+    code = URI.decode_query(URI.parse(location).query)["code"]
+
+    token_response =
+      Req.post!(base <> "/oauth/token",
+        form: %{
+          "grant_type" => "authorization_code",
+          "client_id" => client["client_id"],
+          "code" => code,
+          "code_verifier" => verifier,
+          "redirect_uri" => "https://claude.ai/api/mcp/auth_callback"
+        },
+        headers: [{"authorization", @sentinel}],
+        retry: false
+      )
+
+    assert token_response.status == 200, inspect(token_response.body)
+
+    # ...and the CIMD variant, because fetching a client-id metadata document is
+    # the one genuinely *outbound* request this server makes. If a credential
+    # were ever going to ride along to a third party, it would ride along here.
+    Fixtures.AS.put_cimd_document(%{
+      "client_id" => "https://public.example.com/mcp-client",
+      "client_name" => "Sentinel CIMD client",
+      "redirect_uris" => ["https://claude.ai/api/mcp/auth_callback"],
+      "token_endpoint_auth_method" => "none"
+    })
+
+    on_exit(fn -> Fixtures.AS.put(:cimd_document, nil) end)
+
+    with_cimd_fetcher(fn ->
+      {:ok, cimd_challenge} = PKCE.challenge(PKCE.generate_verifier())
+
+      Req.get!(
+        base <>
+          "/oauth/authorize?" <>
+          URI.encode_query(%{
+            "response_type" => "code",
+            "client_id" => "https://public.example.com/mcp-client",
+            "redirect_uri" => "https://claude.ai/api/mcp/auth_callback",
+            "code_challenge" => cimd_challenge,
+            "code_challenge_method" => "S256",
+            "scope" => "mcp",
+            "resource" => base <> "/mcp/learning"
+          }),
+        headers: [{"authorization", @sentinel}],
+        redirect: false,
+        retry: false
+      )
+    end)
+
+    events = drain_upstream()
+
+    # A drain that found nothing would pass every assertion below while proving
+    # nothing at all — the exact failure mode this suite exists to eliminate.
+    refute events == [], "the upstream log recorded nothing; this test proved nothing"
+
+    assert Enum.any?(events, &match?({:cimd_fetch, _}, &1)),
+           "the outbound CIMD fetch never happened, so the outbound surface went untested: " <>
+             inspect(events)
+
+    # `:current_subject` is the host inspecting *this* request's own conn, not an
+    # outbound call — the header is necessarily visible there. Everything else is
+    # something the AS chose to send somewhere, and none of it may carry the
+    # credential.
+    outbound = Enum.reject(events, &match?({:current_subject, _}, &1))
+
+    for {event, payload} <- outbound do
+      refute inspect(payload) =~ "sentinel",
+             "#{event} carried the client's credential to an upstream: #{inspect(payload)}"
+    end
+
+    # And the credential never becomes a subject, on any path.
+    for {:current_subject, headers} <- events do
+      assert headers in [[], [@sentinel]],
+             "unexpected authorization header shape: #{inspect(headers)}"
+    end
+  end
+
   # ── helpers ──────────────────────────────────────────────────────────────
+
+  defp drain_upstream(acc \\ []) do
+    receive do
+      {:upstream, event, payload} -> drain_upstream([{event, payload} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp with_cimd_fetcher(fun) do
+    previous = Application.get_env(:noizu_mcp, :test_cimd_fetcher)
+    Application.put_env(:noizu_mcp, :test_cimd_fetcher, &Fixtures.AS.fetch_cimd/2)
+
+    try do
+      fun.()
+    after
+      Application.put_env(:noizu_mcp, :test_cimd_fetcher, previous)
+    end
+  end
+
+  defp consent_location(base, %{status: 302} = page),
+    do: page |> Req.Response.get_header("location") |> List.first() |> then(&(&1 || base))
+
+  defp consent_location(base, %{status: 200} = page) do
+    fields =
+      ~r/name="([^"]+)" value="([^"]*)"/
+      |> Regex.scan(page.body)
+      |> Map.new(fn [_, key, value] -> {key, value} end)
+
+    Req.post!(base <> "/oauth/consent",
+      form: %{
+        "login_state" => fields["login_state"],
+        "csrf_token" => fields["csrf_token"],
+        "decision" => "approve"
+      },
+      redirect: false,
+      retry: false
+    )
+    |> Req.Response.get_header("location")
+    |> List.first()
+  end
 
   defp register(base) do
     response =
