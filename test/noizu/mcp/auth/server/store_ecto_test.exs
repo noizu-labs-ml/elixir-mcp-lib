@@ -52,7 +52,77 @@ defmodule Noizu.MCP.Auth.Server.Store.EctoTest do
       # need 20 real connections racing one row, which is exactly what the
       # sandbox's single shared transaction would serialize away.
       Ecto.Adapters.SQL.query!(Repo, TestSchema.truncate_sql(), [])
-      %{adapter: Store.Ecto, store_opts: [repo: Repo]}
+
+      # `track_access_tokens: true`, explicitly. Whether tracking is on is a
+      # store *option* for this adapter, not an adapter capability, so without
+      # the flag the shared battery asserted tracked semantics while exercising
+      # the untracked path — and the tracked Ecto path had no passing coverage
+      # at all. The untracked path keeps its own coverage in the describe block
+      # above.
+      %{adapter: Store.Ecto, store_opts: [repo: Repo, track_access_tokens: true]}
+    end
+
+    describe "revoke_access_token/2 and an absent :track_access_tokens" do
+      test "raises rather than reporting a revocation it did not perform", %{
+        store_opts: store_opts
+      } do
+        # Silent-success revocation is the failure this guards. A caller who has
+        # not said whether tracking is on has not decided, and `:ok` here would
+        # tell an admin a credential was killed when it was not.
+        opts = Keyword.delete(store_opts, :track_access_tokens)
+
+        assert_raise ArgumentError, ~r/requires an explicit `:track_access_tokens`/, fn ->
+          Store.Ecto.revoke_access_token(Store.generate_token(), opts)
+        end
+      end
+
+      test "an explicit false is still a deliberate no-op", %{store_opts: store_opts} do
+        opts = Keyword.put(store_opts, :track_access_tokens, false)
+        assert :ok = Store.Ecto.revoke_access_token(Store.generate_token(), opts)
+      end
+
+      test "an explicit true actually revokes", %{store_opts: store_opts} do
+        opts = Keyword.put(store_opts, :track_access_tokens, true)
+        client = put_absent_flag_client(opts)
+        jti = Store.generate_token()
+
+        :ok =
+          Store.Ecto.put_access_token(
+            %Store.AccessToken{
+              jti: jti,
+              client_id: client,
+              subject: "user-1",
+              scope: ["mcp"],
+              resource: "https://app.example.com/mcp",
+              expires_at: DateTime.add(DateTime.utc_now(), 900, :second)
+            },
+            opts
+          )
+
+        refute Store.Ecto.access_token_revoked?(jti, opts)
+        assert :ok = Store.Ecto.revoke_access_token(jti, opts)
+        assert Store.Ecto.access_token_revoked?(jti, opts)
+      end
+    end
+
+    # `mcp_oauth_access_tokens.client_id` is a real FK, so the token needs a
+    # real client behind it.
+    defp put_absent_flag_client(opts) do
+      client_id = "client-" <> Store.generate_token()
+
+      {:ok, _} =
+        Store.Ecto.put_client(
+          %Noizu.MCP.Auth.Server.Client{
+            client_id: client_id,
+            client_id_kind: :registered,
+            client_name: "Revoke guard",
+            redirect_uris: ["https://claude.ai/cb"],
+            scope: ["mcp"]
+          },
+          opts
+        )
+
+      client_id
     end
 
     test "requires a repo", %{store_opts: _opts} do
@@ -96,9 +166,14 @@ defmodule Noizu.MCP.Auth.Server.Store.EctoTest do
         # missing table is a real misconfiguration and has to surface.
         opts = Keyword.put(store_opts, :track_access_tokens, true)
 
-        assert_raise Postgrex.Error, fn ->
-          Store.Ecto.purge_expired(DateTime.utc_now(), opts)
-        end
+        # An error TUPLE, not a raise: `query/3` converts every SQL failure to
+        # `{:error, {:store_error, reason}}` and the adapter never raises for
+        # one. Matched to that exact shape rather than a bare `{:error, _}` —
+        # the property being pinned is that a missing table with tracking ON
+        # surfaces rather than being swallowed, so a `{:ok, counts}` return has
+        # to fail this test.
+        assert {:error, {:store_error, %Postgrex.Error{}}} =
+                 Store.Ecto.purge_expired(DateTime.utc_now(), opts)
       end
     end
 

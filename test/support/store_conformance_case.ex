@@ -35,6 +35,15 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
 
       # ── helpers ──────────────────────────────────────────────────────────
 
+      # Subjects come from the context so the whole battery can be run a second
+      # time with uuid subjects against uuid columns. That second pass is the
+      # structural guard for a bug that already happened: `Store.Ecto` bound
+      # `consent.subject` raw while its seven sibling call sites coerced, and a
+      # text-only battery could not see it. Any future missed coercion now fails
+      # here rather than in a host application's authorize leg.
+      defp subject_a(ctx), do: ctx[:subject_a] || "user-1"
+      defp subject_b(ctx), do: ctx[:subject_b] || "user-2"
+
       defp put_test_client(ctx, overrides \\ []) do
         client =
           struct(
@@ -60,7 +69,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
             %AuthorizationCode{
               code: raw,
               client_id: client.client_id,
-              subject: "user-1",
+              subject: subject_a(ctx),
               redirect_uri: "https://claude.ai/cb",
               scope: ["mcp"],
               resource: "https://app.example.com/mcp",
@@ -84,7 +93,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
               id: Store.generate_id(),
               token: raw,
               client_id: client.client_id,
-              subject: "user-1",
+              subject: subject_a(ctx),
               scope: ["mcp"],
               resource: "https://app.example.com/mcp",
               family_id: Store.generate_id(),
@@ -226,7 +235,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
 
           assert {:ok, redeemed} = ctx.adapter.take_authorization_code(raw, ctx.store_opts)
           assert redeemed.client_id == client.client_id
-          assert redeemed.subject == "user-1"
+          assert redeemed.subject == subject_a(ctx)
           assert redeemed.redirect_uri == "https://claude.ai/cb"
           assert redeemed.scope == ["mcp"]
           assert redeemed.resource == "https://app.example.com/mcp"
@@ -305,7 +314,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
 
           assert {:ok, loaded} = ctx.adapter.get_refresh_token(raw, ctx.store_opts)
           assert loaded.client_id == client.client_id
-          assert loaded.subject == "user-1"
+          assert loaded.subject == subject_a(ctx)
           assert loaded.scope == ["mcp"]
           assert loaded.family_id == record.family_id
         end
@@ -397,18 +406,18 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
           if Store.supports?(ctx.adapter, {:revoke_subject_tokens, 3}) do
             client = put_test_client(ctx)
             other_client = put_test_client(ctx)
-            {mine, _} = refresh_for(ctx, client, subject: "user-1")
-            {also_mine, _} = refresh_for(ctx, other_client, subject: "user-1")
-            {theirs, _} = refresh_for(ctx, client, subject: "user-2")
+            {mine, _} = refresh_for(ctx, client, subject: subject_a(ctx))
+            {also_mine, _} = refresh_for(ctx, other_client, subject: subject_a(ctx))
+            {theirs, _} = refresh_for(ctx, client, subject: subject_b(ctx))
 
             assert :ok =
-                     ctx.adapter.revoke_subject_tokens("user-1", client.client_id, ctx.store_opts)
+                     ctx.adapter.revoke_subject_tokens(subject_a(ctx), client.client_id, ctx.store_opts)
 
             assert {:error, :not_found} = ctx.adapter.get_refresh_token(mine, ctx.store_opts)
             assert {:ok, _} = ctx.adapter.get_refresh_token(also_mine, ctx.store_opts)
             assert {:ok, _} = ctx.adapter.get_refresh_token(theirs, ctx.store_opts)
 
-            assert :ok = ctx.adapter.revoke_subject_tokens("user-1", nil, ctx.store_opts)
+            assert :ok = ctx.adapter.revoke_subject_tokens(subject_a(ctx), nil, ctx.store_opts)
             assert {:error, :not_found} = ctx.adapter.get_refresh_token(also_mine, ctx.store_opts)
             assert {:ok, _} = ctx.adapter.get_refresh_token(theirs, ctx.store_opts)
           end
@@ -445,7 +454,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
           client = put_test_client(ctx)
 
           consent = %Consent{
-            subject: "user-1",
+            subject: subject_a(ctx),
             client_id: client.client_id,
             scope: ["mcp"],
             resource: "https://app.example.com/mcp"
@@ -454,7 +463,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
           assert :ok = ctx.adapter.put_consent(consent, ctx.store_opts)
 
           assert {:ok, loaded} =
-                   ctx.adapter.get_consent("user-1", client.client_id, ctx.store_opts)
+                   ctx.adapter.get_consent(subject_a(ctx), client.client_id, ctx.store_opts)
 
           assert loaded.scope == ["mcp"]
           refute is_nil(loaded.granted_at)
@@ -466,7 +475,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
                    )
 
           assert {:ok, updated} =
-                   ctx.adapter.get_consent("user-1", client.client_id, ctx.store_opts)
+                   ctx.adapter.get_consent(subject_a(ctx), client.client_id, ctx.store_opts)
 
           assert updated.scope == ["mcp", "mcp:admin"]
         end
@@ -477,15 +486,15 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
 
           :ok =
             ctx.adapter.put_consent(
-              %Consent{subject: "user-1", client_id: client.client_id, scope: ["mcp"]},
+              %Consent{subject: subject_a(ctx), client_id: client.client_id, scope: ["mcp"]},
               ctx.store_opts
             )
 
           assert {:error, :not_found} =
-                   ctx.adapter.get_consent("user-2", client.client_id, ctx.store_opts)
+                   ctx.adapter.get_consent(subject_b(ctx), client.client_id, ctx.store_opts)
 
           assert {:error, :not_found} =
-                   ctx.adapter.get_consent("user-1", other.client_id, ctx.store_opts)
+                   ctx.adapter.get_consent(subject_a(ctx), other.client_id, ctx.store_opts)
         end
 
         test "revoke_consent/3 is idempotent", ctx do
@@ -493,15 +502,15 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
 
           :ok =
             ctx.adapter.put_consent(
-              %Consent{subject: "user-1", client_id: client.client_id, scope: ["mcp"]},
+              %Consent{subject: subject_a(ctx), client_id: client.client_id, scope: ["mcp"]},
               ctx.store_opts
             )
 
-          assert :ok = ctx.adapter.revoke_consent("user-1", client.client_id, ctx.store_opts)
-          assert :ok = ctx.adapter.revoke_consent("user-1", client.client_id, ctx.store_opts)
+          assert :ok = ctx.adapter.revoke_consent(subject_a(ctx), client.client_id, ctx.store_opts)
+          assert :ok = ctx.adapter.revoke_consent(subject_a(ctx), client.client_id, ctx.store_opts)
 
           assert {:error, :not_found} =
-                   ctx.adapter.get_consent("user-1", client.client_id, ctx.store_opts)
+                   ctx.adapter.get_consent(subject_a(ctx), client.client_id, ctx.store_opts)
         end
       end
 
@@ -516,7 +525,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
             record = %AccessToken{
               jti: jti,
               client_id: client.client_id,
-              subject: "user-1",
+              subject: subject_a(ctx),
               scope: ["mcp"],
               resource: "https://app.example.com/mcp",
               expires_at: DateTime.add(DateTime.utc_now(), 900, :second)

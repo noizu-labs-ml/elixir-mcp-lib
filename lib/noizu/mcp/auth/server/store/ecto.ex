@@ -21,7 +21,9 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       * `:prefix` — Postgres schema qualifier, e.g. `"mcp"`
       * `:timeout` — query timeout, default 5s
       * `:subject_type` — `:text` (default) or `:uuid`
-      * `:track_access_tokens` — set for you by `Noizu.MCP.Auth.Server.config/1`
+      * `:track_access_tokens` — set for you by `Noizu.MCP.Auth.Server.config/1`.
+        `revoke_access_token/2` **raises** when it is absent rather than reporting
+        a revocation it did not perform; see that function.
 
     ## `:subject_type`
 
@@ -508,18 +510,48 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
     @impl Store
     def revoke_access_token(jti, opts) do
-      if tracking_access_tokens?(opts) do
-        sql = """
-        UPDATE #{table(opts, "access_tokens")} SET revoked_at = now()
-        WHERE jti_hash = $1 AND revoked_at IS NULL
-        """
+      # An ABSENT `:track_access_tokens` is not the same as an explicit `false`,
+      # and this is the one function where conflating them is dangerous.
+      # Revocation is a security operation: returning `:ok` while revoking
+      # nothing tells an admin clicking "sign out everywhere", or a purge job,
+      # that a credential was killed when it was not. A caller who has not said
+      # whether tracking is on has not made that decision, so we refuse to make
+      # it for them.
+      #
+      # Only here. `access_token_revoked?/2` still answers `false` when the key
+      # is absent — that is the documented "untracked is not revoked"
+      # degradation, it matches `Store.ETS`, and callers fail closed on it
+      # anyway. `purge_expired/2` likewise keeps its default.
+      case Keyword.fetch(opts, :track_access_tokens) do
+        :error ->
+          raise ArgumentError, """
+          Store.Ecto.revoke_access_token/2 requires an explicit `:track_access_tokens` \
+          option and none was given.
 
-        with {:ok, _} <- query(opts, sql, [Secret.token_hash(jti)]), do: :ok
-      else
-        # Nothing is tracked, so there is nothing to revoke. `RevokePlug`
-        # already gates on the same flag; this keeps a direct caller from
-        # hitting an undefined relation.
-        :ok
+          Revoking with tracking off is a no-op, so answering this call without \
+          knowing would report success while revoking nothing.
+
+          Pass the option explicitly:
+
+              Store.Ecto.revoke_access_token(jti, repo: MyApp.Repo, track_access_tokens: true)
+
+          Callers going through `Noizu.MCP.Auth.Server.config/1` already have it \
+          threaded from the server config and never reach this.\
+          """
+
+        {:ok, true} ->
+          sql = """
+          UPDATE #{table(opts, "access_tokens")} SET revoked_at = now()
+          WHERE jti_hash = $1 AND revoked_at IS NULL
+          """
+
+          with {:ok, _} <- query(opts, sql, [Secret.token_hash(jti)]), do: :ok
+
+        {:ok, _false} ->
+          # Deliberately off: nothing is tracked, so there is nothing to revoke.
+          # `RevokePlug` gates on the same flag; this keeps a direct caller from
+          # hitting an undefined relation.
+          :ok
       end
     end
 

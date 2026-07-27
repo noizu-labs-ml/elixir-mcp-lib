@@ -69,7 +69,11 @@ defmodule Noizu.MCP.Auth.Server.ConfigTest do
           opts(store: Store.ETS, upstream: Noizu.MCP.Auth.Server.Upstream.HostSession)
         )
 
-      assert {Store.ETS, []} = Config.store(config)
+      # Pinned to the exact opts, not "any opts list". `config/1` copies the
+      # server's `:track_access_tokens` into the store options so the two can
+      # never disagree; a looser match here would let that copying silently stop
+      # happening, which is the drift the copying exists to prevent.
+      assert {Store.ETS, [track_access_tokens: false]} = Config.store(config)
     end
   end
 

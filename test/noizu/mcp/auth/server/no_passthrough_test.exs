@@ -105,7 +105,12 @@ defmodule Noizu.MCP.Auth.Server.NoPassthroughTest do
 
     assert without.status == with_bearer.status
     # And when there is no session, a bearer does not create one.
-    assert headers == ["Bearer some-inbound-token"] or headers == []
+    # Pinned to the deterministic value. This was `x == [...] or x == []`, which
+    # cannot fail and so certified nothing while occupying the slot of a test
+    # that would have. The header IS on the conn — it is the same request — and
+    # the property that matters is that nothing is extracted from it, which the
+    # equal-status check above and the exhaustive drain test below establish.
+    assert headers == ["Bearer some-inbound-token"]
   end
 
   test "the token endpoint returns a token signed by THIS server for THIS audience", %{base: base} do
