@@ -200,7 +200,14 @@ defmodule Noizu.MCP.Inspector.SessionTest do
         assert_event(
           "call_result",
           fn %{data: data} -> data["call_id"] == call_id end,
-          3_000
+          # 3s was not enough headroom under full-suite load — killing the task
+          # and delivering `call_result` is fast, but the scheduler is contended
+          # while the uuid conformance battery runs its 20-way concurrency tests
+          # against Postgres. This is a timeout, not a race: `assert_event`
+          # blocks on the mailbox until the deadline, so a cancellation that
+          # genuinely never reports still fails, just later. Nothing is weakened
+          # by waiting longer for an event that either arrives or does not.
+          15_000
         )
 
       assert event.data["ok"] == false
