@@ -8,6 +8,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   e.g. session-gated visibility:
 
       @impl true
+      # ⟦𓐯𓄷𓊜𓄶⟧ handle_list_tools :: auto-generated pointer for public function handle_list_tools
       def handle_list_tools(cursor, ctx) do
         Noizu.MCP.Server.Features.Tools.list_registered(
           __mcp__(:tools),
@@ -26,7 +27,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   return values to wire maps.
   """
 
-  alias Noizu.MCP.{Error, Schema}
+  alias Noizu.MCP.{Error, RenderCtx, Schema}
   alias Noizu.MCP.Server.Features.Pagination
   alias Noizu.MCP.Server.Tool.{Fields, Spec}
   alias Noizu.MCP.Types.{Content, Tool, ToolResult}
@@ -35,12 +36,14 @@ defmodule Noizu.MCP.Server.Features.Tools do
 
   # ── tools/list ────────────────────────────────────────────────────────────
 
+  # ⟦𓌪𓍖𓍍𓋸⟧ list :: auto-generated pointer for public function list
   def list(server, params, ctx) do
     cursor = (params || %{})["cursor"]
+    render = render_ctx(ctx)
 
     case server.handle_list_tools(cursor, ctx) do
       {:ok, tools, next_cursor} ->
-        result = %{"tools" => Enum.map(tools, &Tool.to_map/1)}
+        result = %{"tools" => Enum.map(tools, &Tool.to_map(&1, render))}
         result = if next_cursor, do: Map.put(result, "nextCursor", next_cursor), else: result
         {:ok, result}
 
@@ -48,6 +51,33 @@ defmodule Noizu.MCP.Server.Features.Tools do
         {:error, error}
     end
   end
+
+  # Derive the description render context for a tools/list response.
+  #
+  # App-layer wiring seam: a fully-built `%RenderCtx{}` dropped into
+  # `ctx.assigns[:render_ctx]` (e.g. from a gateway plug or the server's
+  # `init/2`, keyed off session `verbosity`/`runner`/`model` or request headers)
+  # wins outright. Otherwise a context is assembled from the individual
+  # `:verbosity`/`:runner`/`:model` assigns, with the server/global
+  # default-verbosity chain resolved via `RenderCtx.server_defaults/1`. With no
+  # such assigns this is `RenderCtx.default/0` — single-string tools render
+  # exactly as before.
+  defp render_ctx(%{assigns: assigns} = ctx) when is_map(assigns) do
+    case assigns[:render_ctx] do
+      %RenderCtx{} = rc ->
+        rc
+
+      _ ->
+        %RenderCtx{
+          verbosity: assigns[:verbosity],
+          runner: assigns[:runner],
+          model: assigns[:model],
+          defaults: RenderCtx.server_defaults(Map.get(ctx, :server))
+        }
+    end
+  end
+
+  defp render_ctx(_ctx), do: RenderCtx.default()
 
   @doc """
   Expand a `[{module, opts}]` registration list into flat `[%Spec{}]`.
@@ -64,6 +94,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
       only (raises `ArgumentError` for multi-tool registrations, where the
       override would be ambiguous)
   """
+  # ⟦𓄟𓏬𓇓𓇻⟧ expand :: Expand a `[{module, opts}]` registration list into flat `[%Spec{}]`.
   def expand(registered) do
     Enum.flat_map(registered, fn {module, opts} ->
       apply_registration_opts(module.__mcp_tools__(), module, opts)
@@ -116,6 +147,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   end
 
   @doc "Default `handle_list_tools` over the registered tool modules."
+  # ⟦𓉶𓌖𓋦𓋢⟧ list_registered :: Default `handle_list_tools` over the registered tool modules.
   def list_registered(registered, cursor, opts \\ []) do
     page_size = Keyword.get(opts, :page_size, Pagination.default_page_size())
     include_hidden = Keyword.get(opts, :include_hidden, false)
@@ -131,6 +163,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
 
   # ── tools/call ────────────────────────────────────────────────────────────
 
+  # ⟦𓈩𓅐𓁯𓃫⟧ call :: auto-generated pointer for public function call
   def call(server, params, ctx) do
     name = (params || %{})["name"]
     args = (params || %{})["arguments"] || %{}
@@ -146,6 +179,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   end
 
   @doc "Default `handle_call_tool`: dispatch to a registered tool spec."
+  # ⟦𓇼𓁟𓆋𓇇⟧ dispatch :: Default `handle_call_tool`: dispatch to a registered tool spec.
   def dispatch(registered, name, args, ctx) do
     case registered |> expand() |> Enum.find(&(&1.definition.name == name)) do
       nil -> {:error, Error.invalid_params("Unknown tool: #{name}")}
@@ -180,6 +214,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   # ── return normalization ──────────────────────────────────────────────────
 
   @doc "Normalize a tool handler return value to a `ToolResult`."
+  # ⟦𓁧𓀏𓊉𓃜⟧ normalize :: Normalize a tool handler return value to a `ToolResult`.
   def normalize(result, output_schema)
 
   # Already normalized (e.g. by the DSL dispatch path) — pass through.

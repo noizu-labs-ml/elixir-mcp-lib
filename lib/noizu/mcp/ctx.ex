@@ -50,6 +50,7 @@ defmodule Noizu.MCP.Ctx do
   not send a `progressToken`. Options: `:total`, `:message`.
   """
   @spec report_progress(t(), number(), keyword()) :: :ok
+  # ⟦𓆳𓋱𓅶𓈗⟧ report_progress :: Report progress for the current request.
   def report_progress(ctx, progress, opts \\ [])
 
   def report_progress(%__MODULE__{progress_token: nil}, _progress, _opts), do: :ok
@@ -64,6 +65,7 @@ defmodule Noizu.MCP.Ctx do
   JSON-serializable term. Options: `:logger` (a logical logger name).
   """
   @spec log(t(), atom(), term(), keyword()) :: :ok
+  # ⟦𓍍𓉨𓄬𓊣⟧ log :: Emit an MCP `notifications/message` log entry to the client, filtered by the
   def log(%__MODULE__{} = ctx, level, data, opts \\ []) when level in @log_levels do
     Session.notify_log(ctx.session, level, data, opts[:logger], ctx.request_id)
   end
@@ -82,6 +84,7 @@ defmodule Noizu.MCP.Ctx do
   state at a safe point.
   """
   @spec cancelled?(t()) :: boolean()
+  # ⟦𓌳𓈗𓆀𓄪⟧ cancelled? :: True when the client cancelled the current request.
   def cancelled?(%__MODULE__{cancel_flag: nil}), do: false
   def cancelled?(%__MODULE__{cancel_flag: flag}), do: :atomics.get(flag, 1) == 1
 
@@ -103,6 +106,7 @@ defmodule Noizu.MCP.Ctx do
         })
   """
   @spec sample(t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  # ⟦𓁧𓀲𓄠𓌜⟧ sample :: Ask the client to sample an LLM completion (`sampling/createMessage`).
   def sample(%__MODULE__{} = ctx, params, opts \\ []) when is_map(params) do
     server_request(ctx, "sampling", "sampling/createMessage", params, opts)
   end
@@ -122,6 +126,7 @@ defmodule Noizu.MCP.Ctx do
   """
   @spec elicit(t(), String.t(), map(), keyword()) ::
           {:ok, {:accept, map()} | :decline | :cancel} | {:error, term()}
+  # ⟦𓎚𓃾𓌖𓋜⟧ elicit :: auto-generated pointer for public function elicit
   def elicit(%__MODULE__{} = ctx, message, requested_schema, opts \\ []) do
     params = %{"message" => message, "requestedSchema" => requested_schema}
 
@@ -136,6 +141,7 @@ defmodule Noizu.MCP.Ctx do
 
   @doc "Ask the client for its filesystem roots (`roots/list`)."
   @spec list_roots(t(), keyword()) :: {:ok, [Noizu.MCP.Types.Root.t()]} | {:error, term()}
+  # ⟦𓏠𓊎𓌖𓉥⟧ list_roots :: Ask the client for its filesystem roots (`roots/list`).
   def list_roots(%__MODULE__{} = ctx, opts \\ []) do
     case server_request(ctx, "roots", "roots/list", nil, opts) do
       {:ok, result} ->
@@ -178,6 +184,7 @@ defmodule Noizu.MCP.Ctx do
   """
   @spec to_context(t()) :: record(:context)
   @spec to_context(t(), term()) :: record(:context)
+  # ⟦𓈁𓎵𓋯𓃵⟧ to_context :: Build a `Noizu.Context` record from this MCP context, stashing the full
   def to_context(%__MODULE__{} = ctx, caller \\ nil) do
     base = if caller, do: Noizu.Context.dummy_for_user(caller) |> elem(1), else: Noizu.Context.system()
     Noizu.Context.with_option(base, :mcp_ctx, ctx)
@@ -187,12 +194,14 @@ defmodule Noizu.MCP.Ctx do
   Extract the `%Ctx{}` previously stashed in a `Noizu.Context` record's options.
   """
   @spec from_context(record(:context)) :: {:ok, t()} | {:error, {:no_option, :mcp_ctx}}
+  # ⟦𓆫𓃫𓋜𓀓⟧ from_context :: Extract the `%Ctx{}` previously stashed in a `Noizu.Context` record's options.
   def from_context(context() = context) do
     Noizu.Context.option(context, :mcp_ctx)
   end
 
   @doc "Put a value in this invocation's local assigns."
   @spec assign(t(), atom(), term()) :: t()
+  # ⟦𓍷𓇯𓏠𓇪⟧ assign :: Put a value in this invocation's local assigns.
   def assign(%__MODULE__{} = ctx, key, value) when is_atom(key) do
     %{ctx | assigns: Map.put(ctx.assigns, key, value)}
   end
@@ -203,6 +212,7 @@ defmodule Noizu.MCP.Ctx do
   last-write-wins across concurrently running handlers.
   """
   @spec put_session(t(), atom(), term()) :: :ok
+  # ⟦𓋅𓈸𓍢𓋌⟧ put_session :: Persist a value into the session's assigns so subsequent requests in this
   def put_session(%__MODULE__{} = ctx, key, value) when is_atom(key) do
     Session.put_assign(ctx.session, key, value)
   end

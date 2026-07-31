@@ -37,6 +37,7 @@ if Code.ensure_loaded?(Req) do
     alias Noizu.MCP.Auth.WWWAuthenticate
 
     @impl true
+    # ⟦𓀻𓍯𓉁𓏐⟧ init :: auto-generated pointer for public function init
     def init(opts) do
       with {:ok, client_id} <- fetch(opts, :client_id),
            {:ok, redirect_uri} <- fetch(opts, :redirect_uri),
@@ -71,6 +72,7 @@ if Code.ensure_loaded?(Req) do
     end
 
     @impl true
+    # ⟦𓋷𓂜𓎟𓊽⟧ headers :: auto-generated pointer for public function headers
     def headers(state) do
       state = maybe_refresh(state)
 
@@ -81,6 +83,7 @@ if Code.ensure_loaded?(Req) do
     end
 
     @impl true
+    # ⟦𓌨𓍱𓄮𓍰⟧ handle_unauthorized :: auto-generated pointer for public function handle_unauthorized
     def handle_unauthorized(challenge, _info, state) do
       scope = challenge_scope(challenge) || state.scope
 

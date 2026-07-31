@@ -11,7 +11,19 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
   alias Noizu.MCP.Fixtures
   alias Noizu.MCP.Transport.StreamableHTTP
 
-  @plug_opts StreamableHTTP.Plug.init(server: Fixtures.Server)
+  # `sse_commit_after` is generous here on purpose. The plug waits this long for
+  # a handler's final response and then *deliberately* commits to SSE, so a slow
+  # call reaches the client promptly with keepalives. At the 200ms default, a
+  # busy machine — the full suite runs 20 cases wide alongside Bandit listeners
+  # and Postgres pools — can starve a microsecond-fast `tools/list` past the
+  # window, the plug correctly upgrades, and a test asserting the JSON fast path
+  # fails for reasons that have nothing to do with the transport.
+  #
+  # The property under test is "a handler that answers promptly answers as
+  # JSON". Widening the window keeps that property and removes its dependency on
+  # the machine being idle. The timer-driven upgrade is pinned deliberately, with
+  # its own explicit window, in "commits to SSE when the handler is slow" below.
+  @plug_opts StreamableHTTP.Plug.init(server: Fixtures.Server, sse_commit_after: 5_000)
 
   setup_all do
     Noizu.MCP.Test.ensure_server_started(Fixtures.Server)
@@ -99,6 +111,33 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
       assert get_resp_header(conn, "content-type") |> hd() =~ "application/json"
       assert %{"result" => %{"tools" => tools}} = Jason.decode!(conn.resp_body)
       assert is_list(tools)
+    end
+
+    test "commits to SSE when the handler is slow, with no message to prompt it" do
+      # The timer branch, pinned. Until now nothing exercised it deliberately —
+      # it was reached only by accident, when load starved a fast handler past
+      # the window, which is exactly why that presented as a flake. Here the
+      # window is explicit and tiny and the tool genuinely outlives it, so the
+      # upgrade is caused by the timer and by nothing else: `slow` emits no
+      # progress, so there is no non-final message to trigger the other path.
+      opts = StreamableHTTP.Plug.init(server: Fixtures.Server, sse_commit_after: 50)
+      {session_id, _} = initialize()
+
+      conn =
+        conn(:post, "/", Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 7,
+          "method" => "tools/call",
+          "params" => %{"name" => "slow", "arguments" => %{"ms" => 400}}
+        }))
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("accept", "application/json, text/event-stream")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> StreamableHTTP.Plug.call(opts)
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") |> hd() =~ "text/event-stream"
     end
 
     test "request that emits progress upgrades to SSE" do

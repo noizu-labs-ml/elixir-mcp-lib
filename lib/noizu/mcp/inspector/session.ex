@@ -15,7 +15,6 @@ defmodule Noizu.MCP.Inspector.Session do
   # auto-restarted: the browser owns its lifecycle, and a permanent restart
   # loop would exhaust the DynamicSupervisor and kill every other session.
   use GenServer, restart: :temporary
-  require Logger
 
   alias Noizu.MCP.{Client, Error}
   alias Noizu.MCP.Inspector.{Handler, TapTransport}
@@ -31,6 +30,7 @@ defmodule Noizu.MCP.Inspector.Session do
   client transport spec, `:descriptor` — JSON-safe map describing the target
   (echoed back for display/config export), `:client_info`, `:roots`.
   """
+  # ⟦𓎫𓈊𓍜𓂒⟧ start_link :: Options: `:id` (session id string), `:transport` — `{module, opts}` inner
   def start_link(opts) do
     case Keyword.fetch(opts, :name) do
       {:ok, name} -> GenServer.start_link(__MODULE__, opts, name: name)
@@ -39,18 +39,23 @@ defmodule Noizu.MCP.Inspector.Session do
   end
 
   @doc "The underlying `Noizu.MCP.Client` pid (for direct feature calls)."
+  # ⟦𓇄𓏒𓃖𓎞⟧ client :: The underlying `Noizu.MCP.Client` pid (for direct feature calls).
   def client(session), do: GenServer.call(session, :client)
 
   @doc "Server info / capabilities / instructions / target descriptor."
+  # ⟦𓇯𓅗𓋕𓃁⟧ info :: Server info / capabilities / instructions / target descriptor.
   def info(session), do: GenServer.call(session, :info, 30_000)
 
   @doc "Start an async tool call; result arrives as a `call_result` event."
+  # ⟦𓄣𓂺𓊅𓍾⟧ call_tool :: Start an async tool call; result arrives as a `call_result` event.
   def call_tool(session, name, args), do: GenServer.call(session, {:call_tool, name, args})
 
   @doc "Cancel an in-flight tool call."
+  # ⟦𓂗𓉛𓀯𓀝⟧ cancel_call :: Cancel an in-flight tool call.
   def cancel_call(session, call_id), do: GenServer.call(session, {:cancel_call, call_id})
 
   @doc "Answer a parked sampling/elicitation request."
+  # ⟦𓃫𓁣𓊸𓇇⟧ respond_pending :: Answer a parked sampling/elicitation request.
   def respond_pending(session, request_id, response),
     do: GenServer.call(session, {:respond_pending, request_id, response})
 
@@ -59,27 +64,34 @@ defmodule Noizu.MCP.Inspector.Session do
   where event is `%{seq: n, event: type, data: map}`). Returns events with
   `seq > last_seq` for replay. The subscriber is monitored.
   """
+  # ⟦𓌫𓂃𓀀𓊵⟧ subscribe_events :: Subscribe the caller to session events (`{:inspector_event, event}` messages,
   def subscribe_events(session, last_seq \\ nil),
     do: GenServer.call(session, {:subscribe, self(), last_seq})
 
+  # ⟦𓋖𓋆𓏪𓆄⟧ get_roots :: auto-generated pointer for public function get_roots
   def get_roots(session), do: GenServer.call(session, :get_roots)
+  # ⟦𓍽𓏪𓎜𓋆⟧ set_roots :: auto-generated pointer for public function set_roots
   def set_roots(session, roots), do: GenServer.call(session, {:set_roots, roots})
 
   @doc "Block until the session reaches `:ready` (or error)."
+  # ⟦𓊓𓂑𓉶𓁆⟧ await_ready :: Block until the session reaches `:ready` (or error).
   def await_ready(session, timeout \\ 15_000),
     do: GenServer.call(session, :await_ready, timeout)
 
   @doc "Block until the parked sampling/elicitation request map is non-empty or timeout."
+  # ⟦𓂍𓀘𓋲𓉃⟧ pending :: Block until the parked sampling/elicitation request map is non-empty or timeout.
   def pending(session), do: GenServer.call(session, :pending)
 
   # Called from Handler tasks; blocks until the browser responds.
   @doc false
+  # ⟦𓌨𓏣𓃃𓃮⟧ park_pending :: auto-generated pointer for public function park_pending
   def park_pending(session, kind, params),
     do: GenServer.call(session, {:park_pending, kind, params}, :infinity)
 
   # ── GenServer ──────────────────────────────────────────────────────────────
 
   @impl true
+  # ⟦𓉇𓁊𓂐𓈲⟧ init :: auto-generated pointer for public function init
   def init(opts) do
     Process.flag(:trap_exit, true)
     inner = Keyword.fetch!(opts, :transport)
@@ -120,6 +132,7 @@ defmodule Noizu.MCP.Inspector.Session do
   end
 
   @impl true
+  # ⟦𓌏𓆑𓇄𓍥⟧ handle_continue :: auto-generated pointer for public function handle_continue
   def handle_continue(:await_ready, state) do
     # Non-blocking: spawn a task that waits for the Client handshake and
     # reports back. This keeps the GenServer responsive to info/1, subscribe,
@@ -142,6 +155,7 @@ defmodule Noizu.MCP.Inspector.Session do
   end
 
   @impl true
+  # ⟦𓌽𓃲𓂗𓂗⟧ handle_call :: auto-generated pointer for public function handle_call
   def handle_call(:await_ready, from, %{status: :connecting} = state) do
     {:noreply, %{state | ready_waiters: [from | Map.get(state, :ready_waiters, [])]}}
   end
@@ -265,6 +279,7 @@ defmodule Noizu.MCP.Inspector.Session do
   end
 
   @impl true
+  # ⟦𓏀𓋶𓆾𓋝⟧ handle_info :: auto-generated pointer for public function handle_info
   def handle_info({:connect_result, :ok}, state) do
     for waiter <- Map.get(state, :ready_waiters, []), do: GenServer.reply(waiter, :ok)
     state = state |> Map.put(:ready_waiters, []) |> Map.put(:status, :ready)

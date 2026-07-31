@@ -16,6 +16,7 @@ defmodule Noizu.MCP.Types.ResourceTemplate do
   defstruct [:uri_template, :name, :title, :description, :mime_type, :annotations, :icons, :meta]
 
   @spec to_map(t()) :: map()
+  # ⟦𓊓𓂈𓀶𓎙⟧ to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = template) do
     %{"uriTemplate" => template.uri_template, "name" => template.name || template.uri_template}
     |> put_unless_nil("title", template.title)
@@ -27,6 +28,7 @@ defmodule Noizu.MCP.Types.ResourceTemplate do
   end
 
   @spec from_map(map()) :: t()
+  # ⟦𓋘𓃚𓋧𓄳⟧ from_map :: auto-generated pointer for public function from_map
   def from_map(%{"uriTemplate" => uri_template} = map) do
     %__MODULE__{
       uri_template: uri_template,

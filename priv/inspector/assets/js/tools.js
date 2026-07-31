@@ -12,6 +12,7 @@ const inflight = new Map(); // call_id -> {flightArea, resultArea, progressBar, 
 // session() is a function returning the current session id
 function sid() { return ctx?.session(); }
 
+// ⟦𓏫𓏀𓂕𓆜⟧ init :: auto-generated pointer for public function init
 export function init(context) {
   ctx = context;
   const panel = document.getElementById("tab-tools");

@@ -1,12 +1,94 @@
 # Authentication (OAuth 2.1)
 
 MCP's authorization model (HTTP transports only): the MCP server is an OAuth
-2.1 **resource server**; tokens are issued by an external authorization
-server discovered via RFC 9728 protected-resource metadata. `noizu_mcp`
-implements both halves — enforcement on the server, the full flow on the
-client. It never implements an authorization server.
+2.1 **resource server**; tokens are issued by an authorization server
+discovered via RFC 9728 protected-resource metadata. `noizu_mcp` implements
+both halves of that — enforcement on the server, the full flow on the client.
+
+> #### The authorization server {: .info}
+>
+> Until 0.1.5 this guide said the library never implements an authorization
+> server. As of 0.1.5 it does: `Noizu.MCP.Auth.Server` is an OAuth 2.1 **AS
+> facade**, because the alternative was worse. Claude Desktop and claude.ai
+> accept OAuth+DCR (RFC 7591), OAuth+CIMD, or a pre-registered `client_id` — and
+> Authentik, the IdP behind these apps, has not supported DCR since the request
+> was filed in 2024. The facade delegates *end-user authentication* to the host's
+> existing IdP login and owns only the OAuth client, code and token semantics.
+>
+> See [Authorization Server](authorization_server.md) to mount it, and
+> [MCP client compatibility](mcp_client_compatibility.md) for what each real
+> client needs. This guide stays about the **resource server** half — enforcing
+> tokens on your MCP mounts — which is what you need whether the tokens come from
+> the facade or from an IdP that can already do the job.
 
 ## Server side: enforcing tokens
+
+The quickest correct mount uses the built-in audience-checking verifier:
+
+```elixir
+resource = "https://app.example.com/mcp/learning"
+
+forward "/mcp/learning", Noizu.MCP.Transport.StreamableHTTP.Plug,
+  server: MyApp.Learning.MCP,
+  origins: :mcp_clients,
+  cors: true,
+  auth: [
+    verifier: {Noizu.MCP.Auth.JWTVerifier, [
+      resource: resource,           # `aud` must match this exactly
+      issuer: "https://app.example.com",
+      secret: {MyApp.MCPAuth, :secret},
+      algorithms: ["HS256"],        # from config, never from the token header
+      scopes: ["mcp"]
+    ]},
+    resource_metadata: :derive,
+    scope: "mcp"
+  ]
+```
+
+`resource` is the whole point: a token minted for `https://app.example.com/mcp`
+is **rejected** here, and a token minted here is rejected at `/mcp`. Audience
+binding per mount is what keeps one mount from acting as a confused deputy for
+its neighbour, so give every mount its own canonical URI and never share one.
+
+`Noizu.MCP.Auth.Resource` is the comparison used: byte-exact, normalizing only
+scheme/host case and the default port. `…/mcp` and `…/mcp/` are different
+resources, deliberately.
+
+### Accepting API keys alongside OAuth tokens
+
+Headless callers cannot run a browser flow. `Noizu.MCP.Auth.ChainVerifier` tries
+verifiers in order and takes the first success, so one mount serves both:
+
+```elixir
+auth: [
+  verifier: {Noizu.MCP.Auth.ChainVerifier, [
+    verifiers: [
+      {Noizu.MCP.Auth.JWTVerifier, [resource: resource, secret: {MyApp.MCPAuth, :secret}]},
+      {Noizu.MCP.Auth.ApiKeyVerifier, [
+        resource: resource,
+        prefix: "mcp_live_",
+        validator: {MyApp.MCPKeys, :verify}   # your table, your hash comparison
+      ]}
+    ]
+  ]},
+  resource_metadata: :derive
+]
+```
+
+Order the chain cheapest-first. When every link rejects, the client gets one
+uniform `invalid_token` — a chain that reported *which* link rejected would tell
+an attacker their string parsed as a JWT.
+
+### Browser clients: CORS is not optional
+
+claude.ai drives MCP from a browser context. Without `cors: true` the preflight
+fails; and without the `Access-Control-Expose-Headers` it sets, the browser
+cannot read `WWW-Authenticate` **at all**, so the client never learns where the
+authorization server is and OAuth never starts. This failure is silent on the
+server. `origins: :mcp_clients` allows the known browser MCP hosts plus
+localhost and keeps the DNS-rebinding guard intact.
+
+### A custom verifier
 
 Implement `Noizu.MCP.Auth.TokenVerifier` and hand it to the plug:
 
@@ -39,8 +121,11 @@ forward "/mcp", Noizu.MCP.Transport.StreamableHTTP.Plug,
 
 The plug then:
 
-- rejects missing/invalid tokens with **401** + a `WWW-Authenticate: Bearer`
-  challenge carrying `resource_metadata` (how clients bootstrap discovery)
+- rejects a request with **no** credential with **401** + a
+  `WWW-Authenticate: Bearer` challenge carrying `resource_metadata` (how clients
+  bootstrap discovery) and, when configured, `scope`. Per RFC 6750 §3.1 that
+  challenge carries **no** `error` — nothing has failed yet
+- rejects an invalid token with **401** and `error="invalid_token"`
 - rejects `{:error, :insufficient_scope, %{scope: ...}}` with **403** and a
   `scope` hint (how clients know to step up)
 - on success exposes the claims to every handler as
@@ -60,6 +145,36 @@ forward "/.well-known/oauth-protected-resource", Noizu.MCP.Auth.ProtectedResourc
   authorization_servers: ["https://auth.example.com"],
   scopes_supported: ["mcp"]
 ```
+
+With more than one mount, one forward answers them all — each path-inserted
+suffix with its **own** `resource`, because a client that discovers the wrong
+`resource` asks for a token with the wrong audience and is refused by the mount
+it was trying to reach:
+
+```elixir
+forward "/.well-known/oauth-protected-resource", Noizu.MCP.Auth.ProtectedResourceMetadataPlug,
+  authorization_servers: ["https://app.example.com"],   # exactly one: Claude reads [0]
+  scopes_supported: ["mcp"],
+  bearer_methods_supported: ["header"],
+  default_resource: "/mcp",
+  resources: %{
+    "/mcp" => [resource: "https://app.example.com/mcp"],
+    "/mcp/learning" => [resource: "https://app.example.com/mcp/learning"],
+    "/mcp/workspace" => [resource: "https://app.example.com/mcp/workspace"]
+  }
+```
+
+Each `resource` must **byte-match** the URL the user typed into their client. An
+unknown suffix answers 404 rather than some other mount's document.
+
+> #### Resolve these at runtime {: .warning}
+>
+> `forward` evaluates its options at **compile time**. Reading `System.get_env`
+> there bakes build-time values into the release, and a prod `resource` that
+> disagrees with the PRM document makes every client refuse to authenticate.
+> Put the values in `config/runtime.exs` and reach them through the
+> `{module, function}` / `{module, function, args}` forms of
+> `auth[:resource_metadata]`, or `:derive`.
 
 ## Client side
 

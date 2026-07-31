@@ -1,0 +1,278 @@
+databaseChangeLog:
+  # ---------------------------------------------------------------------------
+  # noizu_mcp — OAuth 2.1 authorization-server tables (Noizu.MCP.Auth.Server)
+  #
+  # TEMPLATE. Copy this file into your own changelog directory, renumber the
+  # changeSet ids to match your convention, set `author:` to your app, and add
+  # the include to your master changelog. It is shipped rather than applied
+  # because the library owns no database.
+  #
+  # Two things to decide before you apply it:
+  #
+  #   1. `subject` is plain `text`, not a foreign key. The library cannot assume
+  #      your app has a `users` table, or that its primary key is a uuid. If it
+  #      does, uncomment the `subject_fk` changeSets at the bottom — they add the
+  #      FK after the fact, which is also the right order if you are adding this
+  #      to an app that already has data.
+  #   2. `mcp_oauth_access_tokens` is only needed with `track_access_tokens: true`.
+  #      Without it an access token is valid until it expires, which is why the
+  #      TTL is capped at 15 minutes. With it you get immediate revocation at the
+  #      cost of a store read per request.
+  #
+  # Every hash column holds SHA-256 hex (64 chars) except `clients.secret_hash`,
+  # which holds a PBKDF2 string. Nothing here holds a plaintext credential.
+  # ---------------------------------------------------------------------------
+
+  - changeSet:
+      id: noizu-mcp-oauth-clients
+      author: noizu_mcp
+      comment: >-
+        Registered, dynamically-registered (RFC 7591) and CIMD clients.
+        `client_id` is text rather than uuid because a CIMD client_id is an https
+        URL that the client itself chose.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_oauth_clients (
+                client_id text PRIMARY KEY,
+                client_id_kind varchar(20) NOT NULL DEFAULT 'registered'
+                  CHECK (client_id_kind IN ('registered','cimd','preconfigured')),
+                client_name text,
+                -- PBKDF2 string, or NULL for a public client (auth method 'none').
+                secret_hash text,
+                token_endpoint_auth_method varchar(32) NOT NULL DEFAULT 'none'
+                  CHECK (token_endpoint_auth_method IN
+                    ('none','client_secret_post','client_secret_basic')),
+                redirect_uris jsonb NOT NULL DEFAULT '[]'::jsonb,
+                grant_types jsonb NOT NULL DEFAULT '["authorization_code","refresh_token"]'::jsonb,
+                response_types jsonb NOT NULL DEFAULT '["code"]'::jsonb,
+                scope text,
+                -- Optional pointer at whatever the host already knows about this
+                -- caller (an API-key row, an internal app record). Never an
+                -- upstream IdP token: the AS mints its own, it never passes one on.
+                upstream_client_ref text,
+                logo_uri text,
+                client_uri text,
+                policy_uri text,
+                tos_uri text,
+                software_id text,
+                software_version text,
+                -- CIMD bookkeeping: when the document was fetched, its ETag, and
+                -- when the cached copy goes stale.
+                cimd_fetched_at timestamptz,
+                cimd_etag text,
+                cimd_expires_at timestamptz,
+                metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                disabled_at timestamptz,
+                inserted_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_oauth_clients_kind
+                ON mcp_oauth_clients (client_id_kind) WHERE disabled_at IS NULL;
+              CREATE INDEX idx_mcp_oauth_clients_cimd_expiry
+                ON mcp_oauth_clients (cimd_expires_at)
+                WHERE client_id_kind = 'cimd';
+      rollback:
+        - dropTable:
+            tableName: mcp_oauth_clients
+
+  - changeSet:
+      id: noizu-mcp-oauth-login-states
+      author: noizu_mcp
+      comment: >-
+        State carried across the upstream IdP round trip: the pending
+        authorization request, the CSRF token for the consent form, and the
+        consent decision. Keyed by SHA-256 of the state value, so a leaked row
+        does not yield a usable state parameter. Short-lived by construction.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_oauth_login_states (
+                state_hash char(64) PRIMARY KEY,
+                payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+                expires_at timestamptz NOT NULL,
+                inserted_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_oauth_login_states_expiry
+                ON mcp_oauth_login_states (expires_at);
+      rollback:
+        - dropTable:
+            tableName: mcp_oauth_login_states
+
+  - changeSet:
+      id: noizu-mcp-oauth-authorization-codes
+      author: noizu_mcp
+      comment: >-
+        Single-use authorization codes. `used_at` is what makes redemption
+        atomic: redemption is `UPDATE ... WHERE used_at IS NULL RETURNING *`, and
+        a second redemption finds the row already marked, which is a replay and
+        revokes `refresh_family_id` in full. The row is therefore kept after use
+        (until purged) rather than deleted. PKCE is S256-only, enforced by the
+        CHECK as well as in code.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_oauth_authorization_codes (
+                code_hash char(64) PRIMARY KEY,
+                client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+                subject text NOT NULL,
+                redirect_uri text NOT NULL,
+                scope text NOT NULL DEFAULT '',
+                resource text,
+                code_challenge text NOT NULL,
+                code_challenge_method varchar(10) NOT NULL DEFAULT 'S256'
+                  CHECK (code_challenge_method = 'S256'),
+                nonce text,
+                refresh_family_id uuid,
+                upstream_ref jsonb,
+                expires_at timestamptz NOT NULL,
+                used_at timestamptz,
+                inserted_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_oauth_codes_expiry
+                ON mcp_oauth_authorization_codes (expires_at);
+              CREATE INDEX idx_mcp_oauth_codes_family
+                ON mcp_oauth_authorization_codes (refresh_family_id)
+                WHERE refresh_family_id IS NOT NULL;
+      rollback:
+        - dropTable:
+            tableName: mcp_oauth_authorization_codes
+
+  - changeSet:
+      id: noizu-mcp-oauth-refresh-tokens
+      author: noizu_mcp
+      comment: >-
+        Rotating refresh tokens with family reuse-detection. `rotated_to` is a
+        self-FK forming the rotation chain; `family_id` groups the chain so a
+        replay can revoke all of it. `family_expires_at` is an absolute ceiling
+        rotation cannot extend.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_oauth_refresh_tokens (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                token_hash char(64) NOT NULL UNIQUE,
+                client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+                subject text NOT NULL,
+                scope text NOT NULL DEFAULT '',
+                resource text,
+                family_id uuid NOT NULL,
+                rotated_to uuid REFERENCES mcp_oauth_refresh_tokens(id) ON DELETE SET NULL,
+                rotated_at timestamptz,
+                revoked_at timestamptz,
+                expires_at timestamptz NOT NULL,
+                family_expires_at timestamptz,
+                inserted_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_oauth_refresh_family
+                ON mcp_oauth_refresh_tokens (family_id);
+              CREATE INDEX idx_mcp_oauth_refresh_subject
+                ON mcp_oauth_refresh_tokens (subject, client_id)
+                WHERE revoked_at IS NULL;
+              CREATE INDEX idx_mcp_oauth_refresh_expiry
+                ON mcp_oauth_refresh_tokens (expires_at);
+      rollback:
+        - dropTable:
+            tableName: mcp_oauth_refresh_tokens
+
+  - changeSet:
+      id: noizu-mcp-oauth-consents
+      author: noizu_mcp
+      comment: >-
+        One row per subject/client pair recording the scope granted so far. A
+        request for a scope outside it re-prompts — the OAuth confused-deputy
+        requirement for dynamically-registered clients.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_oauth_consents (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                subject text NOT NULL,
+                client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+                scope text NOT NULL DEFAULT '',
+                resource text,
+                granted_at timestamptz NOT NULL DEFAULT now(),
+                expires_at timestamptz,
+                CONSTRAINT uq_mcp_oauth_consents_subject_client UNIQUE (subject, client_id)
+              );
+      rollback:
+        - dropTable:
+            tableName: mcp_oauth_consents
+
+  - changeSet:
+      id: noizu-mcp-oauth-access-tokens
+      author: noizu_mcp
+      comment: >-
+        OPTIONAL — only needed with `track_access_tokens: true`. Drop this
+        changeSet if you do not want a store read on every MCP request.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_oauth_access_tokens (
+                jti_hash char(64) PRIMARY KEY,
+                client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+                subject text NOT NULL,
+                scope text NOT NULL DEFAULT '',
+                resource text,
+                family_id uuid,
+                expires_at timestamptz NOT NULL,
+                revoked_at timestamptz,
+                inserted_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_oauth_access_tokens_expiry
+                ON mcp_oauth_access_tokens (expires_at);
+              CREATE INDEX idx_mcp_oauth_access_tokens_family
+                ON mcp_oauth_access_tokens (family_id) WHERE family_id IS NOT NULL;
+      rollback:
+        - dropTable:
+            tableName: mcp_oauth_access_tokens
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL — uncomment if your app has a `users(id uuid)` table and you want
+  # the database to cascade a user deletion through the OAuth tables. Note the
+  # type change: `subject` becomes uuid, so every subject your upstream callback
+  # returns must be a uuid.
+  # ---------------------------------------------------------------------------
+  #
+  # - changeSet:
+  #     id: noizu-mcp-oauth-subject-fk
+  #     author: noizu_mcp
+  #     comment: FK subject -> users(id). App-specific; see the note above.
+  #     changes:
+  #       - sql:
+  #           splitStatements: false
+  #           sql: |
+  #             ALTER TABLE mcp_oauth_authorization_codes
+  #               ALTER COLUMN subject TYPE uuid USING subject::uuid,
+  #               ADD CONSTRAINT fk_mcp_oauth_codes_subject
+  #                 FOREIGN KEY (subject) REFERENCES users(id) ON DELETE CASCADE;
+  #             ALTER TABLE mcp_oauth_refresh_tokens
+  #               ALTER COLUMN subject TYPE uuid USING subject::uuid,
+  #               ADD CONSTRAINT fk_mcp_oauth_refresh_subject
+  #                 FOREIGN KEY (subject) REFERENCES users(id) ON DELETE CASCADE;
+  #             ALTER TABLE mcp_oauth_consents
+  #               ALTER COLUMN subject TYPE uuid USING subject::uuid,
+  #               ADD CONSTRAINT fk_mcp_oauth_consents_subject
+  #                 FOREIGN KEY (subject) REFERENCES users(id) ON DELETE CASCADE;
+  #             ALTER TABLE mcp_oauth_access_tokens
+  #               ALTER COLUMN subject TYPE uuid USING subject::uuid,
+  #               ADD CONSTRAINT fk_mcp_oauth_access_tokens_subject
+  #                 FOREIGN KEY (subject) REFERENCES users(id) ON DELETE CASCADE;
+  #     rollback:
+  #       - sql:
+  #           sql: |
+  #             ALTER TABLE mcp_oauth_authorization_codes
+  #               DROP CONSTRAINT fk_mcp_oauth_codes_subject;
+  #             ALTER TABLE mcp_oauth_refresh_tokens
+  #               DROP CONSTRAINT fk_mcp_oauth_refresh_subject;
+  #             ALTER TABLE mcp_oauth_consents
+  #               DROP CONSTRAINT fk_mcp_oauth_consents_subject;
+  #             ALTER TABLE mcp_oauth_access_tokens
+  #               DROP CONSTRAINT fk_mcp_oauth_access_tokens_subject;

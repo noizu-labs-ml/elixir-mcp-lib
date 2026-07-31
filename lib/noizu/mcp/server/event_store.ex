@@ -16,11 +16,13 @@ defmodule Noizu.MCP.Server.EventStore do
 
   # ── API ───────────────────────────────────────────────────────────────────
 
+  # ⟦𓏱𓍂𓇊𓄖⟧ child_spec :: auto-generated pointer for public function child_spec
   def child_spec(opts) do
     server = Keyword.fetch!(opts, :server)
     %{id: __MODULE__, start: {__MODULE__, :start_link, [server]}}
   end
 
+  # ⟦𓅑𓈟𓇝𓐕⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(server) do
     GenServer.start_link(__MODULE__, server, name: name(server))
   end
@@ -30,12 +32,14 @@ defmodule Noizu.MCP.Server.EventStore do
 
   @doc "Append a message; returns its event id."
   @spec append(module(), String.t(), binary()) :: event_id()
+  # ⟦𓇨𓌋𓅾𓁨⟧ append :: Append a message; returns its event id.
   def append(server, session_id, binary) do
     GenServer.call(name(server), {:append, session_id, binary})
   end
 
   @doc "All buffered `{event_id, binary}` for a session after `last_event_id` (nil = all)."
   @spec replay_after(module(), String.t(), event_id() | nil) :: [{event_id(), binary()}]
+  # ⟦𓆥𓍎𓍑𓅶⟧ replay_after :: All buffered `{event_id, binary}` for a session after `last_event_id` (nil = all).
   def replay_after(server, session_id, last_event_id) do
     last_seq = parse_seq(last_event_id)
 
@@ -49,14 +53,17 @@ defmodule Noizu.MCP.Server.EventStore do
 
   @doc "Drop a session's buffered events (e.g. on session termination)."
   @spec drop(module(), String.t()) :: :ok
+  # ⟦𓏓𓁡𓃪𓂣⟧ drop :: Drop a session's buffered events (e.g.
   def drop(server, session_id) do
     GenServer.call(name(server), {:drop, session_id})
   end
 
   @doc false
+  # ⟦𓇨𓎼𓋯𓈪⟧ encode_id :: auto-generated pointer for public function encode_id
   def encode_id(seq), do: "s:#{seq}"
 
   @doc false
+  # ⟦𓃲𓈢𓉚𓈨⟧ parse_seq :: auto-generated pointer for public function parse_seq
   def parse_seq(nil), do: nil
 
   def parse_seq("s:" <> seq) do
@@ -71,12 +78,14 @@ defmodule Noizu.MCP.Server.EventStore do
   # ── GenServer ─────────────────────────────────────────────────────────────
 
   @impl true
+  # ⟦𓏘𓁍𓁃𓌕⟧ init :: auto-generated pointer for public function init
   def init(server) do
     table = :ets.new(table(server), [:bag, :named_table, :protected, read_concurrency: true])
     {:ok, %{server: server, table: table, seq: 0}}
   end
 
   @impl true
+  # ⟦𓉪𓈧𓄹𓉩⟧ handle_call :: auto-generated pointer for public function handle_call
   def handle_call({:append, session_id, binary}, _from, state) do
     seq = state.seq + 1
     :ets.insert(state.table, {session_id, seq, binary})

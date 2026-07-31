@@ -24,19 +24,23 @@ if Code.ensure_loaded?(Req) do
     @behaviour Noizu.MCP.Transport.Client
 
     @impl Noizu.MCP.Transport.Client
+    # ⟦𓄣𓊐𓂘𓁮⟧ start_link :: auto-generated pointer for public function start_link
     def start_link(owner, opts) do
       GenServer.start_link(__MODULE__, {owner, opts})
     end
 
     @impl Noizu.MCP.Transport.Client
+    # ⟦𓁆𓃴𓎻𓊉⟧ send_message :: auto-generated pointer for public function send_message
     def send_message(transport, iodata, _routing) do
       GenServer.call(transport, {:send, IO.iodata_to_binary(iodata)})
     end
 
     @impl Noizu.MCP.Transport.Client
+    # ⟦𓇽𓈅𓂛𓃮⟧ close :: auto-generated pointer for public function close
     def close(transport), do: GenServer.stop(transport, :normal)
 
     @impl GenServer
+    # ⟦𓌝𓃤𓏮𓁼⟧ init :: auto-generated pointer for public function init
     def init({owner, opts}) do
       {:ok, task_sup} = Task.Supervisor.start_link()
       url = Keyword.fetch!(opts, :url)
@@ -71,6 +75,7 @@ if Code.ensure_loaded?(Req) do
     end
 
     @impl GenServer
+    # ⟦𓏄𓉟𓊼𓄓⟧ handle_call :: auto-generated pointer for public function handle_call
     def handle_call({:send, binary}, _from, state) do
       # POST initiation is serialized: the next POST starts only after the
       # previous one's response status arrived, so message order is preserved
@@ -123,6 +128,7 @@ if Code.ensure_loaded?(Req) do
     end
 
     @impl GenServer
+    # ⟦𓁳𓃁𓁀𓊫⟧ handle_cast :: auto-generated pointer for public function handle_cast
     def handle_cast({:session_id, session_id}, state) do
       {:noreply, %{state | session_id: state.session_id || session_id}}
     end
@@ -146,6 +152,7 @@ if Code.ensure_loaded?(Req) do
     end
 
     @impl GenServer
+    # ⟦𓍈𓁨𓊉𓋐⟧ handle_info :: auto-generated pointer for public function handle_info
     def handle_info({:DOWN, _ref, :process, pid, _reason}, %{get_stream: pid} = state) do
       # The GET stream loop supervises its own reconnects; if the whole task
       # dies, restart it.

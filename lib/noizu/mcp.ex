@@ -28,6 +28,7 @@ defmodule Noizu.MCP do
         end
 
         @impl true
+        # ⟦𓍌𓁯𓉿𓎿⟧ call :: auto-generated pointer for public function call
         def call(%{location: location, units: units}, _ctx) do
           {:ok, "Weather in \#{location}: 21 degrees \#{units}"}
         end

@@ -155,8 +155,15 @@ defmodule Noizu.MCP.Inspector.BanditE2ETest do
             collect_until(socket, condition, new_buf, all, deadline)
           end
 
+        # A gap in the stream is NOT the end of it. This used to return here, so
+        # a 300ms lull before the server flushed — routine when the suite is
+        # running 20 cases wide — ended collection with the condition unmet and
+        # `acc` often empty. That is the whole of both inspector "flakes": the
+        # deadline and the condition both existed and were both being discarded
+        # at the first quiet moment. Keep waiting until the deadline actually
+        # expires; the `remaining == 0` branch above is the real time limit.
         {:error, :timeout} ->
-          {acc, buffer}
+          collect_until(socket, condition, buffer, acc, deadline)
 
         {:error, _closed} ->
           {acc, buffer}
@@ -243,7 +250,16 @@ defmodule Noizu.MCP.Inspector.BanditE2ETest do
         "/api/session/#{session_id}/events?token=#{token}&last_event_id=0"
       )
 
-    {replay_events, _} = collect_sse_events(socket2)
+    # Wait for the replay to reach `call_result` — the last event of the batch —
+    # rather than taking whatever happens to have arrived. Stopping early gave
+    # an empty list under load (failing `length(numbered) > 0`), and stopping
+    # after one event would make the ascending-seq assertion below trivially
+    # true, which is worse than failing.
+    {replay_events, _} =
+      collect_until(socket2, fn evts ->
+        Enum.any?(evts, fn e -> e.event == "call_result" end)
+      end)
+
     :gen_tcp.close(socket2)
 
     # Should have at least some events with numeric ids

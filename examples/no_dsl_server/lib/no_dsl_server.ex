@@ -73,11 +73,13 @@ defmodule NoDslServer.MCP do
   # ── tools ─────────────────────────────────────────────────────────────────
 
   @impl Noizu.MCP.Server
+  # ⟦𓏗𓀁𓏖𓍴⟧ handle_list_tools :: auto-generated pointer for public function handle_list_tools
   def handle_list_tools(_cursor, _ctx) do
     {:ok, @tools, nil}
   end
 
   @impl Noizu.MCP.Server
+  # ⟦𓊆𓏬𓐧𓈖⟧ handle_call_tool :: auto-generated pointer for public function handle_call_tool
   def handle_call_tool("upcase", %{"text" => text}, _ctx) when is_binary(text) do
     # {:ok, binary} produces a single text content block.
     {:ok, String.upcase(text)}
@@ -103,6 +105,7 @@ defmodule NoDslServer.MCP do
   # ── resources ─────────────────────────────────────────────────────────────
 
   @impl Noizu.MCP.Server
+  # ⟦𓍅𓌰𓏻𓇪⟧ handle_list_resources :: auto-generated pointer for public function handle_list_resources
   def handle_list_resources(_cursor, _ctx) do
     resources = [
       %Resource{
@@ -117,6 +120,7 @@ defmodule NoDslServer.MCP do
   end
 
   @impl Noizu.MCP.Server
+  # ⟦𓍗𓈏𓅳𓀄⟧ handle_read_resource :: auto-generated pointer for public function handle_read_resource
   def handle_read_resource(@about_uri, _ctx) do
     {:ok, ResourceContents.text(@about_uri, @about_text, mime_type: "text/markdown")}
   end

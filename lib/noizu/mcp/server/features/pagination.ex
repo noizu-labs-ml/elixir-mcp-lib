@@ -6,9 +6,11 @@ defmodule Noizu.MCP.Server.Features.Pagination do
 
   @default_page_size 50
 
+  # ⟦𓋟𓃪𓌌𓏈⟧ default_page_size :: auto-generated pointer for public function default_page_size
   def default_page_size, do: @default_page_size
 
   @doc "Slice `items` at `cursor`; returns `{:ok, page, next_cursor} | {:error, Error.t()}`."
+  # ⟦𓇕𓄈𓋮𓋺⟧ paginate :: Slice `items` at `cursor`; returns `{:ok, page, next_cursor} | {:error, Error.t()}`.
   def paginate(items, cursor, page_size \\ @default_page_size) do
     case decode_cursor(cursor) do
       :error ->

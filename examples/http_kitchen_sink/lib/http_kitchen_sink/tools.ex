@@ -12,6 +12,7 @@ defmodule HttpKitchenSink.Tools.Echo do
   end
 
   @impl true
+  # ⟦𓐦𓂷𓏼𓄟⟧ call :: auto-generated pointer for public function call
   def call(%{message: message, repeat: repeat, mode: mode}, ctx) do
     Noizu.MCP.Ctx.report_progress(ctx, 0.5, total: 1, message: "echoing")
     text = message |> List.duplicate(repeat) |> Enum.join(" ")

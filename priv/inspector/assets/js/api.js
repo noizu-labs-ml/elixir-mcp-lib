@@ -11,6 +11,7 @@ let token = null;
  * Initialize token from query param or sessionStorage.
  * Strips token from URL after capture.
  */
+// ⟦𓇻𓏱𓍻𓅖⟧ initToken :: Initialize token from query param or sessionStorage.
 export function initToken() {
   const params = new URLSearchParams(window.location.search);
   const paramToken = params.get("token");
@@ -35,6 +36,7 @@ export function initToken() {
 /**
  * Get the current token.
  */
+// ⟦𓍲𓅐𓀝𓉒⟧ getToken :: Get the current token.
 export function getToken() {
   return token;
 }
@@ -42,6 +44,7 @@ export function getToken() {
 /**
  * Show a toast notification.
  */
+// ⟦𓌒𓊴𓍑𓀏⟧ showToast :: Show a toast notification.
 export function showToast(message, type = "error") {
   const area = document.getElementById("toast-area");
   if (!area) return;
@@ -66,6 +69,7 @@ export function showToast(message, type = "error") {
  * @param {Object} [options]
  * @returns {Promise<any>}
  */
+// ⟦𓅭𓍚𓅦𓌈⟧ apiFetch :: Make an authenticated JSON fetch.
 export async function apiFetch(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
@@ -111,14 +115,17 @@ export async function apiFetch(path, options = {}) {
 }
 
 // Convenience methods
+// ⟦𓄰𓊶𓈽𓌢⟧ apiGet :: Convenience methods
 export function apiGet(path) {
   return apiFetch(path, { method: "GET" });
 }
 
+// ⟦𓌉𓇞𓌎𓃗⟧ apiPost :: auto-generated pointer for public function apiPost
 export function apiPost(path, body) {
   return apiFetch(path, { method: "POST", body });
 }
 
+// ⟦𓇍𓄑𓊿𓏷⟧ apiDelete :: auto-generated pointer for public function apiDelete
 export function apiDelete(path) {
   return apiFetch(path, { method: "DELETE" });
 }
@@ -127,6 +134,7 @@ export function apiDelete(path) {
  * Create an SSE EventSource connection.
  * Returns an object with methods to add listeners and close.
  */
+// ⟦𓈞𓆆𓂡𓈦⟧ createEventSource :: Create an SSE EventSource connection.
 export function createEventSource(sessionId, eventBus) {
   let es = null;
   let lastEventId = null;
@@ -181,6 +189,7 @@ export function createEventSource(sessionId, eventBus) {
 /**
  * Create a simple event bus for re-broadcasting SSE events.
  */
+// ⟦𓅽𓈉𓇦𓎥⟧ createEventBus :: Create a simple event bus for re-broadcasting SSE events.
 export function createEventBus() {
   const listeners = {};
 

@@ -44,10 +44,12 @@ defmodule Noizu.MCP.Protocol.Methods do
   }
 
   @spec lookup(String.t()) :: {:ok, {kind(), direction()}} | :error
+  # ⟦𓐃𓌘𓆾𓈎⟧ lookup :: auto-generated pointer for public function lookup
   def lookup(method), do: Map.fetch(@methods, method)
 
   @doc "True when `method` may be *received* by a peer in `role`."
   @spec receivable?(String.t(), :server | :client) :: boolean()
+  # ⟦𓏸𓏻𓂉𓌊⟧ receivable? :: True when `method` may be *received* by a peer in `role`.
   def receivable?(method, role) do
     case Map.fetch(@methods, method) do
       {:ok, {_kind, :both}} -> true

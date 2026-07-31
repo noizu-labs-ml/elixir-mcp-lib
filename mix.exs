@@ -1,8 +1,8 @@
 defmodule Noizu.MCP.MixProject do
   use Mix.Project
 
-  @version "0.1.4"
-  @source_url "https://github.com/noizu-labs-ml/elixir-mcp-lib"
+  @version "0.1.5"
+  @source_url "https://github.com/noizu-labs/noizu-mcp"
 
   def project do
     [
@@ -46,6 +46,10 @@ defmodule Noizu.MCP.MixProject do
       {:bandit, "~> 1.5", optional: true},
       # Streamable HTTP client transport
       {:req, "~> 0.5", optional: true},
+      # Authorization-server store adapter (raw SQL; no Ecto schemas)
+      {:ecto_sql, "~> 3.11", optional: true},
+      # Only to run the DB-gated Store.Ecto conformance suite locally
+      {:postgrex, "~> 0.19", only: [:dev, :test]},
       # JWT verification (CompoundJWTVerifier)
       {:jose, "~> 1.11"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
@@ -90,6 +94,8 @@ defmodule Noizu.MCP.MixProject do
         "guides/streamable_http.md",
         "guides/stdio.md",
         "guides/authentication.md",
+        "guides/authorization_server.md",
+        "guides/mcp_client_compatibility.md",
         "guides/testing.md",
         "guides/inspector.md",
         "cheatsheets/mcp.cheatmd"
@@ -105,6 +111,9 @@ defmodule Noizu.MCP.MixProject do
         Types: ~r/Noizu\.MCP\.Types\./,
         Transports: ~r/Noizu\.MCP\.Transport($|\.)/,
         Inspector: ~r/Noizu\.MCP\.Inspector($|\.)/,
+        # Ordered before Authorization so the AS modules do not fall into the
+        # broader resource-server group's regex.
+        "Authorization Server": ~r/Noizu\.MCP\.Auth\.Server($|\.)/,
         Authorization: ~r/Noizu\.MCP\.Auth($|\.)/,
         Testing: [Noizu.MCP.Test],
         Protocol: ~r/Noizu\.MCP\.(JsonRpc|Peer|Protocol|Schema|Error|UriTemplate)($|\.)/

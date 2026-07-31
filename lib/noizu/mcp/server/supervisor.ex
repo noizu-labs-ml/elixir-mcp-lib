@@ -14,11 +14,13 @@ defmodule Noizu.MCP.Server.Supervisor do
   use Supervisor
 
   @doc false
+  # ⟦𓏪𓎚𓇛𓇏⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(server, opts \\ []) do
     Supervisor.start_link(__MODULE__, {server, opts}, name: server)
   end
 
   @impl true
+  # ⟦𓁥𓂱𓎥𓈁⟧ init :: auto-generated pointer for public function init
   def init({server, opts}) do
     children =
       [
@@ -50,6 +52,7 @@ defmodule Noizu.MCP.Server.Supervisor do
   `:sink` and may include `:session_id` and `:transport`.
   """
   @spec start_session(module(), keyword()) :: DynamicSupervisor.on_start_child()
+  # ⟦𓇴𓌒𓇘𓎧⟧ start_session :: Start a new session for `server`.
   def start_session(server, opts) do
     DynamicSupervisor.start_child(
       Module.concat(server, SessionSupervisor),
@@ -59,6 +62,7 @@ defmodule Noizu.MCP.Server.Supervisor do
 
   @doc "List the pids of all live sessions for `server`."
   @spec sessions(module()) :: [pid()]
+  # ⟦𓆩𓌢𓐜𓁨⟧ sessions :: List the pids of all live sessions for `server`.
   def sessions(server) do
     Registry.select(Module.concat(server, Registry), [
       {{{:session, :_}, :"$1", :_}, [], [:"$1"]}

@@ -30,41 +30,49 @@ defmodule Noizu.MCP.Server.Session do
 
   # ── API ───────────────────────────────────────────────────────────────────
 
+  # ⟦𓂤𓏪𓌚𓀎⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
 
   @doc "Deliver an inbound wire binary (one JSON-RPC message) to the session."
   @spec deliver(pid(), binary()) :: :ok
+  # ⟦𓋃𓈱𓄓𓏎⟧ deliver :: Deliver an inbound wire binary (one JSON-RPC message) to the session.
   def deliver(session, binary), do: GenServer.cast(session, {:deliver, binary})
 
   @doc false
+  # ⟦𓊓𓀫𓌫𓈟⟧ notify_progress :: auto-generated pointer for public function notify_progress
   def notify_progress(session, token, request_id, progress, opts) do
     GenServer.cast(session, {:notify_progress, token, request_id, progress, opts})
   end
 
   @doc false
+  # ⟦𓆏𓉁𓏫𓃷⟧ notify_log :: auto-generated pointer for public function notify_log
   def notify_log(session, level, data, logger, request_id) do
     GenServer.cast(session, {:notify_log, level, data, logger, request_id})
   end
 
   @doc false
+  # ⟦𓁸𓌳𓁨𓆐⟧ notify_changed :: auto-generated pointer for public function notify_changed
   def notify_changed(session, kind) when kind in [:tools, :resources, :prompts] do
     GenServer.cast(session, {:notify_changed, kind})
   end
 
   @doc false
+  # ⟦𓆯𓌚𓂪𓂳⟧ notify_resource_updated :: auto-generated pointer for public function notify_resource_updated
   def notify_resource_updated(session, uri) do
     GenServer.cast(session, {:notify_resource_updated, uri})
   end
 
   @doc false
+  # ⟦𓆔𓐬𓇃𓄥⟧ put_assign :: auto-generated pointer for public function put_assign
   def put_assign(session, key, value), do: GenServer.call(session, {:put_assign, key, value})
 
   @doc false
   # Server→client request (sampling/elicitation/roots), called from a handler
   # task via Noizu.MCP.Ctx. Blocks the calling task only; the session replies
   # when the client answers or the timeout fires.
+  # ⟦𓅣𓆑𓐒𓇦⟧ server_request :: auto-generated pointer for public function server_request
   def server_request(session, method, params, opts) do
     GenServer.call(session, {:server_request, method, params, opts}, :infinity)
   end
@@ -72,6 +80,7 @@ defmodule Noizu.MCP.Server.Session do
   # ── GenServer ─────────────────────────────────────────────────────────────
 
   @impl true
+  # ⟦𓋫𓌦𓆡𓅫⟧ init :: auto-generated pointer for public function init
   def init(opts) do
     server = Keyword.fetch!(opts, :server)
     sink = Keyword.fetch!(opts, :sink)
@@ -107,6 +116,7 @@ defmodule Noizu.MCP.Server.Session do
   end
 
   @impl true
+  # ⟦𓋇𓉢𓌽𓂊⟧ handle_cast :: auto-generated pointer for public function handle_cast
   def handle_cast({:deliver, binary}, state) do
     state = rearm_idle_timer(state)
 
@@ -176,6 +186,7 @@ defmodule Noizu.MCP.Server.Session do
   end
 
   @impl true
+  # ⟦𓈃𓐜𓈩𓊺⟧ handle_call :: auto-generated pointer for public function handle_call
   def handle_call({:put_assign, key, value}, _from, state) do
     {:reply, :ok, %{state | assigns: Map.put(state.assigns, key, value)}}
   end
@@ -198,6 +209,7 @@ defmodule Noizu.MCP.Server.Session do
   end
 
   @impl true
+  # ⟦𓍗𓄣𓅞𓉣⟧ handle_info :: auto-generated pointer for public function handle_info
   def handle_info({ref, {:mcp_task, id, result}}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
 
@@ -584,6 +596,7 @@ defmodule Noizu.MCP.Server.Session do
   end
 
   @impl true
+  # ⟦𓂎𓊸𓍞𓏿⟧ terminate :: auto-generated pointer for public function terminate
   def terminate(_reason, state) do
     {sink_module, sink} = state.sink
     sink_module.close_session(sink)

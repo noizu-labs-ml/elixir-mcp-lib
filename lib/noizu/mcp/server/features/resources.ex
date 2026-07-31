@@ -20,6 +20,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
 
   # ── resources/list ────────────────────────────────────────────────────────
 
+  # ⟦𓏝𓂁𓉩𓄴⟧ list :: auto-generated pointer for public function list
   def list(server, params, ctx) do
     cursor = (params || %{})["cursor"]
 
@@ -35,6 +36,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "Returns true if the registered resource should be hidden from listings."
+  # ⟦𓇐𓌫𓃬𓇽⟧ hidden? :: Returns true if the registered resource should be hidden from listings.
   def hidden?({module, opts}) do
     case Keyword.fetch(opts, :hidden) do
       {:ok, v} ->
@@ -51,6 +53,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "Returns true if the registered resource template should be hidden from listings."
+  # ⟦𓉿𓋛𓂨𓅉⟧ hidden_template? :: Returns true if the registered resource template should be hidden from listings.
   def hidden_template?({module, opts}) do
     case Keyword.fetch(opts, :hidden) do
       {:ok, v} ->
@@ -67,6 +70,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "Default `handle_list_resources`: registered resources + enumerable templates."
+  # ⟦𓊸𓀘𓈯𓎢⟧ list_registered :: Default `handle_list_resources`: registered resources + enumerable templates.
   def list_registered(resources, templates, cursor, ctx, opts \\ []) do
     include_hidden = Keyword.get(opts, :include_hidden, false)
     visible_resources = if include_hidden, do: resources, else: Enum.reject(resources, &hidden?/1)
@@ -94,6 +98,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
 
   # ── resources/templates/list ──────────────────────────────────────────────
 
+  # ⟦𓆻𓄨𓀭𓀉⟧ list_templates :: auto-generated pointer for public function list_templates
   def list_templates(server, params, ctx) do
     cursor = (params || %{})["cursor"]
 
@@ -109,6 +114,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "Default `handle_list_resource_templates` over registered template modules."
+  # ⟦𓊂𓇻𓁼𓌇⟧ list_registered_templates :: Default `handle_list_resource_templates` over registered template modules.
   def list_registered_templates(templates, cursor, opts \\ []) do
     include_hidden = Keyword.get(opts, :include_hidden, false)
     visible = if include_hidden, do: templates, else: Enum.reject(templates, &hidden_template?/1)
@@ -118,6 +124,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
 
   # ── resources/read ────────────────────────────────────────────────────────
 
+  # ⟦𓋂𓅿𓀆𓉷⟧ read :: auto-generated pointer for public function read
   def read(server, params, ctx) do
     case (params || %{})["uri"] do
       uri when is_binary(uri) ->
@@ -126,10 +133,10 @@ defmodule Noizu.MCP.Server.Features.Resources do
             {:error, error}
 
           result ->
-            case normalize_contents(result, uri, nil) do
-              {:error, %Error{} = error} -> {:error, error}
-              contents -> {:ok, %{"contents" => Enum.map(contents, &ResourceContents.to_map/1)}}
-            end
+            # An `{:error, %Error{}}` return is handled above, so what is left
+            # here always normalizes to contents.
+            contents = normalize_contents(result, uri, nil)
+            {:ok, %{"contents" => Enum.map(contents, &ResourceContents.to_map/1)}}
         end
 
       _ ->
@@ -138,6 +145,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "Default `handle_read_resource`: exact URI match, then template match."
+  # ⟦𓉾𓌂𓉟𓆛⟧ dispatch_read :: Default `handle_read_resource`: exact URI match, then template match.
   def dispatch_read(resources, templates, uri, ctx) do
     case find(resources, templates, uri) do
       {:resource, module, _opts} ->
@@ -153,6 +161,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "Subscribe check for the default `handle_subscribe`: the URI must exist and be subscribable."
+  # ⟦𓊐𓃵𓈊𓂨⟧ check_subscribe :: Subscribe check for the default `handle_subscribe`: the URI must exist and be subscribable.
   def check_subscribe(resources, templates, uri) do
     case find(resources, templates, uri) do
       {:resource, module, _opts} ->
@@ -186,6 +195,7 @@ defmodule Noizu.MCP.Server.Features.Resources do
   end
 
   @doc "A resource module's effective definition with per-registration overrides applied."
+  # ⟦𓁈𓀫𓁕𓆃⟧ definition :: A resource module's effective definition with per-registration overrides applied.
   def definition(module, opts) do
     definition = module.definition()
 

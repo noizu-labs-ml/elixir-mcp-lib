@@ -5,6 +5,284 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-07-27
+
+### Added
+
+- **OAuth 2.1 authorization-server facade** — `Noizu.MCP.Auth.Server`. The library
+  now implements an authorization server, because the alternative was worse:
+  Claude Desktop and claude.ai authenticate to an MCP server with dynamic client
+  registration (RFC 7591) or a client-id metadata document, and Authentik has not
+  supported DCR since the request was filed in 2024. The facade owns OAuth client,
+  code and token semantics and delegates *authenticating the human* to the host's
+  existing IdP login, so the IdP never sees an MCP client.
+
+  One forward mounts the whole thing:
+
+  ```elixir
+  scope "/oauth" do
+    pipe_through :browser_session          # session YES, require_authenticated NO
+    forward "/", Noizu.MCP.Auth.Server.Router, MCPConfig.as_opts()
+  end
+  ```
+
+  `Server.config/1` + `%Server.Config{}` (raises at boot on an issuer with a path,
+  a resource outside it, or a missing key — every one of which otherwise presents
+  in production as *every client silently refusing to authenticate*);
+  `MetadataPlug` (RFC 8414, aliased at `/.well-known/openid-configuration`),
+  `RegistrationPlug` (RFC 7591), `AuthorizePlug` (+ the consent decision),
+  `TokenPlug`, `RevokePlug` (RFC 7009), `JWKSPlug`, `ApiKeyTokenPlug` and `Router`;
+  `Client`, `Tokens`, `Consent`, `CIMD` (+ `CIMD.ReqFetcher`), `Upstream`
+  (+ `Upstream.HostSession`, `Upstream.OIDC`).
+- **`Store` behaviour with two adapters.** `Store.ETS` (in-memory; mutations run
+  through a GenServer, which is what makes single-use redemption atomic) and
+  `Store.Ecto` (Postgres, **raw SQL, zero Ecto schemas** — the library owns no
+  tables). Adapters receive raw codes and tokens and MUST hash them before
+  persisting or comparing. `take_authorization_code/2` and
+  `rotate_refresh_token/3` are atomic *and* distinguish "never existed" from
+  "already used" — the second is a replay, and a replay revokes the whole refresh
+  family. `Noizu.MCP.Auth.Server.StoreConformanceCase` is the shared battery,
+  including 20-task races on both.
+- `priv/liquibase/noizu_mcp_oauth.yaml` — the host table template (six tables,
+  `subject` as plain `text` with an optional FK block commented out).
+- `guides/authorization_server.md` and `guides/mcp_client_compatibility.md`. The
+  compatibility guide records the verified client matrix and the failures that are
+  silent on the server: Claude offers CIMD only when the metadata advertises both
+  the flag *and* `"none"`; Claude Code fails the connection on a rejected
+  `Authorization` header instead of falling back to OAuth; Claude egresses from
+  `160.79.104.0/21`; loopback redirect URIs must be matched port-agnostically.
+
+- **Resource-server verifiers.** `Noizu.MCP.Auth.JWTVerifier` binds a mount to a
+  single canonical resource URI: a token minted for `https://host/mcp` is
+  rejected at `https://host/mcp/learning` and vice versa, so one mount cannot be
+  used as a confused deputy for its neighbour. The algorithm allowlist comes from
+  config only, never from the token header.
+  `Noizu.MCP.Auth.ApiKeyVerifier` accepts a raw API key presented as a bearer
+  token, validated by a host-supplied `{module, function}` against its own key
+  store. `Noizu.MCP.Auth.ChainVerifier` tries verifiers in order and takes the
+  first success — one mount serving an interactive agent holding an OAuth token
+  *and* a headless script holding an API key. Chain failure is uniform: no
+  indication of which link rejected the credential.
+- `Noizu.MCP.Auth.Resource` — canonical resource-URI normalization and
+  comparison (RFC 8707/9728). Byte-exact matching is the contract; only
+  scheme/host case and the default port normalize. No trailing-slash coercion.
+- **Authorization-server security core** under `Noizu.MCP.Auth.Server` (the rest
+  of the facade — store, clients, tokens, plugs — lands next):
+  `PKCE` (S256 only, verified against the RFC 7636 test vector),
+  `RedirectURI` (exact matching, port-agnostic for loopback callbacks because
+  Claude Code binds an ephemeral port; label-boundary host matching, so
+  `evil-claude.ai` never matches `claude.ai`),
+  `SSRF` (https-only, IPv4/IPv6/v4-mapped denylist including `169.254.169.254`,
+  no redirects, 64 KiB cap, 5 s timeout),
+  `Secret` (PBKDF2-HMAC-SHA256 with an overridable `:secret_hasher`, SHA-256
+  token hashes, constant-time compare via `:crypto.hash_equals/2`),
+  `Errors` (RFC 6749/8414 codes; `error_description` never reflects input),
+  and `Params` (single-value extraction — a repeated parameter is rejected, not
+  resolved to one arm).
+- **Multi-resource protected-resource metadata.** `ProtectedResourceMetadataPlug`
+  takes a `resources:` map of path suffix to per-resource options plus
+  `default_resource`, so one forward answers several RFC 9728 path-inserted
+  suffixes each with its own `resource` value. An unknown suffix is a 404, never
+  another mount's document. The document is now served with
+  `Access-Control-Allow-Origin` (default `*`) and answers `OPTIONS` with 204 —
+  without CORS, claude.ai's browser-context discovery fails silently.
+- **Transport plug options.** `origins: :mcp_clients` (localhost plus the browser
+  MCP hosts, see `mcp_client_origins/0`); `cors:` — answers preflights and, on
+  every response, sets `Access-Control-Expose-Headers: WWW-Authenticate,
+  Mcp-Session-Id, Mcp-Protocol-Version`, without which a browser client cannot
+  read the 401 challenge at all and so can never start OAuth; `auth[:scope]`,
+  advertised in the challenge; and a derivable `auth[:resource_metadata]`,
+  accepting a binary, `{module, function}` (called with the conn),
+  `{module, function, args}`, a 1-arity fun, or `:derive` (built from the request
+  and the forward's mount path). Mounting without `auth:` now logs a warning in
+  `:prod`.
+- `Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge/1` — builds a challenge from a
+  keyword list, dropping `nil` values.
+
+### Known test failures
+
+Running the full suite (see `guides/authorization_server.md`) reports exactly
+one failure:
+
+| Test | Status |
+|---|---|
+| `Noizu.MCP.StdioE2ETest` "handshake, tools/list, tools/call over a real subprocess" | Known; stdio transport work in progress separately. Only appears under `--include e2e`. |
+
+**Anything else is a real regression.** There are no known intermittent
+failures.
+
+### Fixed
+
+- **`Store.Ecto.revoke_access_token/2` no longer reports a revocation it did not
+  perform.** `:track_access_tokens` defaults to `false`, so a caller reaching the
+  adapter directly — an admin "sign out everywhere", a purge job — without
+  threading the option got `:ok` back while nothing was revoked. Silent-success
+  revocation is a security claim, not a convenience. An **absent** option now
+  raises with an actionable message; an **explicit** `false` keeps its deliberate
+  no-op. Scoped to this function: `access_token_revoked?/2` still answers `false`
+  on absence (the documented "untracked is not revoked" degradation, matching
+  `Store.ETS`, which callers fail closed on) and `purge_expired/2` is unchanged.
+  Callers going through `Server.config/1` always have the option threaded and are
+  unaffected.
+
+- **The whole `Store` conformance battery now runs a second time under
+  `subject_type: :uuid`** against real `uuid` columns
+  (`test/noizu/mcp/auth/server/store_ecto_uuid_test.exs`). The `put_consent/2`
+  bug below was one missed coercion out of eight call sites, and a text-only
+  battery structurally could not catch it — a text bind against a text column is
+  valid whether or not it was coerced. Any future write that forgets
+  `dump_subject/2` now fails in the library rather than in a host application's
+  authorize leg. Conformance subjects come from the test context; the text pass
+  is unchanged.
+
+- **`Store.Ecto.put_consent/2` did not encode a uuid `subject`.** With
+  `subject_type: :uuid` — the shape both first-party host apps run — recording
+  consent was the *first* statement in the authorize leg to touch the subject
+  column, and it passed the subject through raw. Every authorization request
+  therefore died with `DBConnection.EncodeError: Postgrex expected a binary of
+  16 bytes` before a code was ever issued, making OAuth against a uuid-keyed
+  host completely non-functional. It was the one subject write of eight that
+  missed `dump_subject/2`; the codes, refresh-token, access-token and consent
+  *read* paths all had it. Found by the new Postgres-backed E2E suite below.
+
+- **Three intermittent test failures eliminated.** All were test-harness timing
+  artifacts; none was a transport race and none could affect a real client.
+  `StreamableHTTPTest` asserted the JSON fast path while the plug's
+  `sse_commit_after` window (200ms) could legitimately elapse under full-suite
+  load, upgrading to SSE exactly as designed — the matrix tests now use an
+  explicit generous window, and the timer-driven upgrade, which previously had
+  no deliberate coverage and was reached only by accident, is now pinned by its
+  own test. Both inspector failures shared one cause: `collect_until` returned
+  on a 300ms receive gap, discarding both its deadline and its condition at the
+  first quiet moment in the stream; it now waits for the deadline. A suite that
+  fails at random makes every subsequent "green" unfalsifiable, which is the
+  same defect as a silent skip wearing different clothes.
+
+- **An incomplete test run no longer reports success.** The `Store.Ecto`
+  conformance battery (gated on `MCP_OAUTH_TEST_DATABASE_URL`) and every `:e2e`
+  suite are opt-in, and a plain `mix test` skipped both *in silence* — the
+  skipped run and the full run printed the same passing count in the same words.
+  A `Store.Ecto` that had never performed a single `INSERT` shipped behind that
+  number. `test/test_helper.exs` now prints a banner naming what did not execute
+  and fails the run via `Noizu.MCP.CoverageGateTest`; set
+  `MCP_SKIP_FULL_COVERAGE=1` to acknowledge a deliberately partial run. The full
+  command is in `guides/authorization_server.md`:
+
+  ```bash
+  MCP_OAUTH_TEST_DATABASE_URL="postgres://USER:PASS@127.0.0.1:5432/noizu_mcp_test" \
+    mix test --include e2e --include slow
+  ```
+
+- **The authorization-server E2E now also runs against `Store.Ecto` on real
+  Postgres, with a uuid subject** (`test/noizu/mcp/auth/server/e2e_ecto_test.exs`).
+  The existing E2E ran against `Store.ETS` only, which exercises none of the SQL
+  and none of the uuid encoding — which is how a `Store.Ecto` defect reached two
+  mounted applications behind a green suite. The new suite covers discovery →
+  DCR → authorize → token → `tools/call` → refresh, the CIMD variant, code and
+  refresh replay, and the headline cross-mount assertion: a token minted for
+  `/mcp` is rejected at `/mcp/learning` and vice versa. It failed on its first
+  run, which is how the `put_consent/2` bug above was found.
+
+- **`Store.EctoTest` no longer invalidates its own module on teardown.** The test
+  repo was dropped from an `on_exit` callback, but the repo is already stopped by
+  then; the resulting raise was reported as "failure on setup_all callback" and
+  invalidated all 31 tests in the module — 31 phantom failures per run, in which a
+  real one could hide. Cleanup now happens on the way in, where it is idempotent.
+
+- **Header injection in `WWW-Authenticate`.** `WWWAuthenticate.format/2`
+  interpolated parameter values into the header unescaped. Values now go through
+  `escape_quoted/1`, which escapes `\` and `"` and *rejects* CR/LF/NUL and other
+  control characters (raising rather than emitting a header whose shape an
+  attacker chose); parameter names are validated as HTTP tokens. The most
+  exposed value is a derived `resource_metadata` URL, which can carry whatever
+  the `Host` header said.
+
+### Changed
+
+- **The 401 challenge no longer carries `error="invalid_request"` when no
+  credential was presented** (RFC 6750 §3.1: `error` describes a *failed*
+  request, and a client that has not presented a token yet has not failed at
+  anything). `error="invalid_token"` for a rejected token is unchanged. This is
+  the one behavioral change for existing consumers: a client asserting on
+  `error` in the no-credential 401 needs updating; clients that read
+  `resource_metadata` — which is every conformant MCP client — are unaffected.
+- `{:ecto_sql, "~> 3.11", optional: true}` added for the forthcoming
+  `Store.Ecto` adapter. A no-op for every current consumer.
+
+## [0.1.4] — 2026-07-16
+
+### Added
+
+- **Verbosity-leveled descriptions.** Anywhere a description string is accepted
+  — a tool's `description:`/`title:`, a toolkit `@mcp description:`, a
+  `field ... description:` — a variant list is now also accepted, tailoring the
+  wording to a requested verbosity level (domain `0..9`, `0` = tersest):
+
+  ```elixir
+  use Noizu.MCP.Server.Tool,
+    description: [
+      {{:verbosity, {2, 3}}, "Medium description."},
+      {{:verbosity, 0},      "Terse."},
+      default: "Definitive fallback text"
+    ]
+  ```
+
+  Keys: `{:verbosity, n}`, `{:verbosity, {lo, hi}}`, `{:verbosity, [n, ...]}`,
+  `default:` (fallback text), and `default_verbosity:` (annotation-level default
+  level). Bare strings are unchanged and cover every level.
+- `Noizu.MCP.Description` — normalized variant struct compiled at
+  `@before_compile`; `compile/2` validates the domain and rejects malformed
+  keys, out-of-domain levels, duplicate level coverage, and inverted ranges at
+  compile time. `resolve/2` gap-fills uncovered levels to the nearest covered
+  level (ties prefer the lower level).
+- `Noizu.MCP.RenderCtx` — render context (`verbosity`, `runner`, `model`,
+  `defaults`) threaded through every description render site;
+  `effective_verbosity/1` resolves the defaults chain (built-in default `5`).
+  Server/global default verbosity via `use Noizu.MCP.Server, default_verbosity:
+  N` or the `:noizu_mcp, :default_verbosity` application env.
+- `Noizu.MCP.Types.Tool.to_map/2` and `Noizu.MCP.Server.Tool.Fields.to_json_schema/2`
+  take a `RenderCtx`; the arity-1 forms delegate with `RenderCtx.default/0`, so
+  single-string tools render exactly as before. `tools/list` derives the context
+  from session assigns (`:render_ctx`, or `:verbosity`/`:runner`/`:model`).
+
+Backwards compatible: `runner`/`model` are carried but not yet consulted (seam
+for per-runner descriptions).
+
+- **Inline `@eval` annotations (description tuning).** Attach eval specs to a
+  tool to continuously grade the *rendered* descriptions it advertises across
+  model × verbosity permutations. Classic tools take an `evals:` `use` option;
+  toolkit functions take an `@eval` module attribute that drains onto the
+  following `@mcp` tool (mirroring how `@mcp` is collected):
+
+  ```elixir
+  @eval name: :simple_task,
+        prompt: [%{role: "user", content: "Read config.exs"}],
+        rubric: [reads_path: "the call passes the requested path"]
+  @mcp description: "Read a file", input: [path: [type: :string, required: true]]
+  def read_file(%{path: path}, _ctx), do: File.read(path)
+  ```
+
+  `name` (atom/string, unique per tool), `prompt` (message list or string), and
+  `rubric` (non-empty keyword of `criterion: "description"`) are validated at
+  compile time.
+- `Noizu.MCP.Eval` — eval spec compilation (`compile_specs/2`) and introspection
+  (`list/1` → `[{tool_name, [%Noizu.MCP.Eval.Spec{}]}]`). Eval specs live on
+  `Noizu.MCP.Server.Tool.Spec.evals` and are **never** serialized onto the wire —
+  `Types.Tool.to_map/1,2` (including `_meta`) carries no eval content.
+- `mix noizu.mcp.eval --server Mod [--tool T] [--runner R --model M]
+  [--verbosity N|all] [--output path.json] [--gate]` — the eval harness
+  (`Noizu.MCP.Eval.Harness`). For each `(tool, eval, permutation)` it renders the
+  tool schema through the §0/§2/§3 pipeline for that `RenderCtx`, runs the prompt
+  via a pluggable `Noizu.MCP.Eval.Runner`, and grades each rubric criterion via a
+  pluggable `Noizu.MCP.Eval.Judge`, emitting a JSON report; `--gate` exits
+  non-zero on any failing criterion.
+- Runner/judge adapters are selected via the `:noizu_mcp` `:eval_runner` /
+  `:eval_judge` application env. A deterministic no-LLM stub pair
+  (`Noizu.MCP.Eval.Runner.Stub` / `Noizu.MCP.Eval.Judge.Stub`) ships for
+  tests/CI; real LLM adapters are app-layer follow-ups. Eval-score persistence
+  (the `mcp_description_evals` table, spec §4) is a backend follow-up, out of lib
+  scope.
+
 ## [0.1.0] — 2026-06-13
 
 Initial release. Targets MCP specification revision **2025-11-25**

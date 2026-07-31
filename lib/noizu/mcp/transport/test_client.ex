@@ -12,19 +12,23 @@ defmodule Noizu.MCP.Transport.Test.Client do
   @behaviour Noizu.MCP.Transport.Client
 
   @impl Noizu.MCP.Transport.Client
+  # ⟦𓌽𓂴𓉫𓏶⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(owner, opts) do
     GenServer.start_link(__MODULE__, {owner, opts})
   end
 
   @impl Noizu.MCP.Transport.Client
+  # ⟦𓊈𓂒𓂺𓅍⟧ send_message :: auto-generated pointer for public function send_message
   def send_message(transport, iodata, _routing) do
     GenServer.cast(transport, {:send, IO.iodata_to_binary(iodata)})
   end
 
   @impl Noizu.MCP.Transport.Client
+  # ⟦𓁆𓃼𓈿𓐓⟧ close :: auto-generated pointer for public function close
   def close(transport), do: GenServer.stop(transport, :normal)
 
   @impl GenServer
+  # ⟦𓌵𓅳𓂧𓉚⟧ init :: auto-generated pointer for public function init
   def init({owner, opts}) do
     server = Keyword.fetch!(opts, :server)
 
@@ -42,12 +46,14 @@ defmodule Noizu.MCP.Transport.Test.Client do
   end
 
   @impl GenServer
+  # ⟦𓃍𓎖𓊧𓈀⟧ handle_cast :: auto-generated pointer for public function handle_cast
   def handle_cast({:send, binary}, state) do
     Noizu.MCP.Server.Session.deliver(state.session, binary)
     {:noreply, state}
   end
 
   @impl GenServer
+  # ⟦𓌌𓇤𓃋𓌋⟧ handle_info :: auto-generated pointer for public function handle_info
   def handle_info({:mcp_out, _tag, binary, routing}, state) do
     send(state.owner, {:mcp_transport, self(), {:message, binary, routing}})
     {:noreply, state}

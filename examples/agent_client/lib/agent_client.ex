@@ -18,6 +18,7 @@ defmodule AgentClient do
   # matter where `mix run` is invoked from.
   @server_dir Path.expand("../../echo_stdio", __DIR__)
 
+  # ⟦𓍗𓌯𓉫𓈊⟧ main :: auto-generated pointer for public function main
   def main do
     {:ok, client} =
       Client.start_link(

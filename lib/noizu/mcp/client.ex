@@ -53,6 +53,7 @@ defmodule Noizu.MCP.Client do
 
   # ── lifecycle ─────────────────────────────────────────────────────────────
 
+  # ⟦𓀐𓁅𓊆𓎙⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(opts) do
     case Keyword.fetch(opts, :name) do
       {:ok, name} -> GenServer.start_link(__MODULE__, opts, name: name)
@@ -60,32 +61,38 @@ defmodule Noizu.MCP.Client do
     end
   end
 
+  # ⟦𓍵𓋠𓅟𓀡⟧ child_spec :: auto-generated pointer for public function child_spec
   def child_spec(opts) do
     %{id: Keyword.get(opts, :name, __MODULE__), start: {__MODULE__, :start_link, [opts]}}
   end
 
   @doc "Block until the initialize handshake completes."
   @spec await_ready(GenServer.server(), timeout()) :: :ok | {:error, term()}
+  # ⟦𓃙𓍢𓊾𓋉⟧ await_ready :: Block until the initialize handshake completes.
   def await_ready(client, timeout \\ 10_000) do
     GenServer.call(client, :await_ready, timeout)
   end
 
   @doc "Close the connection."
   @spec close(GenServer.server()) :: :ok
+  # ⟦𓌗𓏥𓎢𓃎⟧ close :: Close the connection.
   def close(client), do: GenServer.stop(client, :normal)
 
   # ── introspection ─────────────────────────────────────────────────────────
 
   @doc "The server's `Implementation` info (after ready)."
   @spec server_info(GenServer.server()) :: Implementation.t() | nil
+  # ⟦𓋦𓃅𓀬𓄿⟧ server_info :: The server's `Implementation` info (after ready).
   def server_info(client), do: GenServer.call(client, :server_info)
 
   @doc "The server's negotiated capabilities (wire-format map)."
   @spec server_capabilities(GenServer.server()) :: map() | nil
+  # ⟦𓂞𓌘𓁊𓌩⟧ server_capabilities :: The server's negotiated capabilities (wire-format map).
   def server_capabilities(client), do: GenServer.call(client, :server_capabilities)
 
   @doc "The server's `instructions` string, if any."
   @spec instructions(GenServer.server()) :: String.t() | nil
+  # ⟦𓅾𓊤𓁝𓌕⟧ instructions :: The server's `instructions` string, if any.
   def instructions(client), do: GenServer.call(client, :instructions)
 
   # ── generic request ───────────────────────────────────────────────────────
@@ -96,30 +103,35 @@ defmodule Noizu.MCP.Client do
   """
   @spec request(GenServer.server(), String.t(), map() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
+  # ⟦𓄊𓄇𓄖𓀒⟧ request :: auto-generated pointer for public function request
   def request(client, method, params \\ nil, opts \\ []) do
     GenServer.call(client, {:request, method, params, opts}, :infinity)
   end
 
   @doc "Send a one-way notification to the server."
   @spec notify(GenServer.server(), String.t(), map() | nil) :: :ok
+  # ⟦𓁜𓁂𓉮𓇹⟧ notify :: Send a one-way notification to the server.
   def notify(client, method, params \\ nil) do
     GenServer.cast(client, {:notify, method, params})
   end
 
   @doc "Issue a request without blocking; returns a reference for `await/3` / `cancel/3`."
   @spec async(GenServer.server(), String.t(), map() | nil, keyword()) :: {:ok, term()}
+  # ⟦𓇑𓆪𓅙𓂍⟧ async :: Issue a request without blocking; returns a reference for `await/3` / `cancel/3`.
   def async(client, method, params \\ nil, opts \\ []) do
     GenServer.call(client, {:async, method, params, opts}, :infinity)
   end
 
   @doc "Await an `async/4` request."
   @spec await(GenServer.server(), term(), timeout()) :: {:ok, map()} | {:error, term()}
+  # ⟦𓋸𓏹𓄁𓉰⟧ await :: Await an `async/4` request.
   def await(client, ref, timeout \\ :infinity) do
     GenServer.call(client, {:await, ref}, timeout)
   end
 
   @doc "Cancel an `async/4` request (`notifications/cancelled`)."
   @spec cancel(GenServer.server(), term(), String.t() | nil) :: :ok
+  # ⟦𓃃𓏓𓋹𓄼⟧ cancel :: Cancel an `async/4` request (`notifications/cancelled`).
   def cancel(client, ref, reason \\ nil) do
     GenServer.cast(client, {:cancel, ref, reason})
   end
@@ -128,6 +140,7 @@ defmodule Noizu.MCP.Client do
 
   @doc "Ping the server."
   @spec ping(GenServer.server()) :: :ok | {:error, term()}
+  # ⟦𓂁𓉃𓌅𓅅⟧ ping :: Ping the server.
   def ping(client) do
     case request(client, "ping") do
       {:ok, _} -> :ok
@@ -138,6 +151,7 @@ defmodule Noizu.MCP.Client do
   @doc "Call a tool. Returns `{:ok, %ToolResult{}}`. Args use string keys."
   @spec call_tool(GenServer.server(), String.t(), map(), keyword()) ::
           {:ok, ToolResult.t()} | {:error, term()}
+  # ⟦𓃂𓇟𓊗𓐦⟧ call_tool :: auto-generated pointer for public function call_tool
   def call_tool(client, name, args \\ %{}, opts \\ []) do
     params = %{"name" => name, "arguments" => args}
 
@@ -149,18 +163,21 @@ defmodule Noizu.MCP.Client do
 
   @doc "List all tools (auto-paginates; pass `page: cursor` for manual paging)."
   @spec list_tools(GenServer.server(), keyword()) :: {:ok, [Tool.t()]} | {:error, term()}
+  # ⟦𓅥𓄯𓏏𓍐⟧ list_tools :: List all tools (auto-paginates; pass `page: cursor` for manual paging).
   def list_tools(client, opts \\ []),
     do: paged(client, "tools/list", "tools", &Tool.from_map/1, opts)
 
   @doc "List all resources (auto-paginates)."
   @spec list_resources(GenServer.server(), keyword()) ::
           {:ok, [Resource.t()]} | {:error, term()}
+  # ⟦𓈘𓏻𓁮𓐎⟧ list_resources :: auto-generated pointer for public function list_resources
   def list_resources(client, opts \\ []),
     do: paged(client, "resources/list", "resources", &Resource.from_map/1, opts)
 
   @doc "List all resource templates (auto-paginates)."
   @spec list_resource_templates(GenServer.server(), keyword()) ::
           {:ok, [ResourceTemplate.t()]} | {:error, term()}
+  # ⟦𓃛𓀭𓂣𓉼⟧ list_resource_templates :: auto-generated pointer for public function list_resource_templates
   def list_resource_templates(client, opts \\ []),
     do:
       paged(
@@ -174,6 +191,7 @@ defmodule Noizu.MCP.Client do
   @doc "Read a resource. Returns `{:ok, [%ResourceContents{}]}`."
   @spec read_resource(GenServer.server(), String.t(), keyword()) ::
           {:ok, [ResourceContents.t()]} | {:error, term()}
+  # ⟦𓇃𓉕𓅁𓈡⟧ read_resource :: auto-generated pointer for public function read_resource
   def read_resource(client, uri, opts \\ []) do
     case request(client, "resources/read", %{"uri" => uri}, opts) do
       {:ok, result} ->
@@ -186,6 +204,7 @@ defmodule Noizu.MCP.Client do
 
   @doc "Subscribe to update notifications for a resource URI."
   @spec subscribe_resource(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  # ⟦𓉣𓊾𓅣𓐀⟧ subscribe_resource :: Subscribe to update notifications for a resource URI.
   def subscribe_resource(client, uri) do
     case request(client, "resources/subscribe", %{"uri" => uri}) do
       {:ok, _} -> :ok
@@ -195,6 +214,7 @@ defmodule Noizu.MCP.Client do
 
   @doc "Unsubscribe from update notifications for a resource URI."
   @spec unsubscribe_resource(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  # ⟦𓈥𓃆𓅶𓈶⟧ unsubscribe_resource :: Unsubscribe from update notifications for a resource URI.
   def unsubscribe_resource(client, uri) do
     case request(client, "resources/unsubscribe", %{"uri" => uri}) do
       {:ok, _} -> :ok
@@ -204,12 +224,14 @@ defmodule Noizu.MCP.Client do
 
   @doc "List all prompts (auto-paginates)."
   @spec list_prompts(GenServer.server(), keyword()) :: {:ok, [Prompt.t()]} | {:error, term()}
+  # ⟦𓀪𓅜𓁊𓅑⟧ list_prompts :: List all prompts (auto-paginates).
   def list_prompts(client, opts \\ []),
     do: paged(client, "prompts/list", "prompts", &Prompt.from_map/1, opts)
 
   @doc "Get a prompt. Returns `{:ok, %{description: _, messages: [%PromptMessage{}]}}`."
   @spec get_prompt(GenServer.server(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
+  # ⟦𓃈𓄃𓄗𓁭⟧ get_prompt :: auto-generated pointer for public function get_prompt
   def get_prompt(client, name, args \\ %{}, opts \\ []) do
     case request(client, "prompts/get", %{"name" => name, "arguments" => args}, opts) do
       {:ok, result} ->
@@ -230,6 +252,7 @@ defmodule Noizu.MCP.Client do
   """
   @spec complete(GenServer.server(), tuple(), String.t(), String.t()) ::
           {:ok, map()} | {:error, term()}
+  # ⟦𓄟𓎔𓍳𓊊⟧ complete :: auto-generated pointer for public function complete
   def complete(client, ref, arg_name, value) do
     ref_map =
       case ref do
@@ -255,6 +278,7 @@ defmodule Noizu.MCP.Client do
 
   @doc "Set the server's log level for this session."
   @spec set_log_level(GenServer.server(), atom() | String.t()) :: :ok | {:error, term()}
+  # ⟦𓀗𓍙𓃛𓉕⟧ set_log_level :: Set the server's log level for this session.
   def set_log_level(client, level) do
     case request(client, "logging/setLevel", %{"level" => to_string(level)}) do
       {:ok, _} -> :ok
@@ -264,6 +288,7 @@ defmodule Noizu.MCP.Client do
 
   @doc "Replace the advertised roots and emit `notifications/roots/list_changed`."
   @spec set_roots(GenServer.server(), [Root.t()]) :: :ok
+  # ⟦𓏜𓅛𓉵𓍹⟧ set_roots :: Replace the advertised roots and emit `notifications/roots/list_changed`.
   def set_roots(client, roots) when is_list(roots) do
     GenServer.call(client, {:set_roots, roots})
   end
@@ -306,6 +331,7 @@ defmodule Noizu.MCP.Client do
   # ── GenServer ─────────────────────────────────────────────────────────────
 
   @impl true
+  # ⟦𓈙𓋦𓎤𓆟⟧ init :: auto-generated pointer for public function init
   def init(opts) do
     Process.flag(:trap_exit, true)
 
@@ -368,6 +394,7 @@ defmodule Noizu.MCP.Client do
   end
 
   @impl true
+  # ⟦𓃿𓌁𓏭𓈈⟧ handle_continue :: auto-generated pointer for public function handle_continue
   def handle_continue(:connect, state) do
     {module, transport_opts} = transport_spec(Keyword.fetch!(state.opts, :transport))
 
@@ -389,6 +416,7 @@ defmodule Noizu.MCP.Client do
   defp transport_spec({module, opts}) when is_atom(module), do: {module, opts}
 
   @impl true
+  # ⟦𓍲𓅓𓃇𓏖⟧ handle_call :: auto-generated pointer for public function handle_call
   def handle_call(:await_ready, from, state) do
     case state.status do
       :ready -> {:reply, :ok, state}
@@ -449,6 +477,7 @@ defmodule Noizu.MCP.Client do
   end
 
   @impl true
+  # ⟦𓍻𓃡𓇶𓂸⟧ handle_cast :: auto-generated pointer for public function handle_cast
   def handle_cast({:notify, method, params}, state) do
     if state.status == :ready do
       send_message(state, Peer.notification(method, params))
@@ -474,6 +503,7 @@ defmodule Noizu.MCP.Client do
   # ── transport events ──────────────────────────────────────────────────────
 
   @impl true
+  # ⟦𓈜𓈧𓅫𓏴⟧ handle_info :: auto-generated pointer for public function handle_info
   def handle_info({:mcp_transport, _pid, {:up, _info}}, state) do
     {peer, request} = Peer.init_request(state.peer)
     state = %{state | peer: peer}

@@ -14,6 +14,7 @@ defmodule Noizu.MCP.Types.Implementation do
   defstruct [:name, :version, :title, :description, :website_url, :icons]
 
   @spec to_map(t()) :: map()
+  # ⟦𓁐𓋀𓏢𓐍⟧ to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = impl) do
     %{"name" => impl.name, "version" => impl.version}
     |> put_unless_nil("title", impl.title)
@@ -23,6 +24,7 @@ defmodule Noizu.MCP.Types.Implementation do
   end
 
   @spec from_map(map()) :: t()
+  # ⟦𓆸𓆼𓇯𓈟⟧ from_map :: auto-generated pointer for public function from_map
   def from_map(%{} = map) do
     %__MODULE__{
       name: map["name"] || "unknown",

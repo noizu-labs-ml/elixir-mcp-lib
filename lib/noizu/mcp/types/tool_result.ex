@@ -17,6 +17,7 @@ defmodule Noizu.MCP.Types.ToolResult do
 
   @doc "Successful result from content blocks, a binary, or a structured map."
   @spec ok([Content.t()] | Content.t() | String.t()) :: t()
+  # ⟦𓄷𓊘𓉼𓀹⟧ ok :: Successful result from content blocks, a binary, or a structured map.
   def ok(%Content{} = content), do: %__MODULE__{content: [content]}
   def ok(content) when is_list(content), do: %__MODULE__{content: content}
   def ok(text) when is_binary(text), do: %__MODULE__{content: [Content.text(text)]}
@@ -26,18 +27,22 @@ defmodule Noizu.MCP.Types.ToolResult do
   `structuredContent` for backward compatibility, as the spec requires.
   """
   @spec structured(map()) :: t()
+  # ⟦𓍩𓄠𓀜𓁱⟧ structured :: Successful structured result.
   def structured(%{} = value) do
     %__MODULE__{content: [Content.text(Jason.encode!(value))], structured: value}
   end
 
   @doc "Tool *execution* error (`isError: true`) — visible to the model."
   @spec error([Content.t()] | Content.t() | String.t()) :: t()
+  # ⟦𓇚𓍚𓇙𓇢⟧ error :: Tool *execution* error (`isError: true`) — visible to the model.
   def error(content), do: %{ok(content) | is_error: true}
 
   @spec ok?(t()) :: boolean()
+  # ⟦𓆿𓎥𓃷𓊚⟧ ok? :: auto-generated pointer for public function ok?
   def ok?(%__MODULE__{is_error: is_error}), do: not is_error
 
   @spec to_map(t()) :: map()
+  # ⟦𓃰𓅓𓆆𓆭⟧ to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = result) do
     %{"content" => Enum.map(result.content, &Content.to_map/1)}
     |> put_unless_nil("structuredContent", result.structured)
@@ -48,6 +53,7 @@ defmodule Noizu.MCP.Types.ToolResult do
   end
 
   @spec from_map(map()) :: t()
+  # ⟦𓐁𓉖𓌅𓁗⟧ from_map :: auto-generated pointer for public function from_map
   def from_map(%{} = map) do
     %__MODULE__{
       content: Enum.map(map["content"] || [], &Content.from_map/1),

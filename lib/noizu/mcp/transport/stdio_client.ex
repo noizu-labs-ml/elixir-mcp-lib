@@ -19,19 +19,23 @@ defmodule Noizu.MCP.Transport.Stdio.Client do
   @behaviour Noizu.MCP.Transport.Client
 
   @impl Noizu.MCP.Transport.Client
+  # ⟦𓈏𓁒𓍖𓅙⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(owner, opts) do
     GenServer.start_link(__MODULE__, {owner, opts})
   end
 
   @impl Noizu.MCP.Transport.Client
+  # ⟦𓀀𓀻𓃉𓏦⟧ send_message :: auto-generated pointer for public function send_message
   def send_message(transport, iodata, _routing) do
     GenServer.call(transport, {:send, iodata})
   end
 
   @impl Noizu.MCP.Transport.Client
+  # ⟦𓄓𓊺𓀪𓀰⟧ close :: auto-generated pointer for public function close
   def close(transport), do: GenServer.stop(transport, :normal)
 
   @impl GenServer
+  # ⟦𓄶𓎫𓌵𓇁⟧ init :: auto-generated pointer for public function init
   def init({owner, opts}) do
     command = Keyword.fetch!(opts, :command)
 
@@ -59,12 +63,14 @@ defmodule Noizu.MCP.Transport.Stdio.Client do
   end
 
   @impl GenServer
+  # ⟦𓐕𓅙𓋓𓀧⟧ handle_call :: auto-generated pointer for public function handle_call
   def handle_call({:send, iodata}, _from, state) do
     Port.command(state.port, [iodata, ?\n])
     {:reply, :ok, state}
   end
 
   @impl GenServer
+  # ⟦𓊸𓇤𓉎𓐪⟧ handle_info :: auto-generated pointer for public function handle_info
   def handle_info({port, {:data, {:eol, chunk}}}, %{port: port} = state) do
     line = IO.iodata_to_binary(Enum.reverse([chunk | state.buffer]))
 
@@ -87,6 +93,7 @@ defmodule Noizu.MCP.Transport.Stdio.Client do
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl GenServer
+  # ⟦𓇚𓇗𓉟𓃁⟧ terminate :: auto-generated pointer for public function terminate
   def terminate(_reason, state) do
     if state.port && Port.info(state.port), do: Port.close(state.port)
 
