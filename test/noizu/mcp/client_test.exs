@@ -7,6 +7,7 @@ defmodule Noizu.MCP.ClientTest do
   use ExUnit.Case, async: true
 
   alias Noizu.MCP.Client
+  alias Noizu.MCP.Client.Telemetry
   alias Noizu.MCP.Fixtures
 
   defp start_client(opts \\ []) do
@@ -23,6 +24,32 @@ defmodule Noizu.MCP.ClientTest do
     :ok = Client.await_ready(client)
     client
   end
+
+  defp attach_client_telemetry(client) do
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        Telemetry.events(),
+        &__MODULE__.handle_client_telemetry/4,
+        {self(), client}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  @doc false
+  def handle_client_telemetry(
+        event,
+        measurements,
+        %{client_pid: client} = metadata,
+        {test, client}
+      ) do
+    send(test, {:client_telemetry, event, measurements, metadata})
+  end
+
+  def handle_client_telemetry(_event, _measurements, _metadata, _config), do: :ok
 
   describe "handshake" do
     test "negotiates and exposes server info" do
@@ -47,6 +74,95 @@ defmodule Noizu.MCP.ClientTest do
   end
 
   describe "tools" do
+    test "emits correlated request and tool spans without payloads" do
+      client = start_client()
+      attach_client_telemetry(client)
+
+      assert {:ok, result} =
+               Client.call_tool(client, "echo", %{"message" => "secret-payload"},
+                 telemetry_metadata: %{
+                   correlation_id: "chain-123",
+                   secret: "must-not-escape"
+                 }
+               )
+
+      assert [%{text: "secret-payload"}] = result.content
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :request, :start],
+                      %{system_time: system_time}, request_start}
+
+      assert is_integer(system_time)
+      assert request_start.client_pid == client
+      assert request_start.method == "tools/call"
+      assert request_start.tool_name == "echo"
+      assert request_start.correlation_id == "chain-123"
+      refute Map.has_key?(request_start, :secret)
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :tool, :start], _, tool_start}
+
+      assert tool_start.request_id == request_start.request_id
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :request, :stop],
+                      %{duration: duration}, request_stop}
+
+      assert duration >= 0
+      assert request_stop.request_id == request_start.request_id
+      assert request_stop.status == :ok
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :tool, :stop], _, tool_stop}
+      assert tool_stop.request_id == request_start.request_id
+
+      telemetry = inspect([request_start, request_stop, tool_start, tool_stop])
+      refute telemetry =~ "secret-payload"
+      refute telemetry =~ "must-not-escape"
+    end
+
+    test "emits timeout exceptions for the request and tool spans" do
+      client = start_client()
+      attach_client_telemetry(client)
+
+      assert {:error, :timeout} =
+               Client.call_tool(client, "slow", %{"ms" => 30_000},
+                 timeout: 25,
+                 telemetry_metadata: %{run_id: "run-7"}
+               )
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :request, :start], _, start}
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :tool, :start], _, _}
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :request, :exception],
+                      %{duration: duration}, exception}
+
+      assert duration >= 0
+      assert exception.request_id == start.request_id
+      assert exception.error_kind == :timeout
+      assert exception.status == :error
+      assert exception.run_id == "run-7"
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :tool, :exception], _,
+                      tool_exception}
+
+      assert tool_exception.request_id == start.request_id
+    end
+
+    test "emits discovery spans for tool listing" do
+      client = start_client()
+      attach_client_telemetry(client)
+
+      assert {:ok, tools} = Client.list_tools(client, telemetry_metadata: %{trace_id: "trace-9"})
+      assert tools != []
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :request, :start], _, start}
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :discovery, :start], _, discovery}
+      assert discovery.request_id == start.request_id
+      assert discovery.discovery == :tools
+      assert discovery.trace_id == "trace-9"
+
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :request, :stop], _, _}
+      assert_receive {:client_telemetry, [:noizu_mcp, :client, :discovery, :stop], _, stop}
+      assert stop.status == :ok
+    end
+
     test "list and call with typed results" do
       client = start_client()
 

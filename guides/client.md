@@ -144,5 +144,41 @@ pass `on_notification: pid` — messages arrive as
 
 All functions return `{:ok, _} | {:error, reason}` where `reason` is a
 `%Noizu.MCP.Error{}` (protocol error from the server), `:timeout`,
-`:closed`, or a transport-specific term. Telemetry mirrors the server:
-`[:noizu_mcp, :client, :request, :start | :stop | :exception]`.
+`:closed`, or a transport-specific term.
+
+## Telemetry
+
+Attach once to every client event with the published event list:
+
+```elixir
+:telemetry.attach_many(
+  "my-app-mcp",
+  Noizu.MCP.Client.Telemetry.events(),
+  &MyApp.MCPTelemetry.handle_event/4,
+  nil
+)
+```
+
+Every outbound request emits
+`[:noizu_mcp, :client, :request, :start | :stop | :exception]`. `tools/call`
+also emits the matching `:tool` event, while tool/resource/template/prompt list
+requests emit matching `:discovery` events. Transport start, send, connection,
+and session failures emit `[:noizu_mcp, :client, :transport, :exception]`.
+
+The request ID is stable across the generic and specialized events. To join an
+MCP call to an application chain or trace, pass allowlisted correlation data:
+
+```elixir
+Noizu.MCP.Client.call_tool(client, "search", args,
+  telemetry_metadata: %{
+    correlation_id: chain.request_id,
+    trace_id: MyApp.Trace.current_trace_id()
+  }
+)
+```
+
+Accepted keys are listed by
+`Noizu.MCP.Client.Telemetry.correlation_keys/0`; non-scalar values and unknown
+keys are dropped. Events include operation identity, timing, status, client,
+transport, request ID, and safe error classification. Arguments, results,
+headers, authentication material, and raw error reasons are never emitted.

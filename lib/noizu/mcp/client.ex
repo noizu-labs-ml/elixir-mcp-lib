@@ -35,6 +35,8 @@ defmodule Noizu.MCP.Client do
     * `:on_notification` — pid mirrored every server notification as
       `{:mcp_notification, method, params}`
     * `:request_timeout` — default per-request timeout in ms (30_000)
+    * `:telemetry_metadata` — per-request correlation metadata; only keys from
+      `Noizu.MCP.Client.Telemetry.correlation_keys/0` are emitted
 
   Calls made before the handshake completes are queued and dispatched once the
   connection is ready. Per-call `:timeout` overrides auto-cancel the request
@@ -46,6 +48,7 @@ defmodule Noizu.MCP.Client do
   require Logger
 
   alias Noizu.MCP.{Error, JsonRpc, Peer}
+  alias Noizu.MCP.Client.Telemetry
   alias Noizu.MCP.Types.{Implementation, Prompt, PromptMessage, Resource, ResourceContents}
   alias Noizu.MCP.Types.{ResourceTemplate, Root, Tool, ToolResult}
 
@@ -387,7 +390,8 @@ defmodule Noizu.MCP.Client do
       task_sup: task_sup,
       tasks: %{},
       refs: %{},
-      instructions: nil
+      instructions: nil,
+      client: Keyword.get(opts, :name, self())
     }
 
     {:ok, state, {:continue, :connect}}
@@ -403,6 +407,7 @@ defmodule Noizu.MCP.Client do
         {:noreply, %{state | transport: {module, pid}}}
 
       {:error, reason} ->
+        emit_transport_exception(state, :start, reason, module)
         {:stop, {:shutdown, {:transport_start_failed, reason}}, state}
     end
   end
@@ -495,6 +500,7 @@ defmodule Noizu.MCP.Client do
         {peer, notification, _tag} = Peer.cancel_out(state.peer, id, reason)
         if notification, do: send_message(state, notification)
         cancel_timer(entry)
+        emit_request_exception(entry, :cancelled)
         if entry.from, do: GenServer.reply(entry.from, {:error, :cancelled})
         {:noreply, %{state | peer: peer, pending: pending}}
     end
@@ -518,12 +524,14 @@ defmodule Noizu.MCP.Client do
         {:noreply, Enum.reduce(effects, %{state | peer: peer}, &run_effect(&2, &1))}
 
       {:error, error_response} ->
+        emit_transport_exception(state, :decode, :invalid_message)
         send_message(state, error_response)
         {:noreply, state}
     end
   end
 
   def handle_info({:mcp_transport, _pid, {:down, reason}}, state) do
+    emit_transport_exception(state, :down, reason)
     state = fail_all(state, {:closed, reason})
     {:stop, {:shutdown, {:transport_down, reason}}, state}
   end
@@ -536,6 +544,7 @@ defmodule Noizu.MCP.Client do
       {entry, pending} ->
         {peer, notification, _tag} = Peer.cancel_out(state.peer, id, "timeout")
         if notification, do: send_message(state, notification)
+        emit_request_exception(entry, :timeout)
         if entry.from, do: GenServer.reply(entry.from, {:error, :timeout})
         {:noreply, %{state | peer: peer, pending: pending}}
     end
@@ -566,6 +575,7 @@ defmodule Noizu.MCP.Client do
   def handle_info({:EXIT, pid, reason}, state) do
     case state.transport do
       {_mod, ^pid} ->
+        emit_transport_exception(state, :exit, reason)
         state = fail_all(state, {:closed, reason})
         {:stop, {:shutdown, {:transport_down, reason}}, state}
 
@@ -612,13 +622,18 @@ defmodule Noizu.MCP.Client do
       {entry, pending} ->
         cancel_timer(entry)
         result = normalize_outcome(outcome)
+        emit_request_stop(entry, result)
 
         if entry.from do
           GenServer.reply(entry.from, result)
           %{state | pending: pending}
         else
           # async request: hold the result for await/3
-          put_in(%{state | pending: pending}.pending[id], %{entry | result: result})
+          put_in(%{state | pending: pending}.pending[id], %{
+            entry
+            | result: result,
+              started_at: nil
+          })
         end
     end
   end
@@ -758,10 +773,36 @@ defmodule Noizu.MCP.Client do
     timer =
       if timeout != :infinity, do: Process.send_after(self(), {:request_timeout, id}, timeout)
 
-    entry = %{from: from, timer: timer, on_progress: progress, result: nil}
+    started_at = System.monotonic_time()
+
+    metadata =
+      state
+      |> request_metadata(method, id, params)
+      |> Map.merge(Telemetry.correlation(opts))
+
+    entry = %{
+      from: from,
+      timer: timer,
+      on_progress: progress,
+      result: nil,
+      started_at: started_at,
+      telemetry_metadata: metadata
+    }
+
+    Telemetry.emit(:start, %{system_time: System.system_time()}, metadata)
     state = %{state | peer: peer, pending: Map.put(state.pending, id, entry)}
-    send_message(state, request)
-    state
+
+    case send_message(state, request) do
+      :ok ->
+        state
+
+      {:error, reason} ->
+        cancel_timer(entry)
+        emit_transport_exception(state, :send, reason)
+        emit_request_exception(entry, :transport_error)
+        if from, do: GenServer.reply(from, {:error, {:transport_error, reason}})
+        %{state | pending: Map.delete(state.pending, id)}
+    end
   end
 
   defp normalize_outcome({:ok, result}), do: {:ok, result}
@@ -770,6 +811,7 @@ defmodule Noizu.MCP.Client do
   defp fail_all(state, reason) do
     for {_id, entry} <- state.pending do
       cancel_timer(entry)
+      if entry.started_at, do: emit_request_exception(entry, :transport_error)
       if entry.from, do: GenServer.reply(entry.from, {:error, reason})
     end
 
@@ -786,6 +828,91 @@ defmodule Noizu.MCP.Client do
     {module, pid} = state.transport
     module.send_message(pid, JsonRpc.encode!(message), routing)
   end
+
+  defp request_metadata(state, method, id, params) do
+    base = %{
+      client: state.client,
+      client_pid: self(),
+      transport: state.transport |> elem(0),
+      method: method,
+      request_id: id,
+      operation: operation(method)
+    }
+
+    case method do
+      "tools/call" ->
+        Map.put(base, :tool_name, params && params["name"])
+
+      _ ->
+        case discovery(method) do
+          nil -> base
+          kind -> Map.put(base, :discovery, kind)
+        end
+    end
+  end
+
+  defp operation("tools/call"), do: :tool
+  defp operation(method), do: if(discovery(method), do: :discovery, else: :request)
+
+  defp discovery("tools/list"), do: :tools
+  defp discovery("resources/list"), do: :resources
+  defp discovery("resources/templates/list"), do: :resource_templates
+  defp discovery("prompts/list"), do: :prompts
+  defp discovery(_method), do: nil
+
+  defp emit_request_stop(%{started_at: started_at} = entry, result) when is_integer(started_at) do
+    metadata =
+      entry.telemetry_metadata
+      |> Map.put(:status, outcome_status(result))
+      |> maybe_put_error_code(result)
+
+    Telemetry.emit(:stop, %{duration: System.monotonic_time() - started_at}, metadata)
+  end
+
+  defp emit_request_stop(_entry, _result), do: :ok
+
+  defp emit_request_exception(%{started_at: started_at} = entry, error_kind)
+       when is_integer(started_at) do
+    metadata =
+      entry.telemetry_metadata
+      |> Map.put(:status, :error)
+      |> Map.put(:error_kind, error_kind)
+
+    Telemetry.emit(:exception, %{duration: System.monotonic_time() - started_at}, metadata)
+  end
+
+  defp emit_request_exception(_entry, _error_kind), do: :ok
+
+  defp outcome_status({:ok, %{"isError" => true}}), do: :error
+  defp outcome_status({:ok, _result}), do: :ok
+  defp outcome_status({:error, _error}), do: :error
+
+  defp maybe_put_error_code(metadata, {:error, %Error{code: code}}),
+    do: Map.put(metadata, :error_code, code)
+
+  defp maybe_put_error_code(metadata, _result), do: metadata
+
+  defp emit_transport_exception(state, phase, reason, transport \\ nil) do
+    Telemetry.emit_transport(
+      %{system_time: System.system_time()},
+      %{
+        client: state.client,
+        client_pid: self(),
+        transport: transport || transport_module(state),
+        phase: phase,
+        error_kind: transport_error_kind(reason)
+      }
+    )
+  end
+
+  defp transport_module(%{transport: {module, _pid}}), do: module
+  defp transport_module(_state), do: nil
+
+  defp transport_error_kind({:exit_status, _status}), do: :exit_status
+  defp transport_error_kind({:closed, _reason}), do: :closed
+  defp transport_error_kind(:closed), do: :closed
+  defp transport_error_kind(:session_expired), do: :session_expired
+  defp transport_error_kind(_reason), do: :transport_error
 
   defp mirror(%{on_notification: nil}, _method, _params), do: :ok
 
