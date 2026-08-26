@@ -1,7 +1,7 @@
 defmodule Noizu.MCP.MixProject do
   use Mix.Project
 
-  @version "0.1.5"
+  @version "0.1.6"
   @source_url "https://github.com/noizu-labs/noizu-mcp"
 
   def project do
