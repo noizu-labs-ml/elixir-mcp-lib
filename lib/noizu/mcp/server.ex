@@ -31,6 +31,19 @@ defmodule Noizu.MCP.Server do
     * `:title`, `:description`, `:website_url`, `:icons` — optional
       `serverInfo` metadata
     * `:instructions` — usage hints delivered to the client on initialize
+    * `:toolset` (PRD-3) — per-request tool surface selection:
+      `%Noizu.MCP.Toolset.Custom{}` (recommended shape: `base: __MODULE__`'s
+      module name passed explicitly — the literal is not `__MODULE__`-safe
+      pre-expansion), a toolset module, `%Noizu.MCP.Toolset.Ref{}`, or
+      `{Resolver, :resolve, [opts]}` invoked per request as
+      `Resolver.resolve(ctx, opts)` returning one of the static forms or
+      `:none`. Unset means the server's own surface (PRD-1 behavior); an
+      invalid selection or resolver failure logs a warning and serves the
+      raw surface (fail-open per server). With `:toolset` set, the selection
+      replaces listing AND dispatch — see `Noizu.MCP.Toolset.Custom`.
+    * `:toolset_cache` (PRD-3) — `true` or `[ttl: ms]` to opt into
+      `Noizu.MCP.Toolset.Cache` memoization of composed custom-toolset
+      catalogs (default off)
 
   ## Escape hatch: behaviours without macros
 

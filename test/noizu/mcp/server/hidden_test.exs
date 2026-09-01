@@ -313,8 +313,10 @@ defmodule Noizu.MCP.Server.HiddenTest do
 
     defp names(items), do: Enum.map(items, & &1["name"])
 
-    test "lists all sections with hidden flags by default", %{ctx: ctx} do
-      {:ok, catalog} = Noizu.MCP.Server.Tools.Catalog.call(%{}, ctx)
+    test "lists all sections with hidden flags in static mode (PRD-3 default is protocol)", %{
+      ctx: ctx
+    } do
+      {:ok, catalog} = Noizu.MCP.Server.Tools.Catalog.call(%{"mode" => "static"}, ctx)
 
       assert %{
                "tools" => tools,

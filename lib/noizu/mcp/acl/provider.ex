@@ -24,11 +24,7 @@ defmodule Noizu.MCP.ACL.Provider do
   home).
   """
 
-  require Logger
-
   alias Noizu.MCP.ACL.Resource
-  alias Noizu.MCP.Auth.Principal
-  alias Noizu.MCP.Ctx
 
   @callback check(
               subject :: term(),
@@ -258,20 +254,16 @@ defmodule Noizu.MCP.ACL.Provider do
         entries
 
       {provider, check_opts} ->
-        # Every toolset entry is a kind: :tool resource (id = canonical name).
-        ensure_kind!(provider, supported_kinds(provider), :tool)
-
-        resources = Enum.map(entries, &%Resource{kind: :tool, id: &1.definition.name})
-
-        verdicts =
-          verdicts(provider, subject_for(ctx), resources, ctx, :call, check_opts, entries)
-
-        Enum.map(entries, fn entry ->
-          case Map.get(verdicts, entry.definition.name) do
-            :allow -> entry
-            _other -> deny_entry(entry, provider)
-          end
-        end)
+        # PRD-3 re-home (§4.2): the deny vocabulary — weight-300
+        # set_visible/set_callable false ops under {:acl, provider} — lives on
+        # Noizu.MCP.Toolset.Context, and this chokepoint delegates through the
+        # ACL layer. Observable behavior is byte-identical to PRD-2 (the PRD-2
+        # suite is the rollback gate): kind-gate violations raise through
+        # (config error), provider crashes deny the whole set with
+        # [:noizu_mcp, :acl, :error] telemetry, and pre-existing denial
+        # reasons are preserved.
+        layer = Noizu.MCP.Toolset.Context.acl_layer(entries, provider, check_opts, ctx)
+        Noizu.MCP.Toolset.Context.project_acl(entries, layer)
     end
   end
 
@@ -294,41 +286,4 @@ defmodule Noizu.MCP.ACL.Provider do
         resolved
     end
   end
-
-  # Provider crash ⇒ deny the set, not the server (D5).
-  defp verdicts(provider, subject, resources, ctx, action, check_opts, entries) do
-    check_all(provider, subject, resources, action, ctx, check_opts)
-  rescue
-    e ->
-      Logger.warning(
-        "ACL provider #{inspect(provider)} raised — denying #{length(entries)} entries: " <>
-          Exception.message(e)
-      )
-
-      :telemetry.execute([:noizu_mcp, :acl, :error], %{}, %{
-        provider: provider,
-        entries: length(entries),
-        message: Exception.message(e)
-      })
-
-      %{}
-  end
-
-  defp deny_entry(entry, provider) do
-    already_denied? = entry.visible == false or entry.callable == false
-
-    %{
-      entry
-      | visible: false,
-        callable: false,
-        reason:
-          if(already_denied? and not is_nil(entry.reason),
-            do: entry.reason,
-            else: {:acl, provider}
-          )
-    }
-  end
-
-  defp subject_for(%Ctx{auth: %Principal{} = principal}), do: principal
-  defp subject_for(_ctx), do: nil
 end
