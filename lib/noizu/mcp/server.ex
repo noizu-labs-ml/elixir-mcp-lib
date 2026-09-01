@@ -148,13 +148,16 @@ defmodule Noizu.MCP.Server do
           resource_template: 1,
           resource_template: 2,
           prompt: 1,
-          prompt: 2
+          prompt: 2,
+          vfs: 1,
+          vfs: 2
         ]
 
       Module.register_attribute(__MODULE__, :__mcp_tools__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_resources__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_resource_templates__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_prompts__, accumulate: true)
+      Module.register_attribute(__MODULE__, :__mcp_vfs__, accumulate: true)
       @__mcp_server_opts__ opts
       @before_compile Noizu.MCP.Server
 
@@ -226,6 +229,14 @@ defmodule Noizu.MCP.Server do
     end
   end
 
+  @doc "Register a VFS backend module (see `Noizu.MCP.VFS`). The first registration wins."
+  # ⟦𓆒⟧ vfs :: Register a VFS backend module (see `Noizu.MCP.VFS`).
+  defmacro vfs(module, opts \\ []) do
+    quote do
+      @__mcp_vfs__ {unquote(module), unquote(opts)}
+    end
+  end
+
   # ⟦𓃴𓎜𓁘𓁇⟧ __before_compile__ :: auto-generated pointer for public function __before_compile__
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :__mcp_server_opts__)
@@ -236,6 +247,8 @@ defmodule Noizu.MCP.Server do
       env.module |> Module.get_attribute(:__mcp_resource_templates__) |> Enum.reverse()
 
     prompts = env.module |> Module.get_attribute(:__mcp_prompts__) |> Enum.reverse()
+
+    vfs = env.module |> Module.get_attribute(:__mcp_vfs__) |> Enum.reverse()
 
     name = Keyword.get(opts, :name) || raise ArgumentError, "use Noizu.MCP.Server requires :name"
 
@@ -388,6 +401,7 @@ defmodule Noizu.MCP.Server do
       def __mcp__(:resources), do: unquote(Macro.escape(resources))
       def __mcp__(:resource_templates), do: unquote(Macro.escape(templates))
       def __mcp__(:prompts), do: unquote(Macro.escape(prompts))
+      def __mcp__(:vfs), do: unquote(Macro.escape(vfs))
       def __mcp__(:instructions), do: unquote(opts[:instructions])
       def __mcp__(:opts), do: unquote(Macro.escape(opts))
 
@@ -397,6 +411,7 @@ defmodule Noizu.MCP.Server do
           resources?: unquote(resources?),
           prompts?: unquote(prompts?),
           completions?: unquote(completions?),
+          vfs?: unquote(vfs != []),
           user_subscribe?: unquote(defines?.({:handle_subscribe, 2}))
         })
       end
@@ -435,6 +450,19 @@ defmodule Noizu.MCP.Server do
     end)
     |> then(fn caps ->
       if flags.completions?, do: Map.put(caps, "completions", %{}), else: caps
+    end)
+    |> then(fn caps ->
+      if flags.vfs? do
+        caps = Map.put(caps, "vfs", true)
+
+        if Enum.any?(server.__mcp__(:vfs), fn {module, _} ->
+             Noizu.MCP.Server.VFS.write_capable?(module)
+           end),
+           do: Map.put(caps, "vfs_write", true),
+           else: caps
+      else
+        caps
+      end
     end)
     |> Map.put("logging", %{})
   end
