@@ -328,11 +328,12 @@ defmodule Noizu.MCP.VFS.ControlTest do
   end
 
   test "sessions are listed when the server is running", %{ctx: ctx} do
-    # No supervisor → no registry → empty listing, still a directory.
-    assert {:ok, [], nil} = VFS.list(@wrapper, "/etc/dev/runtime/sessions", nil, ctx)
+    # Directory exists even with nothing in it (may hold a lingering session
+    # from an earlier test — only the *new* session is asserted below).
+    assert {:ok, before, nil} = VFS.list(@wrapper, "/etc/dev/runtime/sessions", nil, ctx)
 
     %Noizu.MCP.Test.Client{} = Noizu.MCP.Test.connect(@server)
-    assert {:ok, sessions, nil} = VFS.list(@wrapper, "/etc/dev/runtime/sessions", nil, ctx)
+    sessions = wait_for_new_sessions(before, ctx)
     assert sessions != []
 
     [%{name: id} | _] = sessions
@@ -342,6 +343,26 @@ defmodule Noizu.MCP.VFS.ControlTest do
 
     assert {:ok, body, _} = VFS.read(@wrapper, "/etc/dev/runtime/sessions/#{id}", ctx)
     assert Jason.decode!(body)["id"] == id
+  end
+
+  # Session registration happens as the connection handshake lands — poll
+  # briefly so the listing doesn't race it.
+  defp wait_for_new_sessions(before, ctx, tries \\ 50) do
+    {:ok, now, nil} = VFS.list(@wrapper, "/etc/dev/runtime/sessions", nil, ctx)
+    ids_before = MapSet.new(before, & &1.name)
+    fresh = Enum.filter(now, &(&1.name not in ids_before))
+
+    cond do
+      fresh != [] ->
+        fresh
+
+      tries > 1 ->
+        Process.sleep(20)
+        wait_for_new_sessions(before, ctx, tries - 1)
+
+      true ->
+        now
+    end
   end
 
   # ── cache stats + flush ───────────────────────────────────────────────────

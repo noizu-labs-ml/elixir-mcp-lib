@@ -427,6 +427,30 @@ wrappers and tool middleware still apply; keep the VFS socket mode `0600` and
 behind its `vfs/auth` handshake, and remember a FUSE mount of the control tree
 is a local-privilege surface — mount it only for trusted users.
 
+### Demo server
+
+[`demo/vfs_demo_server`](demo/vfs_demo_server) is a small self-contained mix
+app that seeds a static tree from `priv/seed/tree.yaml` and serves it over the
+real `Noizu.MCP.Transport.VFSWS` transport — the reference implementation for
+file-defining programs and the test fixture for the VFS/mounter stack
+(`VfsDemoServer.Test.mutate/3` mutates the tree, `VfsDemoServer.TestServer`
+boots an ephemeral-port instance for tests):
+
+```sh
+cd demo/vfs_demo_server
+mix run --no-halt        # WS on :4000 (VFS_DEMO_PORT to override)
+# in another terminal (the bearer token rides the WS upgrade request):
+websocat --header "Authorization: Bearer demo-token" "ws://127.0.0.1:4000/vfs"
+mix test                 # runs the demo's own suite against the real transport
+```
+
+It path-deps the parent library (`../..`), keeps its own `deps`/`_build`/
+`mix.lock`, and is excluded from the hex package. The lib's `mix test` does
+not recurse into it — run the demo suite with the `mix test` above from
+`demo/vfs_demo_server`. Auth: single bearer token (env `VFS_DEMO_TOKEN`,
+default `demo-token`), supplied on the WS upgrade request *and* confirmed by
+the `vfs/auth` frame — the upgrade handshake is what gates the socket.
+
 > Follow-up (not in this release): exporting a materialized mount over NFS
 > (kernel `nfsd` on top of the mounter's real files) so non-local hosts and
 > containers can share one live tree. The WS event stream already provides the

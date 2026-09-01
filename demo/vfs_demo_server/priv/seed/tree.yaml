@@ -1,0 +1,39 @@
+tree:
+  - path: /etc
+    type: dir
+  - path: /etc/dev
+    type: dir
+  - path: /etc/dev/flag
+    type: file
+    content: "off\n"
+  - path: /etc/dev/tuning.yaml
+    type: file
+    content: |
+      # demo control file
+      depth: infinity
+      mode: normal
+  - path: /notes
+    type: dir
+  - path: /notes/welcome.md
+    type: file
+    content: |
+      # Welcome
+
+      This tree is defined by priv/seed/tree.yaml and served over the MCP VFS
+      WebSocket transport. Grep it, cat it, pipe it — these are real files.
+  - path: /personas
+    type: dir
+  - path: /personas/loom.md
+    type: file
+    content: |
+      # Loom
+
+      Loom weaves; delegated members carry the threads. Coordination identity
+      for multi-agent builds under the Accords.
+  - path: /personas/weego.md
+    type: file
+    content: |
+      # Weego
+
+      The observing process that holds generative capacity and the aligned
+      persona in view, and refuses Mask-smoothing when honesty requires it.
