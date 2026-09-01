@@ -21,15 +21,20 @@ defmodule Noizu.MCP.Server.Features.Tools do
   list into normalized `Noizu.MCP.Server.Tool.Spec` structs you can filter or
   remap before building the response.
 
+  The generated defaults route through the toolset protocol
+  (`protocol_list/3` / `protocol_call/4` — one resolution path for listing,
+  dispatch, and the catalog tool); `list_registered/3` and `dispatch/4` are
+  thin shims over the same behaviour defaults, so hand-written callbacks and
+  generated ones share the effective-materialization semantics.
+
   Also handled here: pagination, JSON Schema validation (per SEP-1303,
   input-validation failures are `isError` execution results, not protocol
   errors), argument casting for DSL tools, and normalization of handler
   return values to wire maps.
   """
 
-  alias Noizu.MCP.{Error, RenderCtx, Schema}
+  alias Noizu.MCP.{Error, RenderCtx, Schema, Toolset}
   alias Noizu.MCP.Server.Features.Pagination
-  alias Noizu.MCP.Server.Tool.{Fields, Spec}
   alias Noizu.MCP.Types.{Content, Tool, ToolResult}
 
   require Logger
@@ -149,16 +154,26 @@ defmodule Noizu.MCP.Server.Features.Tools do
   @doc "Default `handle_list_tools` over the registered tool modules."
   # ⟦𓉶𓌖𓋦𓋢⟧ list_registered :: Default `handle_list_tools` over the registered tool modules.
   def list_registered(registered, cursor, opts \\ []) do
-    page_size = Keyword.get(opts, :page_size, Pagination.default_page_size())
     include_hidden = Keyword.get(opts, :include_hidden, false)
+    page_size = Keyword.get(opts, :page_size, Pagination.default_page_size())
+    toolset = %Toolset.Static{specs: expand(registered), opts: opts}
 
-    definitions =
-      registered
-      |> expand()
-      |> then(&if include_hidden, do: &1, else: Enum.reject(&1, fn spec -> spec.hidden end))
-      |> Enum.map(& &1.definition)
+    # Thin shim over the behaviour defaults (D1) — same resolution path as the
+    # protocol, one code path for the wire.
+    case Noizu.MCP.Toolset.Behaviour.catalog(toolset, nil, opts) do
+      {:ok, entries, _version} ->
+        definitions =
+          entries
+          |> then(fn entries ->
+            if include_hidden, do: entries, else: Enum.filter(entries, & &1.visible)
+          end)
+          |> Enum.map(& &1.definition)
 
-    Pagination.paginate(definitions, cursor, page_size)
+        Pagination.paginate(definitions, cursor, page_size)
+
+      {:error, %Error{}} = error ->
+        error
+    end
   end
 
   # ── tools/call ────────────────────────────────────────────────────────────
@@ -181,34 +196,74 @@ defmodule Noizu.MCP.Server.Features.Tools do
   @doc "Default `handle_call_tool`: dispatch to a registered tool spec."
   # ⟦𓇼𓁟𓆋𓇇⟧ dispatch :: Default `handle_call_tool`: dispatch to a registered tool spec.
   def dispatch(registered, name, args, ctx) do
-    case registered |> expand() |> Enum.find(&(&1.definition.name == name)) do
-      nil -> {:error, Error.invalid_params("Unknown tool: #{name}")}
-      spec -> run_spec(spec, args, ctx)
+    toolset = %Toolset.Static{specs: expand(registered)}
+
+    # Thin shim over the behaviour defaults (D1): resolve+invoke through the
+    # same effective-materialization path the protocol serves. ctx flows to
+    # arity-2 handlers exactly as the pre-toolset run_spec did.
+    case Noizu.MCP.Toolset.Behaviour.resolve(toolset, name, nil, []) do
+      {:ok, effective} ->
+        Noizu.MCP.Toolset.Behaviour.invoke(toolset, effective, args, ctx, [])
+
+      {:error, %Error{}} = error ->
+        error
     end
   end
 
-  defp run_spec(%Spec{} = spec, args, ctx) do
-    case Schema.validate(spec.definition.input_schema, args) do
-      :ok ->
-        args =
-          case spec.cast_plan do
-            nil -> args
-            plan -> Fields.cast(plan, args)
-          end
+  # ── protocol path (toolset architecture) ─────────────────────────────────
 
-        call_args =
-          case spec.arity do
-            0 -> []
-            1 -> [args]
-            2 -> [args, ctx]
-          end
+  @doc """
+  `handle_list_tools` default over the toolset protocol: coerce the server to
+  a toolset, materialize the effective catalog, drop non-visible entries, and
+  paginate DEFINITIONS (so `nextCursor` semantics match the static path).
+  A toolset whose resolution raises is disabled, not fatal — the failure is
+  normalized to a protocol error (D5).
+  """
+  def protocol_list(toolset, cursor, ctx) do
+    case catalog(toolset, ctx) do
+      {:ok, entries, _version} ->
+        definitions =
+          entries
+          |> Enum.filter(& &1.visible)
+          |> Enum.map(& &1.definition)
 
-        apply(spec.module, spec.fun, call_args) |> normalize(spec.output_schema)
+        Pagination.paginate(definitions, cursor, Pagination.default_page_size())
 
-      {:error, message} ->
-        # SEP-1303: validation failures are execution errors the model can fix.
-        ToolResult.error("Invalid arguments for tool #{spec.definition.name}: #{message}")
+      {:error, %Error{}} = error ->
+        error
     end
+  end
+
+  @doc """
+  `handle_call_tool` default over the toolset protocol: coerce → resolve →
+  invoke against the effective triple. Invoke raises propagate to the session
+  task handler exactly as the static path's handler raises always did; only
+  toolset-plumbing failures (coerce/catalog/resolve) normalize to a protocol
+  error (D5).
+  """
+  def protocol_call(toolset, name, args, ctx) do
+    case resolve(toolset, name, ctx) do
+      {:ok, effective} ->
+        Toolset.invoke(toolset, effective, args, ctx, [])
+
+      {:error, %Error{}} = error ->
+        error
+    end
+  end
+
+  # Toolset plumbing rescue boundary (D5): a toolset that fails to materialize
+  # disables the set, not the server. Invoke is deliberately OUTSIDE this
+  # boundary — handler crashes keep their existing session-level handling.
+  defp catalog(toolset, ctx) do
+    Toolset.catalog(toolset, ctx, [])
+  rescue
+    e -> {:error, Error.internal("toolset catalog failed: #{Exception.message(e)}")}
+  end
+
+  defp resolve(toolset, name, ctx) do
+    Toolset.resolve(toolset, name, ctx, [])
+  rescue
+    e -> {:error, Error.internal("toolset resolve failed: #{Exception.message(e)}")}
   end
 
   # ── return normalization ──────────────────────────────────────────────────

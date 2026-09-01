@@ -272,12 +272,14 @@ defmodule Noizu.MCP.Server do
 
     default_impls =
       [
-        # tools
+        # tools — routed through the toolset protocol (one resolution path for
+        # listing + dispatch + catalog; host handle_* overrides still win via
+        # the defines? guards)
         unless defines?.({:handle_list_tools, 2}) or tools == [] do
           quote do
             @impl Noizu.MCP.Server
-            def handle_list_tools(cursor, _ctx) do
-              Noizu.MCP.Server.Features.Tools.list_registered(__mcp__(:tools), cursor)
+            def handle_list_tools(cursor, ctx) do
+              Noizu.MCP.Server.Features.Tools.protocol_list(__MODULE__, cursor, ctx)
             end
           end
         end,
@@ -285,7 +287,7 @@ defmodule Noizu.MCP.Server do
           quote do
             @impl Noizu.MCP.Server
             def handle_call_tool(name, args, ctx) do
-              Noizu.MCP.Server.Features.Tools.dispatch(__mcp__(:tools), name, args, ctx)
+              Noizu.MCP.Server.Features.Tools.protocol_call(__MODULE__, name, args, ctx)
             end
           end
         end,
@@ -381,6 +383,61 @@ defmodule Noizu.MCP.Server do
       ]
       |> Enum.reject(&is_nil/1)
 
+    # Toolset behaviour functions (protocol+behaviour duality): the server
+    # module itself is a toolset entity. Hosts defining their own `catalog/3`
+    # etc. win via the same defines? race as the handle_* callbacks; the
+    # generated ones are defoverridable at the injection site.
+    toolset_defaults = [
+      {{:__toolset_specs__, 3},
+       quote do
+         def __toolset_specs__(_toolset, _ctx, _opts) do
+           Noizu.MCP.Server.Features.Tools.expand(__mcp__(:tools))
+         end
+       end},
+      {{:catalog, 3},
+       quote do
+         def catalog(toolset, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.catalog(toolset, ctx, opts)
+       end},
+      {{:resolve, 4},
+       quote do
+         def resolve(toolset, name, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.resolve(toolset, name, ctx, opts)
+       end},
+      {{:invoke, 5},
+       quote do
+         def invoke(toolset, effective, args, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.invoke(toolset, effective, args, ctx, opts)
+       end},
+      {{:permissions, 3},
+       quote do
+         def permissions(toolset, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.permissions(toolset, ctx, opts)
+       end},
+      {{:metadata, 3},
+       quote do
+         def metadata(_toolset, _ctx, _opts) do
+           opts = __mcp__(:opts)
+
+           {:ok,
+            %{
+              slug: opts[:name],
+              title: nil,
+              description: opts[:instructions],
+              version: opts[:version]
+            }}
+         end
+       end}
+    ]
+
+    injected_toolset = Enum.filter(toolset_defaults, fn {fa, _impl} -> not defines?.(fa) end)
+    toolset_impls = Enum.map(injected_toolset, &elem(&1, 1))
+
+    toolset_overridable =
+      for {{name, arity}, _impl} <- injected_toolset do
+        {name, arity}
+      end
+
     quote do
       @impl Noizu.MCP.Server
       # ⟦𓏚𓈵𓋵𓈎⟧ server_info :: auto-generated pointer for public function server_info
@@ -417,6 +474,9 @@ defmodule Noizu.MCP.Server do
       end
 
       unquote(default_impls)
+
+      unquote(toolset_impls)
+      defoverridable(unquote(toolset_overridable))
     end
   end
 
