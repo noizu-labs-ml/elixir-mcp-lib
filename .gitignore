@@ -30,3 +30,6 @@ noizu_mcp-*.tar
 /daemon/mcp_mount/_build/
 /daemon/mcp_mount/deps/
 
+
+# escript build artifact
+/daemon/mcp_mount/mcp-mount
