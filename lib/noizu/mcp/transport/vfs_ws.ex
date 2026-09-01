@@ -34,7 +34,8 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
         `Noizu.MCP.Server.Features.VFS` so caching, pagination, and
         authorization match. Responses are `{"v": 2, "id": ..., "result"|"error"}`;
         all wire maps are string-keyed and errors carry the errno→code map
-        (`-32040..-32046`) with `error.data.errno_atom`, as on the socket.
+        (`-32040..-32046`, `:eio` → `-32048`) with `error.data.errno_atom`, as on
+        the socket.
       * **Events** — `vfs/subscribe {"paths": ["/docs"], "depth": n|"infinity"}`
         registers a subtree watch (`Noizu.MCP.Server.VFSPubSub`); mutating
         writes anywhere under a watched path push

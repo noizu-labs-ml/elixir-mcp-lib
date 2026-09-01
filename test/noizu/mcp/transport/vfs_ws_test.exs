@@ -424,6 +424,10 @@ defmodule Noizu.MCP.Transport.VFSWSTest do
              WSClient.request(client, "vfs/write", %{"path" => "/x", "data" => "y"}, 1)
   end
 
+  test ":eio maps to wire code -32048" do
+    assert %Noizu.MCP.Error{code: -32048, data: %{errno: :eio}} = VFS.errno_error(:eio)
+  end
+
   test "unknown method is -32601 and the connection survives", %{port: port} do
     client = authed!(port)
 

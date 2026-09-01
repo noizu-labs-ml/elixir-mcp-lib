@@ -29,7 +29,8 @@ defmodule Noizu.MCP.Server.Features.VFS do
     eisdir: -32043,
     enotdir: -32044,
     enotempty: -32045,
-    enosys: -32046
+    enosys: -32046,
+    eio: -32048
   }
 
   # ── backend-level (cache-aware) ───────────────────────────────────────────
