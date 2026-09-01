@@ -427,6 +427,11 @@ wrappers and tool middleware still apply; keep the VFS socket mode `0600` and
 behind its `vfs/auth` handshake, and remember a FUSE mount of the control tree
 is a local-privilege surface — mount it only for trusted users.
 
+> Follow-up (not in this release): exporting a materialized mount over NFS
+> (kernel `nfsd` on top of the mounter's real files) so non-local hosts and
+> containers can share one live tree. The WS event stream already provides the
+> live semantics; NFS export is packaging, not protocol.
+
 ## Consuming servers (client)
 
 ```elixir
