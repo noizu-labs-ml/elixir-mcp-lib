@@ -225,7 +225,8 @@ bound to the connection's context (failed handshakes close the connection).
 Operations `vfs/stat`, `vfs/list`, `vfs/read`, `vfs/write`, `vfs/create`,
 `vfs/remove`, `vfs/search`, `vfs/xattr` run through the same feature layer as
 MCP-native requests; VFS errnos map to JSON-RPC codes `-32040..-32046`
-(`:enoent` → `-32002`) with `error.data.errno_atom` naming the errno. The
+(`:enoent` → `-32002`, `:eio` → `-32048`) with `error.data.errno_atom` naming
+the errno. The
 socket is created mode `0600`, stale socket files are unlinked at startup and
 removed on shutdown. See `Noizu.MCP.Transport.VFSSocket` for the full wire
 contract and `Noizu.MCP.Transport.VFSClient` for a ready-made client:

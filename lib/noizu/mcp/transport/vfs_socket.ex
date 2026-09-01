@@ -38,9 +38,9 @@ defmodule Noizu.MCP.Transport.VFSSocket do
       `Noizu.MCP.Server.Features.VFS.errno_error/1` (`:enoent` → `-32002`
       resource_not_found, `:eacces` → `-32040`, `:eexist` → `-32041`,
       `:erofs` → `-32042`, `:eisdir` → `-32043`, `:enotdir` → `-32044`,
-      `:enotempty` → `-32045`, `:enosys` → `-32046`) with the originating
-      errno echoed as `error.data.errno_atom` (e.g. `"eisdir"`). Failed auth
-      uses `-32001`.
+      `:enotempty` → `-32045`, `:enosys` → `-32046`, `:eio` → `-32048`) with
+      the originating errno echoed as `error.data.errno_atom` (e.g.
+      `"eisdir"`). Failed auth uses `-32001`.
     * **Malformed frames** — a frame that is not valid JSON-RPC 2.0 draws a
       parse/invalid-request error response; the connection stays open.
   """
