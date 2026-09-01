@@ -159,7 +159,14 @@ defmodule Noizu.MCP.Toolset.Custom do
   @impl true
   def resolve(%Custom{} = toolset, name, ctx, opts) do
     case compose_full(toolset, ctx, opts) do
-      {:ok, %{entries: entries, provenance: provenance, specs: specs, version: version}} ->
+      {:ok,
+       %{
+         entries: entries,
+         provenance: provenance,
+         specs: specs,
+         version: version,
+         negotiations: negotiations
+       }} ->
         case Enum.find(entries, fn entry -> entry.definition.name == name end) do
           %Entry{callable: true} = entry ->
             {:ok,
@@ -171,6 +178,24 @@ defmodule Noizu.MCP.Toolset.Custom do
                version: version,
                reason: nil
              }}
+
+          %Entry{reason: {:negotiation_required, missing}} ->
+            # §4.5: the ONE honest :forbidden — a consent gate is visible on
+            # purpose (Q2), and the error carries the negotiation record's
+            # identity + metadata passthrough for the consent flow (PRD-5 §5).
+            case Map.get(negotiations, name) do
+              %{required: required} = info when missing != [] ->
+                {:error,
+                 Error.forbidden("tool requires scopes", %{
+                   tool: name,
+                   required_scopes: required,
+                   missing: missing,
+                   negotiation: info.negotiation
+                 })}
+
+              _other ->
+                {:error, Error.invalid_params("Unknown tool: #{name}")}
+            end
 
           _ ->
             # Identical error for absent and non-callable — no discovery
@@ -234,10 +259,15 @@ defmodule Noizu.MCP.Toolset.Custom do
         static_layer = static_layer(toolset)
         cache_cfg = cache_config(toolset, ctx, opts)
 
+        # ONE persisted pass per compose (PRD-4): layers + store versions +
+        # negotiation state, D5-degraded internally. Feeds the cache-key
+        # fingerprint AND the context fold.
+        persisted = Context.persisted(toolset, ctx, opts)
+
         cache_key =
           cache_cfg &&
             {toolset.slug, Cache.principal_hash(subject_for(ctx)),
-             pre_version(toolset, static_version, nested_layers, ctx, opts)}
+             pre_version(toolset, static_version, nested_layers, persisted, ctx, opts)}
 
         # Opt-in memo (§4.6); validator errors and compose failures are never
         # cached (always re-checked — D5 paths stay observable).
@@ -246,9 +276,11 @@ defmodule Noizu.MCP.Toolset.Custom do
             {:ok, composed, nil, true}
 
           _ ->
-            case compose_passes(toolset, ctx, opts, filtered, nested_layers ++ [static_layer],
+            case compose_passes(toolset, ctx, filtered, nested_layers ++ [static_layer],
                    static_version: static_version,
-                   base_specs: base_specs
+                   base_specs: base_specs,
+                   persisted: persisted,
+                   opts: opts
                  ) do
               {:ok, composed, layer_count} ->
                 if cache_key, do: Cache.put(cache_key, composed, cache_cfg)
@@ -262,11 +294,13 @@ defmodule Noizu.MCP.Toolset.Custom do
   end
 
   # Passes 2+3: context fold → validate → materialize (§4.4 order).
-  defp compose_passes(toolset, ctx, opts, filtered, static_and_nested, metadata) do
+  defp compose_passes(toolset, ctx, filtered, static_and_nested, metadata) do
     static_version = Keyword.fetch!(metadata, :static_version)
     base_specs = Keyword.fetch!(metadata, :base_specs)
+    persisted = Keyword.fetch!(metadata, :persisted)
+    opts = Keyword.fetch!(metadata, :opts)
 
-    context = context_layers(toolset, ctx, opts, filtered)
+    context = context_layers(toolset, ctx, persisted, opts, filtered)
     layers = context ++ static_and_nested
     layer_count = length(layers)
 
@@ -274,7 +308,7 @@ defmodule Noizu.MCP.Toolset.Custom do
          # the Validator re-folds [static | context] itself — it must receive
          # ONLY the context layers or the static layer would fold twice
          :ok <- validated(toolset, base_specs, context, static_version) do
-      case materialize(toolset, filtered, winners, layers, static_version) do
+      case materialize(toolset, filtered, winners, layers, static_version, persisted) do
         {:ok, composed} ->
           {:ok, composed, layer_count}
 
@@ -287,19 +321,20 @@ defmodule Noizu.MCP.Toolset.Custom do
     end
   end
 
-  # ACL always; persisted layers (the toolset's layers/3 seam + explicit
-  # `:context_layers` opts) only when the toolset is mutable.
-  defp context_layers(toolset, ctx, opts, filtered) do
+  # ACL always; persisted layers (§4.5 build + explicit `:context_layers`
+  # opts) only when the toolset is mutable. The persisted build already ran
+  # in run/4 — the state rides in.
+  defp context_layers(toolset, ctx, persisted, opts, filtered) do
     acl = acl_layer(filtered, ctx, opts)
 
-    persisted =
+    base_context =
       if toolset.immutable do
         []
       else
-        Context.layers(toolset, ctx, opts) ++ Keyword.get(opts, :context_layers, [])
+        Keyword.get(opts, :context_layers, [])
       end
 
-    List.wrap(acl) ++ persisted
+    List.wrap(acl) ++ persisted.layers ++ base_context
   end
 
   defp acl_layer(entries, ctx, opts) do
@@ -457,8 +492,10 @@ defmodule Noizu.MCP.Toolset.Custom do
   # One materialization per tool (D2): the full winning op set applies to a
   # fresh spec; the pre-ACL spec is materialized alongside so ACL-denied
   # entries can preserve a pre-existing denial reason (PRD-2 filter_entries
-  # semantics through the layer).
-  defp materialize(toolset, filtered, winners, layers, static_version) do
+  # semantics through the layer). Negotiation state (§4.5) attaches the honest
+  # `{:negotiation_required, missing}` reason to gated entries and folds
+  # metadata_overrides onto the effective `_meta` ONLY when granted.
+  defp materialize(toolset, filtered, winners, layers, static_version, persisted) do
     by_tool =
       Enum.group_by(winners, fn {{tool, _op, _field}, _win} -> tool end, fn {slot, {op, prov}} ->
         {slot, op, prov}
@@ -477,10 +514,13 @@ defmodule Noizu.MCP.Toolset.Custom do
 
         with {:ok, final_spec} <- Overrides.apply(spec, op_values),
              {:ok, pre_spec} <- Overrides.apply(spec, op_values -- acl_values) do
+          final_spec = merge_metadata_overrides(final_spec, name, persisted)
+
           entry =
             final_spec
             |> Behaviour.entry_for()
             |> with_acl_reason(pre_spec, acl_ops)
+            |> with_negotiation_reason(name, persisted)
 
           tool_provenance =
             Map.new(ops, fn {slot, _op, {layer_id, w}} -> {slot, {layer_id, w}} end)
@@ -494,17 +534,45 @@ defmodule Noizu.MCP.Toolset.Custom do
       end)
 
     if issues == [] do
-      version = compose_version(toolset, layers, static_version)
+      version = compose_version(toolset, layers, static_version, persisted)
 
       {:ok,
        %{
          entries: Enum.reverse(entries),
          version: version,
          provenance: provenance,
-         specs: specs
+         specs: specs,
+         negotiations: persisted.negotiations
        }}
     else
       {:error, issues}
+    end
+  end
+
+  # The unsatisfied-negotiation gate (weight-200 `:set_callable false` from a
+  # {:negotiation, id} layer) leaves the entry visible — resolving it is the
+  # ONE honest :forbidden (§4.5).
+  defp with_negotiation_reason(entry, tool, persisted) do
+    case Map.get(persisted.negotiations, tool) do
+      %{missing: [_ | _] = missing} ->
+        %{entry | reason: {:negotiation_required, missing}}
+
+      _other ->
+        entry
+    end
+  end
+
+  # metadata_overrides fold onto the effective `_meta` ONLY when granted
+  # (§4.4/§4.5) — consent artifacts such as elevation URIs ride here (PRD-5
+  # §5 depends on the field).
+  defp merge_metadata_overrides(spec, tool, persisted) do
+    case Map.get(persisted.negotiations, tool) do
+      %{granted: true, metadata_overrides: overrides} when overrides != %{} ->
+        old_meta = spec.definition.meta || %{}
+        %{spec | definition: %{spec.definition | meta: Map.merge(old_meta, overrides)}}
+
+      _other ->
+        spec
     end
   end
 
@@ -528,13 +596,16 @@ defmodule Noizu.MCP.Toolset.Custom do
 
   defp acl_reason([{_slot, _op, {layer_id, _w}} | _rest]), do: layer_id
 
-  defp compose_version(toolset, layers, static_version) do
+  defp compose_version(toolset, layers, static_version, persisted) do
     fingerprints =
       Enum.map(layers, fn %Layer{id: id, weight: weight, ops: ops} ->
         {id, weight, Behaviour.sha16({:ops, id, ops})}
       end)
 
-    Behaviour.compose_version(toolset.slug, static_version, fingerprints)
+    Behaviour.compose_version(toolset.slug, static_version, [
+      {:fingerprints, fingerprints},
+      store_fingerprint(persisted)
+    ])
   end
 
   # ── internals: cache (opt-in, §4.6) ───────────────────────────────────────
@@ -543,8 +614,9 @@ defmodule Noizu.MCP.Toolset.Custom do
   # ({slug, static_version, layer shapes}): the full composed version needs
   # the folded ops, so it cannot be known before composing; the
   # pre-fingerprint changes whenever the static surface, the principal, or
-  # the layer structure changes.
-  defp pre_version(toolset, static_version, nested_layers, ctx, opts) do
+  # the layer structure changes. Store VERSIONS (§4.5) ride the fingerprint so
+  # Store-driven bumps rotate the key without any record read (FR-4.11).
+  defp pre_version(toolset, static_version, nested_layers, persisted, ctx, opts) do
     acl_shape =
       case provider_shape(ctx, opts) do
         nil -> []
@@ -555,16 +627,24 @@ defmodule Noizu.MCP.Toolset.Custom do
       if toolset.immutable do
         []
       else
-        persisted = Context.layers(toolset, ctx, opts) ++ Keyword.get(opts, :context_layers, [])
-        Enum.map(persisted, fn %Layer{id: id, weight: weight} -> {id, weight} end)
+        Enum.map(persisted.layers, fn %Layer{id: id, weight: weight} -> {id, weight} end)
       end
 
-    Behaviour.compose_version(
-      toolset.slug,
-      static_version,
-      [{:nested, Enum.map(nested_layers, &{&1.id, &1.weight})}] ++ acl_shape ++ persisted_shapes
-    )
+    Behaviour.compose_version(toolset.slug, static_version, [
+      {:nested, Enum.map(nested_layers, &{&1.id, &1.weight})},
+      acl_shape,
+      persisted_shapes,
+      store_fingerprint(persisted)
+    ])
   end
+
+  # §4.5: the persisted layer fingerprint carries the store versions — a
+  # Store write bumps the counter, the counter rotates the version, no record
+  # is ever read to know (FR-4.11). Empty when nothing persisted applies.
+  defp store_fingerprint(%{versions: versions}) when map_size(versions) > 0,
+    do: {:persisted_stores, versions}
+
+  defp store_fingerprint(_other), do: {:persisted_stores, nil}
 
   defp provider_shape(ctx, opts) do
     server = if is_map(ctx), do: Map.get(ctx, :server)

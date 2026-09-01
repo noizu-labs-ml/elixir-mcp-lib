@@ -151,6 +151,8 @@ defmodule Noizu.MCP.Server do
   # ⟦𓍂𓐝𓋠𓍒⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     validate_acl_opt!(opts, __CALLER__)
+    validate_persistence_opt!(opts, __CALLER__)
+    validate_providers_opt!(opts, __CALLER__)
 
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server
@@ -332,6 +334,175 @@ defmodule Noizu.MCP.Server do
       else
         MapSet.new()
       end
+    end
+  end
+
+  # ── `persistence:`/`providers:` registration validation (PRD-4 D4) ────────
+  #
+  # Same posture as `acl:` (§4.7): config errors must not boot, so an invalid
+  # opt is a CompileError at `use` expansion. `providers:` must be a keyword
+  # list whose known keys meet the individual keys' bar; `persistence:` must
+  # be `:memory | :disabled | Provider | {Provider, opts}` with Provider
+  # declaring the Noizu.MCP.Persistence behaviour. The AST dispatch handles
+  # the alias/tuple shapes (`{Alias, []}` quotes as {:{}, meta, [...]}, not a
+  # literal 2-tuple).
+  defp validate_persistence_opt!(opts, caller) do
+    case Keyword.keyword?(opts) && Keyword.get(opts, :persistence) do
+      nil -> :ok
+      ast -> validate_persistence_ast!(ast, ast, caller)
+    end
+  end
+
+  defp validate_persistence_ast!(:memory, _orig, _caller), do: :ok
+  defp validate_persistence_ast!(:disabled, _orig, _caller), do: :ok
+
+  defp validate_persistence_ast!(ast, _orig, caller) when is_atom(ast) and ast != nil,
+    do: validate_persistence_provider!(ast, caller)
+
+  defp validate_persistence_ast!({:__aliases__, _, _parts} = ast, _orig, caller),
+    do: validate_persistence_provider!(Macro.expand(ast, caller), caller)
+
+  # {Provider, opts} — the tuple quotes either as {:{}, meta, [inner, opts]}
+  # or as a literal 2-tuple whose first element is the alias AST; recurse on
+  # the inner node either way, keeping `orig` for the error message.
+  defp validate_persistence_ast!({:{}, _meta, [inner, opts]}, orig, caller)
+       when is_list(opts),
+       do: validate_persistence_ast!(inner, orig, caller)
+
+  defp validate_persistence_ast!({inner, opts}, orig, caller) when is_list(opts),
+    do: validate_persistence_ast!(inner, orig, caller)
+
+  defp validate_persistence_ast!(_expanded, orig, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description:
+        "use Noizu.MCP.Server: invalid `persistence:` opt #{Macro.to_string(orig)} — expected " <>
+          ":memory, :disabled, a Noizu.MCP.Persistence provider module, or {provider, opts}. " <>
+          "The opt must be a compile-time literal so misconfiguration fails the build (PRD-4 D4)."
+  end
+
+  defp validate_persistence_provider!(module, caller) do
+    case Code.ensure_compiled(module) do
+      {:module, _} ->
+        :ok
+
+      {:error, reason} ->
+        raise CompileError,
+          file: caller.file,
+          line: caller.line,
+          description:
+            "use Noizu.MCP.Server: `persistence:` provider #{inspect(module)} is not available " <>
+              "(#{inspect(reason)}) — it must be compiled before the server module (PRD-4 D4)."
+    end
+
+    required = [:put, :get, :list, :delete, :version]
+    callbacks = behaviour_callbacks(module, Noizu.MCP.Persistence, required)
+
+    missing = Enum.reject(required, &MapSet.member?(callbacks, &1))
+
+    unless missing == [] do
+      raise CompileError,
+        file: caller.file,
+        line: caller.line,
+        description:
+          "use Noizu.MCP.Server: `persistence:` provider #{inspect(module)} must implement the " <>
+            "Noizu.MCP.Persistence behaviour (missing callbacks: #{inspect(missing)}) — " <>
+            "declare `@behaviour Noizu.MCP.Persistence` and define put/4, get/3, list/3, " <>
+            "delete/3 and version/2 (ping/1 is optional; PRD-4 §4.1)."
+    end
+  end
+
+  defp validate_providers_opt!(opts, caller) do
+    case Keyword.keyword?(opts) && Keyword.get(opts, :providers) do
+      nil -> :ok
+      ast -> validate_providers_ast!(ast, ast, caller)
+    end
+  end
+
+  defp validate_providers_ast!(providers, _orig, _caller) when providers in [nil, []], do: :ok
+
+  defp validate_providers_ast!(providers, orig, caller) when is_list(providers) do
+    unless Keyword.keyword?(providers) do
+      raise CompileError,
+        file: caller.file,
+        line: caller.line,
+        description:
+          "use Noizu.MCP.Server: invalid `providers:` opt #{Macro.to_string(orig)} — expected a " <>
+            "keyword list, e.g. providers: [persistence: Provider, acl: Provider] (PRD-4 §4.3)."
+    end
+
+    # Each known key validates through its own opt rules (the combined form
+    # wins at resolution, so it must meet the same bar at `use` time).
+    case Keyword.get(providers, :acl) do
+      nil -> :ok
+      ast -> validate_providers_key_ast!(ast, :acl, caller)
+    end
+
+    case Keyword.get(providers, :persistence) do
+      nil -> :ok
+      ast -> validate_providers_key_ast!(ast, :persistence, caller)
+    end
+
+    :ok
+  end
+
+  defp validate_providers_ast!(_expanded, orig, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description:
+        "use Noizu.MCP.Server: invalid `providers:` opt #{Macro.to_string(orig)} — expected a " <>
+          "keyword list, e.g. providers: [persistence: Provider, acl: Provider] (PRD-4 §4.3)."
+  end
+
+  defp validate_providers_key_ast!(ast, :acl, caller) do
+    case expand_opt_module(ast, caller) do
+      {:module, module} ->
+        Code.ensure_compiled(module)
+
+        case Enum.reject([:check], &MapSet.member?(acl_callbacks(module), &1)) do
+          [] ->
+            :ok
+
+          missing ->
+            raise CompileError,
+              file: caller.file,
+              line: caller.line,
+              description:
+                "providers: [acl: #{inspect(module)}] must implement the " <>
+                  "Noizu.MCP.ACL.Provider behaviour (missing: #{inspect(missing)}) (PRD-4 §4.3)."
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_providers_key_ast!(ast, :persistence, caller) do
+    validate_persistence_ast!(ast, ast, caller)
+  end
+
+  # `Alias` | `Alias.sub` → {:module, expanded}; anything else → :other (the
+  # key validators decide whether a literal module atom is required).
+  defp expand_opt_module({:__aliases__, _, _parts} = ast, caller),
+    do: {:module, Macro.expand(ast, caller)}
+
+  defp expand_opt_module(module, _caller) when is_atom(module) and module != nil,
+    do: {:module, module}
+
+  defp expand_opt_module(_other, _caller), do: :other
+
+  # The declared callback set of `module` against `behaviour` — same
+  # behaviour_info-or-@behaviour fallback `acl_callbacks/1` uses.
+  defp behaviour_callbacks(module, behaviour, fallback) do
+    if function_exported?(module, :behaviour_info, 1) do
+      MapSet.new(module.behaviour_info(:callbacks))
+    else
+      attributes = module.module_info(:attributes)
+      behaviours = attributes |> Keyword.get_values(:behaviour) |> List.flatten()
+
+      if behaviour in behaviours, do: MapSet.new(fallback), else: MapSet.new()
     end
   end
 
