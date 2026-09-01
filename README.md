@@ -237,6 +237,46 @@ contract and `Noizu.MCP.Transport.VFSClient` for a ready-made client:
   Noizu.MCP.Transport.VFSClient.read(client, "/etc/dev/flag")
 ```
 
+## VFS WebSocket transport
+
+The TCP-addressable sibling of the socket transport: a bandit-hosted Plug that
+upgrades `GET /vfs` into a WebSocket speaking the same `vfs/*` operations over
+JSON text frames (envelope `v: 2`), plus **live change events**:
+
+```elixir
+children = [
+  {Bandit,
+   plug: {Noizu.MCP.Transport.VFSWS,
+    server: MyApp.MCP,
+    auth: [verifier: {Noizu.MCP.Auth.ApiKeyVerifier, keys: [{key, claims_map}]}],
+    context: {MyApp.MCP, :vfs_assigns}},
+   port: 4100}
+]
+```
+
+Requests carry a bearer token on the upgrade (same verifier pipeline as the
+Streamable HTTP plug; 401 before the socket exists) and then the same
+`vfs/auth` first-frame handshake as the socket transport. After that, frames
+are `{"v": 2, "id": 1, "method": "vfs/read", "params": {"path": "/a.txt"}}` →
+`{"v": 2, "id": 1, "result": {"content": "...", "version": 3}}`.
+
+Mutations are published through `Noizu.MCP.Server.VFSPubSub` (start it in your
+supervision tree; the write path silently skips publishing when it is not
+running). Connections subscribe with `vfs/subscribe {"paths": ["/docs"],
+"depth": 1}` and receive metadata-only, burst-coalesced (50 ms per path)
+events for the watched subtrees:
+
+```json
+{"v": 2, "type": "vfs/event", "seq": 1, "op": "write", "path": "/docs/a.md",
+ "version": 12, "by": "alice", "at": 1788241952601}
+```
+
+Pull the content back with `vfs/read` (compare `version` to skip your own
+echoes); `vfs/unsubscribe` stops delivery, `vfs/ping` round-trips, and the
+server sends WebSocket pings every 30 s (drop after two misses;
+`:keepalive_ms` overrides). Watch cap per connection is 10 000 → `-32047`.
+See `Noizu.MCP.Transport.VFSWS` and `Noizu.MCP.Server.VFSPubSub`.
+
 ## Consuming servers (client)
 
 ```elixir

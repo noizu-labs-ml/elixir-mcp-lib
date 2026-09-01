@@ -50,6 +50,8 @@ defmodule Noizu.MCP.MixProject do
       {:ecto_sql, "~> 3.11", optional: true},
       # Only to run the DB-gated Store.Ecto conformance suite locally
       {:postgrex, "~> 0.19", only: [:dev, :test]},
+      # WebSocket VFS transport test client (Mint family)
+      {:mint_web_socket, "~> 1.0", only: :test},
       # JWT verification (CompoundJWTVerifier)
       {:jose, "~> 1.11"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

@@ -18,6 +18,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   alias Noizu.MCP.Ctx
   alias Noizu.MCP.Error
   alias Noizu.MCP.Server.Features.Pagination
+  alias Noizu.MCP.Server.VFSPubSub
   alias Noizu.MCP.VFS
   alias Noizu.MCP.VFS.Cache
 
@@ -111,7 +112,9 @@ defmodule Noizu.MCP.Server.Features.VFS do
     case backend.write(path, data, ctx) do
       {:ok, node} ->
         Cache.bump_generation(backend)
-        {:ok, stamp(backend, node)}
+        node = stamp(backend, node)
+        VFSPubSub.publish(backend, :write, path, node.version, ctx)
+        {:ok, node}
 
       {:error, _} = error ->
         error
@@ -126,7 +129,9 @@ defmodule Noizu.MCP.Server.Features.VFS do
     case backend.create(path, data, ctx) do
       {:ok, node} ->
         Cache.bump_generation(backend)
-        {:ok, stamp(backend, node)}
+        node = stamp(backend, node)
+        VFSPubSub.publish(backend, :create, path, node.version, ctx)
+        {:ok, node}
 
       {:error, _} = error ->
         error
@@ -139,7 +144,8 @@ defmodule Noizu.MCP.Server.Features.VFS do
   def remove(backend, path, ctx) when is_binary(path) do
     case backend.remove(path, ctx) do
       :ok ->
-        Cache.bump_generation(backend)
+        gen = Cache.bump_generation(backend)
+        VFSPubSub.publish(backend, :remove, path, gen, ctx)
         :ok
 
       {:error, _} = error ->
