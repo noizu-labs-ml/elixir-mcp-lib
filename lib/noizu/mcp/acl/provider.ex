@@ -179,28 +179,72 @@ defmodule Noizu.MCP.ACL.Provider do
   @doc false
   # ⟦𓆐𓊑𓍝𓄁⟧ resolve_provider :: auto-generated pointer for public function resolve_provider
   def resolve_provider(server, opts) when is_list(opts) do
-    cond do
-      Keyword.has_key?(opts, :acl) ->
-        normalize(opts[:acl])
-
-      match?(%Noizu.MCP.Toolset.Static{}, server) ->
-        normalize(server.opts[:acl])
-
-      is_atom(server) and server != nil ->
-        normalize(server_registration(server))
-
-      true ->
-        nil
+    # §4.3 (PRD-4): the combined `providers:` form WINS over the individual
+    # `acl:` key when both carry the key; Application env is read AT CALL TIME
+    # (D3) and only when nothing explicit resolved. An explicit value that
+    # normalizes to nil (`:disabled`, or an unvalidated shape — the
+    # back-compat floor) STOPS the chain as "no provider"; only the ABSENCE
+    # of a key falls through to the next source.
+    case explicit_provider(server, opts) do
+      {:ok, value} -> value
+      :next -> env_provider()
     end
   end
 
   def resolve_provider(_server, _opts), do: nil
 
+  defp explicit_provider(server, opts) do
+    cond do
+      is_list(opts[:providers]) and Keyword.has_key?(opts[:providers], :acl) ->
+        {:ok, normalize(opts[:providers][:acl])}
+
+      Keyword.has_key?(opts, :acl) ->
+        {:ok, normalize(opts[:acl])}
+
+      match?(%Noizu.MCP.Toolset.Static{}, server) ->
+        registration_explicit(server.opts)
+
+      is_atom(server) and server != nil ->
+        registration_explicit(server_registration(server))
+
+      true ->
+        :next
+    end
+  end
+
+  defp registration_explicit(registration) when is_list(registration) do
+    cond do
+      is_list(registration[:providers]) and Keyword.has_key?(registration[:providers], :acl) ->
+        {:ok, normalize(registration[:providers][:acl])}
+
+      Keyword.has_key?(registration, :acl) ->
+        {:ok, normalize(registration[:acl])}
+
+      true ->
+        :next
+    end
+  end
+
+  defp registration_explicit(_other), do: :next
+
+  defp env_provider do
+    providers = Application.get_env(:noizu_mcp, :providers)
+
+    cond do
+      is_list(providers) and Keyword.has_key?(providers, :acl) ->
+        normalize(providers[:acl])
+
+      true ->
+        normalize(Application.get_env(:noizu_mcp, :acl))
+    end
+  end
+
   # The `acl:` registration of a server/toolset module. Direct call + rescue
   # (house style, D4): a module without `__mcp__/1` or a `:opts` clause has no
-  # registration — nil, inert. No exported-function probing.
+  # registration — nil, inert. No exported-function probing. Returns the FULL
+  # opts keyword so the combined `providers:` form is visible too (§4.3).
   defp server_registration(server) do
-    server.__mcp__(:opts)[:acl]
+    server.__mcp__(:opts)
   rescue
     _ -> nil
   end
