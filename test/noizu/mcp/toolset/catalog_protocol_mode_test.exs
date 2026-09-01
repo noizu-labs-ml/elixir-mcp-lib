@@ -15,9 +15,21 @@ defmodule Noizu.MCP.Toolset.CatalogProtocolModeTest do
     Enum.map(tools, & &1["name"])
   end
 
-  describe "static mode (default, unchanged)" do
-    test "omitting mode uses the raw registry expansion with `hidden` flags" do
+  # PRD-3 §4.8 compat flip: the `tools` section DEFAULTS to protocol mode;
+  # `"mode" => "static"` retains the raw registry expansion.
+  describe "static mode (explicit opt-out of the PRD-3 default flip)" do
+    test "omitting mode enumerates through the protocol (PRD-3 default)" do
       result = run(Fixtures.HiddenServer, %{})
+      assert {:ok, %{"tools" => tools}} = result
+
+      hidden = Enum.find(tools, &(&1["name"] == "hidden_tool"))
+      assert hidden["visible"] == false
+      assert hidden["callable"] == true
+      refute Map.has_key?(hidden, "hidden")
+    end
+
+    test "mode: static uses the raw registry expansion with `hidden` flags" do
+      result = run(Fixtures.HiddenServer, %{"mode" => "static"})
       assert {:ok, %{"tools" => tools}} = result
 
       hidden = Enum.find(tools, &(&1["name"] == "hidden_tool"))
@@ -26,12 +38,14 @@ defmodule Noizu.MCP.Toolset.CatalogProtocolModeTest do
     end
 
     test "include_hidden: false drops hidden items in static mode" do
-      names = tool_names(run(Fixtures.HiddenServer, %{"include_hidden" => false}))
+      names =
+        tool_names(run(Fixtures.HiddenServer, %{"mode" => "static", "include_hidden" => false}))
+
       refute "hidden_tool" in names
     end
   end
 
-  describe "protocol mode (opt-in, §4.10)" do
+  describe "protocol mode (the PRD-3 default, §4.8)" do
     test "entries carry visible/callable/reason instead of hidden" do
       {:ok, %{"tools" => tools}} = run(Fixtures.HiddenServer, %{"mode" => "protocol"})
 

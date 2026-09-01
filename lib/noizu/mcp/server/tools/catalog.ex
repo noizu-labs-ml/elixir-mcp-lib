@@ -27,11 +27,14 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
       `category:`), all others are dropped from the result
     * `include_hidden` — `true` (default) to include hidden items; `false` for
       visible-only
-    * `mode` — `"static"` (default) expands the raw `__mcp__(:tools)` registry;
-      `"protocol"` enumerates through the toolset protocol instead (effective
-      definitions post-override, with `visible`/`callable`/`reason` per entry;
-      non-callable entries are omitted). PRD-1 ships protocol mode opt-in; the
-      default flips in a later PR of the series.
+    * `mode` — `"protocol"` (default, flipped from `"static"` in PRD-3 §4.8)
+      enumerates through the toolset protocol instead of the raw registry —
+      effective definitions post-override, with `visible`/`callable`/`reason`
+      per entry; non-callable entries are omitted. When the server has a
+      `toolset:` opt configured, protocol mode enumerates the SELECTED
+      toolset — the catalog becomes the host-facing audit surface for
+      effective per-caller state. `"mode" => "static"` retains the raw
+      registry expansion for hosts depending on the legacy shape.
 
   ## Result
 
@@ -82,9 +85,9 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
       "mode" => %{
         "type" => "string",
         "enum" => ["static", "protocol"],
-        "default" => "static",
+        "default" => "protocol",
         "description" =>
-          "static: raw registry expansion; protocol: toolset-resolution path (effective definitions, visible/callable/reason per entry)"
+          "protocol: toolset-resolution path (effective definitions, visible/callable/reason per entry, honoring the server's toolset: opt); static: raw registry expansion"
       }
     }
   }
@@ -100,7 +103,7 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
     query = args["query"]
     category = args["category"]
     include_hidden = Map.get(args, "include_hidden", true)
-    mode = args["mode"] || "static"
+    mode = args["mode"] || "protocol"
     server = ctx.server
 
     with {:ok, tool_items} <- tools(server, ctx, mode) do
@@ -161,7 +164,11 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
 
   defp tools(server, ctx, "protocol") do
     try do
-      case server |> Toolset.coerce() |> Toolset.catalog(ctx, []) do
+      # §4.8: with `toolset:` configured, protocol mode enumerates the
+      # SELECTED toolset — the audit surface sees effective per-caller state.
+      selected = Features.Tools.select_toolset(server, ctx)
+
+      case selected |> Toolset.coerce() |> Toolset.catalog(ctx, []) do
         {:ok, entries, _version} ->
           {:ok,
            entries

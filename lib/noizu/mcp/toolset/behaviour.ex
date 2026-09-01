@@ -24,7 +24,7 @@ defmodule Noizu.MCP.Toolset.Behaviour do
   alias Noizu.MCP.{Error, Schema}
   alias Noizu.MCP.Server.Features.Tools
   alias Noizu.MCP.Server.Tool.{Fields, Spec}
-  alias Noizu.MCP.Toolset.{Entry, Effective, Overrides}
+  alias Noizu.MCP.Toolset.{Entry, Effective, Layer, Overrides}
   alias Noizu.MCP.Types.ToolResult
 
   require Logger
@@ -71,6 +71,8 @@ defmodule Noizu.MCP.Toolset.Behaviour do
                }}
               | {:error, Error.t()}
 
+  @callback layers(toolset :: term(), ctx :: term(), opts :: keyword()) :: [Layer.t()]
+
   defmacro __using__(_opts) do
     quote do
       @behaviour Noizu.MCP.Toolset.Behaviour
@@ -99,13 +101,18 @@ defmodule Noizu.MCP.Toolset.Behaviour do
       # Protocol-derived impls delegate here; the struct itself is dispatchable.
       def coerce(toolset), do: toolset
 
+      # Context-pass seam (PRD-3 §4.2): no persisted layers until PRD-4's
+      # persistence wiring (or a host override) provides them.
+      def layers(_toolset, _ctx, _opts), do: []
+
       defoverridable __toolset_specs__: 3,
                      catalog: 3,
                      resolve: 4,
                      invoke: 5,
                      permissions: 3,
                      metadata: 3,
-                     coerce: 1
+                     coerce: 1,
+                     layers: 3
     end
   end
 
@@ -238,10 +245,43 @@ defmodule Noizu.MCP.Toolset.Behaviour do
         {spec.definition.name, spec.definition.input_schema, spec.definition}
       end)
 
-    :crypto.hash(
-      :sha256,
-      :erlang.term_to_binary({fingerprint, Application.spec(:noizu_mcp, :vsn)})
-    )
+    sha16({:catalog, fingerprint, Application.spec(:noizu_mcp, :vsn)})
+  end
+
+  @doc """
+  Composed-catalog version fingerprint (PRD-3 §4.4): sha256 over the toolset
+  slug, the static version, and per-layer fingerprints (`{layer_id, weight,
+  op_digest}` for the full version; `{layer_id, weight}` shapes for the
+  pre-compose cache-key fingerprint). Truncated 16 hex chars, matching
+  `catalog_version/1`.
+  """
+  @spec compose_version(String.t(), String.t(), [term()]) :: String.t()
+  def compose_version(slug, static_version, layer_fingerprints) do
+    sha16({:compose, slug, static_version, layer_fingerprints})
+  end
+
+  @doc """
+  The PRD-1 entry mapping (§4.1): one `%Noizu.MCP.Toolset.Entry{}` per
+  effective spec — definition, schema, cast plan, visibility/callability.
+  Public so the `%Noizu.MCP.Toolset.Custom{}` composition shares the exact
+  mapping with the behaviour defaults.
+  """
+  @spec entry_for(Spec.t()) :: Entry.t()
+  def entry_for(%Spec{} = spec) do
+    %Entry{
+      definition: spec.definition,
+      input_schema: spec.definition.input_schema,
+      cast_plan: spec.cast_plan,
+      visible: not spec.hidden,
+      callable: spec.callable,
+      reason: if(spec.hidden, do: :hidden_by_spec)
+    }
+  end
+
+  @doc "sha256 of the term, truncated to 16 lowercase hex chars (§4.7)."
+  @spec sha16(term()) :: String.t()
+  def sha16(term) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(term))
     |> Base.encode16(case: :lower)
     |> binary_part(0, 16)
   end
@@ -295,17 +335,6 @@ defmodule Noizu.MCP.Toolset.Behaviour do
     # __toolset_specs__/3 returned something other than a spec list — fail the
     # set, not the server (D5).
     {:error, Error.internal("toolset specs must be a list, got: #{inspect(other)}")}
-  end
-
-  defp entry_for(%Spec{} = spec) do
-    %Entry{
-      definition: spec.definition,
-      input_schema: spec.definition.input_schema,
-      cast_plan: spec.cast_plan,
-      visible: not spec.hidden,
-      callable: spec.callable,
-      reason: if(spec.hidden, do: :hidden_by_spec)
-    }
   end
 
   defp instrument(toolset, event, fun) do

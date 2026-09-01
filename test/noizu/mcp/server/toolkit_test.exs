@@ -223,7 +223,11 @@ defmodule Noizu.MCP.Server.ToolkitTest do
 
   describe "Catalog with toolkit tools" do
     test "toolkit tools appear with top-level category" do
-      {:ok, catalog} = Noizu.MCP.Server.Tools.Catalog.call(%{"type" => "tools"}, ctx())
+      # PRD-3 flipped the Catalog default to protocol mode; static-shape
+      # assertions opt out explicitly.
+      {:ok, catalog} =
+        Noizu.MCP.Server.Tools.Catalog.call(%{"type" => "tools", "mode" => "static"}, ctx())
+
       by_name = Map.new(catalog["tools"], &{&1["name"], &1})
 
       assert by_name["kit.echo"]["category"] == "Echoes"
