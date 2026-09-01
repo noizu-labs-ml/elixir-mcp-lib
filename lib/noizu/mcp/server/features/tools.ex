@@ -200,8 +200,10 @@ defmodule Noizu.MCP.Server.Features.Tools do
 
     # Thin shim over the behaviour defaults (D1): resolve+invoke through the
     # same effective-materialization path the protocol serves. ctx flows to
-    # arity-2 handlers exactly as the pre-toolset run_spec did.
-    case Noizu.MCP.Toolset.Behaviour.resolve(toolset, name, nil, []) do
+    # arity-2 handlers exactly as the pre-toolset run_spec did — and through
+    # to the ACL pass inside the defaults, so the server's provider governs
+    # this shim too (a denied tool resolves like an absent one, PRD-2 AP-5).
+    case Noizu.MCP.Toolset.Behaviour.resolve(toolset, name, ctx, []) do
       {:ok, effective} ->
         Noizu.MCP.Toolset.Behaviour.invoke(toolset, effective, args, ctx, [])
 

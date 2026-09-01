@@ -137,6 +137,8 @@ defmodule Noizu.MCP.Server do
 
   # ⟦𓍂𓐝𓋠𓍒⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
+    validate_acl_opt!(opts, __CALLER__)
+
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server
       import Noizu.MCP.Server,
@@ -234,6 +236,89 @@ defmodule Noizu.MCP.Server do
   defmacro vfs(module, opts \\ []) do
     quote do
       @__mcp_vfs__ {unquote(module), unquote(opts)}
+    end
+  end
+
+  # ── `acl:` registration validation (PRD-2 §4.7) ───────────────────────────
+  #
+  # Config errors must not boot: an invalid `acl:` opt is a CompileError at
+  # `use` expansion, not a runtime surprise. The opt must be a compile-time
+  # literal — `:disabled` | `:deny_all` | a `Noizu.MCP.ACL.Provider` module |
+  # `{Provider, opts}` — because misconfiguration fails the build, not a
+  # request (D5-worse-than-runtime: validation reads behaviour_info, which no
+  # MFA could do).
+  defp validate_acl_opt!(opts, caller) do
+    case Keyword.keyword?(opts) && Keyword.get(opts, :acl) do
+      nil -> :ok
+      ast -> validate_acl_opt!(Macro.expand(ast, caller), ast, caller)
+    end
+  end
+
+  defp validate_acl_opt!(:disabled, _ast, _caller), do: :ok
+  defp validate_acl_opt!(:deny_all, _ast, _caller), do: :ok
+
+  defp validate_acl_opt!(module, _ast, caller) when is_atom(module) and module != nil,
+    do: validate_acl_provider!(module, caller)
+
+  defp validate_acl_opt!({module, opts}, _ast, caller)
+       when is_atom(module) and module != nil and is_list(opts),
+       do: validate_acl_provider!(module, caller)
+
+  defp validate_acl_opt!(_expanded, ast, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description:
+        "use Noizu.MCP.Server: invalid `acl:` opt #{Macro.to_string(ast)} — expected " <>
+          ":disabled, :deny_all, a Noizu.MCP.ACL.Provider module, or {provider, opts}. " <>
+          "The opt must be a compile-time literal so misconfiguration fails the build (PRD-2 §4.7)."
+  end
+
+  defp validate_acl_provider!(module, caller) do
+    case Code.ensure_compiled(module) do
+      {:module, _} ->
+        :ok
+
+      {:error, reason} ->
+        raise CompileError,
+          file: caller.file,
+          line: caller.line,
+          description:
+            "use Noizu.MCP.Server: `acl:` provider #{inspect(module)} is not available " <>
+              "(#{inspect(reason)}) — it must be compiled before the server module (PRD-2 §4.7)."
+    end
+
+    missing = Enum.reject([:check, :check_all], &MapSet.member?(acl_callbacks(module), &1))
+
+    unless missing == [] do
+      raise CompileError,
+        file: caller.file,
+        line: caller.line,
+        description:
+          "use Noizu.MCP.Server: `acl:` provider #{inspect(module)} must implement the " <>
+            "Noizu.MCP.ACL.Provider behaviour (missing callbacks: #{inspect(missing)}) — " <>
+            "declare `@behaviour Noizu.MCP.ACL.Provider` and define check/5 (check_all/5 has a " <>
+            "default; PRD-2 §4.7)."
+    end
+  end
+
+  # The declared callback set of `module`. behaviour_info/1 is undefined for
+  # modules compiled in the SAME compilation unit (the attribute lands with the
+  # beam), so fall back to the module's declared @behaviour attributes there —
+  # declaring the behaviour IS the callback contract; anything else is "not a
+  # behaviour at all" and fails validation.
+  defp acl_callbacks(module) do
+    if function_exported?(module, :behaviour_info, 1) do
+      MapSet.new(module.behaviour_info(:callbacks))
+    else
+      attributes = module.module_info(:attributes)
+      behaviours = attributes |> Keyword.get_values(:behaviour) |> List.flatten()
+
+      if Noizu.MCP.ACL.Provider in behaviours do
+        MapSet.new([:check, :check_all])
+      else
+        MapSet.new()
+      end
     end
   end
 

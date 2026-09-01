@@ -14,6 +14,7 @@ defmodule Noizu.MCP.Server.Session do
   require Logger
 
   alias Noizu.MCP.{Ctx, Error, JsonRpc, Peer}
+  alias Noizu.MCP.Auth.Principal
   alias Noizu.MCP.Server.Features
 
   @log_severity %{
@@ -39,6 +40,30 @@ defmodule Noizu.MCP.Server.Session do
   @spec deliver(pid(), binary()) :: :ok
   # ⟦𓋃𓈱𓄓𓏎⟧ deliver :: Deliver an inbound wire binary (one JSON-RPC message) to the session.
   def deliver(session, binary), do: GenServer.cast(session, {:deliver, binary})
+
+  @doc """
+  Deliver an inbound wire binary together with THIS message's auth claims
+  (PRD-2 per-request identity). The session resolves the claims to a
+  `%Noizu.MCP.Auth.Principal{}` — via the server's `principal:` opt, else the
+  built-in claims mapping — scopes it to this single message (`ctx.auth`), and
+  clears it once the message is processed: claims never leak into
+  server-initiated notifications or later claim-less messages. `nil` claims is
+  anonymous.
+  """
+  @spec deliver(GenServer.server(), binary(), map() | nil) :: :ok
+  # ⟦𓄔𓆑𓍳𓂝⟧ deliver :: Deliver an inbound wire binary together with THIS message's auth claims
+  def deliver(session, binary, claims), do: GenServer.cast(session, {:deliver, binary, claims})
+
+  @doc """
+  Store (or, with `nil`, clear) the session's host-plugged principal for
+  transports that resolve identity out-of-band. Builds the same
+  `assigns[:mcp_principal]` the HTTP plug folds in at initialize; precedence
+  in `build_ctx`: per-message `current_auth` > this principal > initialize
+  `auth_claims` > anonymous.
+  """
+  @spec put_principal(GenServer.server(), Principal.t() | nil) :: :ok
+  # ⟦𓎢𓋹𓊝𓄛⟧ put_principal :: Store (or, with `nil`, clear) the session's host-plugged principal for
+  def put_principal(session, principal), do: GenServer.call(session, {:put_principal, principal})
 
   @doc false
   # ⟦𓊓𓀫𓌫𓈟⟧ notify_progress :: auto-generated pointer for public function notify_progress
@@ -111,7 +136,8 @@ defmodule Noizu.MCP.Server.Session do
        subscriptions: MapSet.new(),
        out_timers: %{},
        log_level: nil,
-       halt: nil
+       halt: nil,
+       current_auth: nil
      })}
   end
 
@@ -132,6 +158,31 @@ defmodule Noizu.MCP.Server.Session do
       {:error, error_response} ->
         send_out(state, error_response)
         {:noreply, state}
+    end
+  end
+
+  # Claims-scoped delivery (PRD-2): resolve this message's principal, process
+  # exactly one message with it, then clear — current_auth never survives into
+  # server-initiated notifications or a later claim-less message.
+  def handle_cast({:deliver, binary, claims}, state) do
+    state = rearm_idle_timer(state)
+    state = %{state | current_auth: resolve_principal(state, claims)}
+
+    case JsonRpc.decode(binary) do
+      {:ok, message} ->
+        {peer, effects} = Peer.ingest(state.peer, message)
+        state = run_effects(%{state | peer: peer}, effects)
+        state = %{state | current_auth: nil}
+
+        if state.halt do
+          {:stop, {:shutdown, state.halt}, state}
+        else
+          {:noreply, state}
+        end
+
+      {:error, error_response} ->
+        send_out(state, error_response)
+        {:noreply, %{state | current_auth: nil}}
     end
   end
 
@@ -189,6 +240,16 @@ defmodule Noizu.MCP.Server.Session do
   # ⟦𓈃𓐜𓈩𓊺⟧ handle_call :: auto-generated pointer for public function handle_call
   def handle_call({:put_assign, key, value}, _from, state) do
     {:reply, :ok, %{state | assigns: Map.put(state.assigns, key, value)}}
+  end
+
+  def handle_call({:put_principal, principal}, _from, state) do
+    assigns =
+      case principal do
+        %Principal{} -> Map.put(state.assigns, :mcp_principal, principal)
+        nil -> Map.delete(state.assigns, :mcp_principal)
+      end
+
+    {:reply, :ok, %{state | assigns: assigns}}
   end
 
   def handle_call({:server_request, method, params, opts}, from, state) do
@@ -559,8 +620,115 @@ defmodule Noizu.MCP.Server.Session do
       client_capabilities: state.peer.remote_capabilities || %{},
       transport: state.transport,
       cancel_flag: flag,
+      auth: ctx_auth(state),
       assigns: state.assigns
     }
+  end
+
+  # Auth precedence (PRD-2 §4.4): the per-message principal from `deliver/3`
+  # claims, then the host-plugged `:mcp_principal` assign, then the
+  # initialize-time `:auth_claims` assign re-resolved per request, then
+  # anonymous. `nil` is anonymous — there is no system fallback.
+  defp ctx_auth(%{current_auth: %Principal{} = principal}), do: principal
+  defp ctx_auth(%{assigns: %{mcp_principal: %Principal{} = principal}}), do: principal
+
+  defp ctx_auth(%{assigns: %{auth_claims: claims}} = state) when is_map(claims),
+    do: resolve_principal(state, claims)
+
+  defp ctx_auth(_state), do: nil
+
+  # Claims → principal (PRD-2 §4.5): the server's `principal:` MFA when
+  # configured (D3 — resolved per request from server opts), else the built-in
+  # claims mapping. Any mapping failure fails open to anonymous with a
+  # `Logger.warning` — the transport verifier is the authentication gate; the
+  # lib never 401s here, and never synthesizes a principal.
+  defp resolve_principal(_state, nil), do: nil
+
+  defp resolve_principal(%{server: server}, claims) when is_map(claims) do
+    case server.__mcp__(:opts)[:principal] do
+      nil ->
+        builtin_principal(claims)
+
+      {module, fun, args} when is_atom(module) and is_atom(fun) and is_list(args) ->
+        map_principal(module, fun, claims, args)
+
+      {module, fun} when is_atom(module) and is_atom(fun) ->
+        map_principal(module, fun, claims, [])
+
+      other ->
+        Logger.warning(
+          "MCP `principal:` opt must be {m, f, args} — got #{inspect(other)}; " <>
+            "treating the request as anonymous"
+        )
+
+        nil
+    end
+  end
+
+  defp resolve_principal(_state, _claims), do: nil
+
+  # §4.5a: invoked as module.fun(claims, args) — the raw claims map first, the
+  # opt args as the second argument.
+  defp map_principal(module, fun, claims, args) do
+    case apply(module, fun, [claims, args]) do
+      %Principal{} = principal ->
+        principal
+
+      {:ok, %Principal{} = principal} ->
+        principal
+
+      {:error, reason} ->
+        Logger.warning(
+          "MCP principal mapping failed (#{inspect(module)}.#{fun}/2): #{inspect(reason)} — " <>
+            "treating the request as anonymous"
+        )
+
+        nil
+
+      other ->
+        Logger.warning(
+          "MCP principal mapping returned #{inspect(other)} — expected %Principal{} or " <>
+            "{:ok, %Principal{}} (#{inspect(module)}.#{fun}/2); treating the request as anonymous"
+        )
+
+        nil
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "MCP principal mapping raised (#{inspect(module)}.#{fun}/2): #{Exception.message(e)} — " <>
+          "treating the request as anonymous"
+      )
+
+      nil
+  end
+
+  # Built-in mapping when no `principal:` opt is configured, so per-request
+  # claims flow without host code. Claims lacking "sub" are anonymous — never
+  # a synthetic subject.
+  defp builtin_principal(claims) do
+    case claims["sub"] do
+      nil ->
+        nil
+
+      subject ->
+        scopes =
+          case claims["scope"] do
+            scope when is_binary(scope) ->
+              scope |> String.split(~r/\s+/, trim: true) |> MapSet.new()
+
+            _ ->
+              MapSet.new()
+          end
+
+        %Principal{
+          subject: subject,
+          authenticator: :claims,
+          token_id: nil,
+          claims: claims,
+          granted_scopes: scopes
+        }
+    end
   end
 
   defp progress_token(params) do
