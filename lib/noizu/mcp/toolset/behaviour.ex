@@ -113,20 +113,28 @@ defmodule Noizu.MCP.Toolset.Behaviour do
 
   @doc """
   Default catalog: identity materialization of `__toolset_specs__/3` (the
-  `Overrides` merge with NO overrides). Nothing is skipped here — hidden tools
-  come back as `visible: false` entries; wire filtering happens in the callers.
+  `Overrides` merge with NO overrides), then the ACL pass
+  (`Noizu.MCP.ACL.Provider.filter_entries/4`) — enforcement inside the
+  default, so no caller can obtain an ungoverned listing (D1, PRD-2). Nothing
+  is skipped here — hidden tools come back as `visible: false` entries; wire
+  filtering happens in the callers.
   """
   def catalog(toolset, ctx, opts) do
     instrument(toolset, :catalog, fn ->
       case materialized(toolset, ctx, opts) do
-        {:ok, pairs, version} -> {:ok, Enum.map(pairs, &elem(&1, 0)), version}
-        {:error, %Error{}} = error -> error
+        {:ok, pairs, version} ->
+          {:ok, acl_entries(pairs, toolset, ctx, opts), version}
+
+        {:error, %Error{}} = error ->
+          error
       end
     end)
   end
 
   @doc """
-  Default resolve: exact canonical-name match over the effective entries.
+  Default resolve: exact canonical-name match over the effective entries
+  AFTER the ACL pass — a denied tool resolves to the identical invalid_params
+  error as an absent one (existence-hiding), exactly like a hidden tool.
   Absent and non-callable tools return the identical invalid_params error —
   no discovery oracle for hidden tools. Dotted-name canonicalization is host
   domain, not lib.
@@ -135,8 +143,13 @@ defmodule Noizu.MCP.Toolset.Behaviour do
     instrument(toolset, :resolve, fn ->
       case materialized(toolset, ctx, opts) do
         {:ok, pairs, version} ->
-          case Enum.find(pairs, fn {entry, _spec} -> entry.definition.name == name end) do
-            {%Entry{callable: true} = entry, spec} ->
+          entries = acl_entries(pairs, toolset, ctx, opts)
+
+          case Enum.find(entries, fn entry -> entry.definition.name == name end) do
+            %Entry{callable: true} = entry ->
+              {_entry, spec} =
+                Enum.find(pairs, fn {entry, _spec} -> entry.definition.name == name end)
+
               {:ok,
                %Effective{
                  name: entry.definition.name,
@@ -186,12 +199,13 @@ defmodule Noizu.MCP.Toolset.Behaviour do
     end
   end
 
-  @doc "Default permissions: per-tool `{name, visible, callable}` projection over the effective entries."
+  @doc "Default permissions: per-tool `{name, visible, callable}` projection over the effective entries — POST-ACL (PRD-2 FR-2.9), so hosts can audit denied tools here."
   def permissions(toolset, ctx, opts) do
     case materialized(toolset, ctx, opts) do
       {:ok, pairs, version} ->
         tools =
-          Enum.map(pairs, fn {entry, _spec} ->
+          acl_entries(pairs, toolset, ctx, opts)
+          |> Enum.map(fn entry ->
             %{name: entry.definition.name, visible: entry.visible, callable: entry.callable}
           end)
 
@@ -233,6 +247,15 @@ defmodule Noizu.MCP.Toolset.Behaviour do
   end
 
   # ── internals ─────────────────────────────────────────────────────────────
+
+  # The ACL enforcement pass over freshly-materialized entries (PRD-2): with
+  # no provider configured this is identity (inert, back-compat); with one, it
+  # governs listing AND dispatch (denied ⇒ visible/callable false). Called
+  # inside the defaults so the shim paths are governed too (never decorative).
+  defp acl_entries(pairs, toolset, ctx, opts) do
+    entries = Enum.map(pairs, &elem(&1, 0))
+    Noizu.MCP.ACL.Provider.filter_entries(entries, toolset, ctx, opts)
+  end
 
   # Materialize the spec set once and pair each effective spec with its entry,
   # so catalog/resolve/permissions share one resolution path (D1).

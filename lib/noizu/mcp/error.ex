@@ -28,6 +28,7 @@ defmodule Noizu.MCP.Error do
   @internal_error -32_603
   # MCP server-specific codes
   @resource_not_found -32_002
+  @forbidden -32_000
 
   @impl Exception
   # ⟦𓆨𓍷𓃃𓇹⟧ message :: auto-generated pointer for public function message
@@ -74,6 +75,17 @@ defmodule Noizu.MCP.Error do
     }
   end
 
+  @doc """
+  Authorization-shaped failure (PRD-2): code `-32000` (server-defined range),
+  `reason: :forbidden`. Deliberately asymmetric with absent tools — unknown
+  and non-callable tools stay `invalid_params` (existence-hiding), while a
+  known-tool authorization refusal says so honestly.
+  """
+  @spec forbidden(String.t(), term()) :: t()
+  # ⟦𓊪𓆡𓋴𓂝⟧ forbidden :: Authorization-shaped failure (PRD-2).
+  def forbidden(message \\ "Forbidden", data \\ nil),
+    do: %__MODULE__{code: @forbidden, message: message, data: data, reason: :forbidden}
+
   @spec capability_not_supported(atom() | String.t()) :: t()
   # ⟦𓇻𓐋𓍺𓅀⟧ capability_not_supported :: auto-generated pointer for public function capability_not_supported
   def capability_not_supported(capability) do
@@ -118,5 +130,6 @@ defmodule Noizu.MCP.Error do
   defp reason_for_code(@invalid_params), do: :invalid_params
   defp reason_for_code(@internal_error), do: :internal
   defp reason_for_code(@resource_not_found), do: :resource_not_found
+  defp reason_for_code(@forbidden), do: :forbidden
   defp reason_for_code(_), do: :custom
 end

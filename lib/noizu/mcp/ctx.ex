@@ -3,9 +3,11 @@ defmodule Noizu.MCP.Ctx do
   Per-request handler context.
 
   Every server handler receives a `%Noizu.MCP.Ctx{}` carrying session identity,
-  the negotiated protocol version, client info/capabilities, and `assigns`. Use
-  it to report progress, emit MCP log messages, and check for cooperative
-  cancellation.
+  the negotiated protocol version, client info/capabilities, `assigns`, and the
+  request's `auth` — a `%Noizu.MCP.Auth.Principal{}` or `nil`. `nil` is
+  anonymous, and it is the ONLY anonymous identity: there is no system or
+  trusted fallback. Handlers must treat `nil` and `%Principal{}` uniformly and
+  never infer elevation from anything else.
 
   Handlers do not return an updated context — handler invocations run
   concurrently per session. `assign/3` is local to the current invocation; use
@@ -26,6 +28,7 @@ defmodule Noizu.MCP.Ctx do
           client_capabilities: map(),
           transport: atom(),
           cancel_flag: :atomics.atomics_ref() | nil,
+          auth: Noizu.MCP.Auth.Principal.t() | nil,
           assigns: map()
         }
 
@@ -38,6 +41,7 @@ defmodule Noizu.MCP.Ctx do
     :protocol_version,
     :client_info,
     :cancel_flag,
+    :auth,
     client_capabilities: %{},
     transport: :test,
     assigns: %{}
@@ -186,7 +190,9 @@ defmodule Noizu.MCP.Ctx do
   @spec to_context(t(), term()) :: record(:context)
   # ⟦𓈁𓎵𓋯𓃵⟧ to_context :: Build a `Noizu.Context` record from this MCP context, stashing the full
   def to_context(%__MODULE__{} = ctx, caller \\ nil) do
-    base = if caller, do: Noizu.Context.dummy_for_user(caller) |> elem(1), else: Noizu.Context.system()
+    base =
+      if caller, do: Noizu.Context.dummy_for_user(caller) |> elem(1), else: Noizu.Context.system()
+
     Noizu.Context.with_option(base, :mcp_ctx, ctx)
   end
 

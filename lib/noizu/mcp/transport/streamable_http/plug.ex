@@ -351,7 +351,7 @@ if Code.ensure_loaded?(Plug.Conn) do
 
           :one_way ->
             with {:ok, session} <- find_session(conn, opts.server) do
-              Session.deliver(session, Jason.encode!(body))
+              Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
               send_resp(conn, 202, "")
             else
               {:error, conn_response} -> conn_response
@@ -391,9 +391,21 @@ if Code.ensure_loaded?(Plug.Conn) do
           nil -> %{}
         end
         |> then(fn assigns ->
-          case conn.assigns[:mcp_auth_claims] do
+          # Initialize folds the verified claims into base assigns (back-compat:
+          # handlers read `ctx.assigns[:auth_claims]`); build_ctx re-resolves them
+          # per request through the principal mapping, and later requests carry
+          # their own per-request claims via deliver/3.
+          assigns =
+            case conn.assigns[:mcp_auth_claims] do
+              nil -> assigns
+              claims -> Map.put(assigns, :auth_claims, claims)
+            end
+
+          # PRD-2 §4.5b: a plug seam may assign a READY principal — it wins over
+          # claims mapping in build_ctx's precedence.
+          case conn.assigns[:mcp_principal] do
             nil -> assigns
-            claims -> Map.put(assigns, :auth_claims, claims)
+            principal -> Map.put(assigns, :mcp_principal, principal)
           end
         end)
 
@@ -408,7 +420,7 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       registry = Module.concat(server, Registry)
       Registry.register(registry, {:http_stream, session_id, id}, nil)
-      Session.deliver(session, Jason.encode!(body))
+      Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
 
       receive do
         {:mcp_http, binary} ->
@@ -431,7 +443,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       monitor = Process.monitor(session)
       Registry.register(registry, {:http_stream, session_id, id}, nil)
-      Session.deliver(session, Jason.encode!(body))
+      # Per-request claims (PRD-2): each request forwards THIS request's
+      # verified claims, so a token refresh mid-session is visible on the
+      # next request instead of being frozen at initialize.
+      Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
 
       deadline = System.monotonic_time(:millisecond) + opts.request_timeout
       stream_request(conn, opts, id, monitor, deadline, false)
