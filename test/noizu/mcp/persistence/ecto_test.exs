@@ -67,6 +67,13 @@ if db_url do
 
     describe "D4 boot gate (AC-4.8)" do
       test "boot RAISES while the tables are missing" do
+        # A sibling test (or an earlier seeded order) may have booted the
+        # WORKING server — tear it down so this boot attempt is really fresh.
+        if pid = Process.whereis(EctoBootServer) do
+          Process.exit(pid, :kill)
+          wait_until(fn -> is_nil(Process.whereis(EctoBootServer)) end)
+        end
+
         PersistenceDB.drop_lib_tables!(TestRepo)
 
         parent = self()
