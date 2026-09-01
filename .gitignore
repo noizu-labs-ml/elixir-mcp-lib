@@ -26,3 +26,7 @@ noizu_mcp-*.tar
 /demo/vfs_demo_server/_build/
 /demo/vfs_demo_server/deps/
 
+# Mount daemon is a self-contained mix project with its own deps/_build.
+/daemon/mcp_mount/_build/
+/daemon/mcp_mount/deps/
+

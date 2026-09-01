@@ -456,6 +456,40 @@ the `vfs/auth` frame — the upgrade handshake is what gates the socket.
 > containers can share one live tree. The WS event stream already provides the
 > live semantics; NFS export is packaging, not protocol.
 
+### Mount daemon
+
+[`daemon/mcp_mount`](daemon/mcp_mount) is the client side of the same protocol:
+`mcp-mount` connects to a VFS WebSocket endpoint, materializes the tree as
+**real local files** (grep/cat/tail -f/pipes just work), then keeps both sides
+in sync — subscribed `vfs/event` changes apply to the files live, and a
+filesystem watcher pushes local edits back as `vfs/write`/`vfs/create`
+(conflicting edits are saved aside as `<path>.conflict-<ISO-timestamp>`).
+`--ro` disables the watcher and never pushes. `.mcp-mount/manifest.json`
+tracks versions; reconnects are a version-compare resync (no event log).
+
+```sh
+cd daemon/mcp_mount
+mix escript.build
+./mcp-mount --url ws://127.0.0.1:4000/vfs --token demo-token --mount ~/tmp/mcp [--ro]
+mix test    # unit (FakeConn) + integration (in-repo bandit WS fixture)
+```
+
+| Flag | Meaning |
+|---|---|
+| `--url` | VFS WebSocket endpoint (`ws://`/`wss://`, path usually `/vfs`) |
+| `--token` | bearer token (falls back to `MCP_MOUNT_TOKEN`); rides the WS upgrade request |
+| `--mount` | local directory to materialize the tree into (created if missing) |
+| `--ro` | read-only: no watcher, never pushes local edits |
+
+It is a fully self-contained mix project (own `deps`/`_build`/`mix.lock`,
+escript target) that speaks the v2 JSON wire protocol directly — it does not
+link the parent library and is excluded from the hex package; the lib's
+`mix test` does not recurse into it. Platform notes: on macOS an escript build
+degrades to pull-only (`file_system`'s native `mac_listener` can't be embedded
+in the archive; run from `mix run`/a release for full write-back); Linux
+escripts have full write-back; Windows is planned. The intent is to possibly
+break this out into its own signed-binary repo in the future.
+
 ## Consuming servers (client)
 
 ```elixir
