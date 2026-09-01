@@ -16,6 +16,10 @@ and client** — targeting spec revision **2025-11-25** (negotiates down to
   can implement by hand
 - 🔌 **Transports**: stdio and Streamable HTTP (Plug — mount in Phoenix or run
   standalone on Bandit) on both the server and the client side
+- 📁 **VFS filesystem surface** — file-shaped backends (behaviour + DSL +
+  conformance battery), unix-socket & WebSocket transports with live change
+  events, a `/etc/dev` control tree, and an `mcp_fs_search` grep tool (see the
+  VFS section below)
 - ↔️ **Full bidirectionality**: server handlers can `sample`, `elicit`, and
   `list_roots` against the connected client mid-call
 - 🔐 **OAuth 2.1**: resource-server enforcement (`TokenVerifier`,
@@ -200,12 +204,59 @@ DELETE teardown are handled per spec. Protect it as an OAuth 2.1 resource
 server with `auth: [verifier: {MyVerifier, []}, resource_metadata: "..."]`
 (see `Noizu.MCP.Auth.TokenVerifier`).
 
-## VFS socket transport
+## VFS — the filesystem surface
 
-For filesystem-shaped access (the MCP-FUSE stack), a server with a registered
-VFS backend can expose the `vfs/*` operation family over a local unix-domain
-socket — JSON-RPC 2.0 with a 4-byte big-endian length prefix per frame, and a
-`vfs/auth` API-key handshake instead of `initialize`:
+The VFS (virtual filesystem) layer makes MCP data browsable as files: a
+behaviour + DSL for file-shaped backends, a generation-stamped cache, two
+transports (unix socket + WebSocket with live change events), a `/etc/dev`
+control-tree composer, and an `mcp_fs_search` grep tool. It is the substrate
+of the MCP-FUSE mounter stack.
+
+### Backends (behaviour + DSL)
+
+A backend implements `Noizu.MCP.VFS` — `use Noizu.MCP.VFS` and write the
+callbacks:
+
+| Callback | Required | Contract |
+|----------|----------|----------|
+| `stat/2` | yes | `%VFS{}` node for `path` (or `:enoent`) |
+| `list/3` | yes | children of `path`, paginated (`{:ok, entries, next_cursor}`) |
+| `read/2` | yes | `{:ok, content, version}` for a file |
+| `write/3` | optional | overwrite (default `:enosys` → read-only backend) |
+| `create/3` | optional | create file (`binary`) or dir (`:dir`) |
+| `remove/2` | optional | remove file or empty dir |
+| `search/3` | optional | grep-style line matches under a root (default `:enosys`) |
+| `xattr/2` | optional | extended attributes (default `{:ok, %{}}`) |
+
+Match shapes are `%{path, line, text}`; errnos are plain atoms (`:enoent`,
+`:eacces`, …) mapped to wire codes by the table below. A server registers one
+or more backends with the `vfs MyBackend` DSL macro — the first registration
+backs the `vfs/*` operations; *all* registrations are searched by
+`mcp_fs_search`. Conformance is one macro away — the battery exercises any
+backend against the full operation + errno contract:
+
+```elixir
+use Noizu.MCP.VFS.Conformance,
+  backend: MyApp.VFS.Backend,
+  seed: {MyApp.VFS.Backend, :seed}
+```
+
+### Cache & generations
+
+`Noizu.MCP.VFS.Cache` caches reads/stats/lists per backend with a TTL and
+stamps a monotonically increasing **generation** into every served version —
+each successful write/create/remove bumps the backend's generation first, so
+stale caches and mounter echoes are detected by a plain integer compare
+(`version` going backwards or repeating means resync). `Cache.purge/1`,
+`Cache.generation/1`, and `Cache.bump_generation/1` are public; the control
+tree below exposes per-backend stats and a flush node.
+
+### Socket transport (unix, M2)
+
+For filesystem-shaped access, a server with a registered VFS backend can
+expose the `vfs/*` operation family over a local unix-domain socket — JSON-RPC
+2.0 with a 4-byte big-endian length prefix per frame, and a `vfs/auth` API-key
+handshake instead of `initialize`:
 
 ```elixir
 children = [
@@ -224,12 +275,10 @@ it is validated by the configured token verifier and the resulting claims are
 bound to the connection's context (failed handshakes close the connection).
 Operations `vfs/stat`, `vfs/list`, `vfs/read`, `vfs/write`, `vfs/create`,
 `vfs/remove`, `vfs/search`, `vfs/xattr` run through the same feature layer as
-MCP-native requests; VFS errnos map to JSON-RPC codes `-32040..-32046`
-(`:enoent` → `-32002`, `:eio` → `-32048`) with `error.data.errno_atom` naming
-the errno. The
-socket is created mode `0600`, stale socket files are unlinked at startup and
-removed on shutdown. See `Noizu.MCP.Transport.VFSSocket` for the full wire
-contract and `Noizu.MCP.Transport.VFSClient` for a ready-made client:
+MCP-native requests. The socket is created mode `0600`, stale socket files are
+unlinked at startup and removed on shutdown. See
+`Noizu.MCP.Transport.VFSSocket` for the full wire contract and
+`Noizu.MCP.Transport.VFSClient` for a ready-made client:
 
 ```elixir
 {:ok, client} = Noizu.MCP.Transport.VFSClient.connect("/run/mcp/vfs.sock")
@@ -238,10 +287,12 @@ contract and `Noizu.MCP.Transport.VFSClient` for a ready-made client:
   Noizu.MCP.Transport.VFSClient.read(client, "/etc/dev/flag")
 ```
 
-## VFS WebSocket transport
+### WebSocket transport + live events (W1)
+
 The TCP-addressable sibling of the socket transport: a bandit-hosted Plug that
 upgrades `GET /vfs` into a WebSocket speaking the same `vfs/*` operations over
-JSON text frames (envelope `v: 2`), plus **live change events**:
+JSON text frames (envelope `v: 2`), plus subscribe/unsubscribe/ping and
+server-pushed **change events**:
 
 ```elixir
 children = [
@@ -260,24 +311,83 @@ Streamable HTTP plug; 401 before the socket exists) and then the same
 are `{"v": 2, "id": 1, "method": "vfs/read", "params": {"path": "/a.txt"}}` →
 `{"v": 2, "id": 1, "result": {"content": "...", "version": 3}}`.
 
+### Change pubsub
+
 Mutations are published through `Noizu.MCP.Server.VFSPubSub` (start it in your
 supervision tree; the write path silently skips publishing when it is not
-running). Connections subscribe with `vfs/subscribe {"paths": ["/docs"],
-"depth": 1}` and receive metadata-only, burst-coalesced (50 ms per path)
-events for the watched subtrees:
+running). Over WS, connections subscribe with
+`vfs/subscribe {"paths": ["/docs"], "depth": 1}` and receive metadata-only,
+burst-coalesced (50 ms per {backend, path}) events for the watched subtrees:
 
 ```json
 {"v": 2, "type": "vfs/event", "seq": 1, "op": "write", "path": "/docs/a.md",
  "version": 12, "by": "alice", "at": 1788241952601}
 ```
 
-Pull the content back with `vfs/read` (compare `version` to skip your own
-echoes); `vfs/unsubscribe` stops delivery, `vfs/ping` round-trips, and the
-server sends WebSocket pings every 30 s (drop after two misses;
-`:keepalive_ms` overrides). Watch cap per connection is 10 000 → `-32047`.
-See `Noizu.MCP.Transport.VFSWS` and `Noizu.MCP.Server.VFSPubSub`.
+Semantics: subtree watches deliver on writes to the watched path **and any
+descendant** (`depth` bounds how many levels below the watch path still match,
+`:infinity` for unlimited); `seq` is per-connection monotonic; `by` is the
+authenticated identity; events carry no content — pull with `vfs/read` and
+compare `version` to skip your own echoes. `vfs/unsubscribe` stops delivery,
+`vfs/ping` round-trips, and the server sends WebSocket pings every 30 s (drop
+after two misses; `:keepalive_ms` overrides). Watch cap per connection is
+10 000 → `-32047` (`:ewouldwatch`); dead connections are unwatched
+automatically. The same API is callable in-process: `VFSPubSub.watch/3`,
+`unwatch/2`, `watch_count/1`, and `publish/5` (invoked for you by the write
+hook in `Features.VFS`). See `Noizu.MCP.Transport.VFSWS` and
+`Noizu.MCP.Server.VFSPubSub`.
 
-## The /etc/dev control tree
+### Errno wire table
+
+Both transports (and `mcp_fs_search`) map backend errnos through
+`Noizu.MCP.Server.Features.VFS.errno_error/1`; the originating atom rides as
+`error.data.errno_atom`:
+
+| errno | code | wire error |
+|-------|------|------------|
+| `:enoent` | `-32002` | `resource_not_found` |
+| `:eacces` | `-32040` | custom |
+| `:eexist` | `-32041` | custom |
+| `:erofs` | `-32042` | custom (read-only kill-switch) |
+| `:eisdir` | `-32043` | custom |
+| `:enotdir` | `-32044` | custom |
+| `:enotempty` | `-32045` | custom |
+| `:enosys` | `-32046` | custom (optional callback not implemented) |
+| — | `-32047` | watch cap exceeded (`:ewouldwatch`, WS only) |
+| `:eio` | `-32048` | custom (I/O error, e.g. malformed buffered writes) |
+
+Anything else falls through to a plain internal error.
+
+### mcp_fs_search
+
+The MCP-tool face of the grep metaphor: register
+`Noizu.MCP.Server.Tools.McpFsSearch` on a server and agents can search **every
+registered backend at once** from any transport — no mounting required:
+
+```elixir
+defmodule MyApp.MCP do
+  use Noizu.MCP.Server, name: "myapp", version: "1.0.0"
+
+  vfs MyApp.VFS.PM          # first registration backs the vfs/* operations
+  vfs MyApp.VFS.Wiki        # additional backends are searched too
+  tool Noizu.MCP.Server.Tools.McpFsSearch
+end
+```
+
+Arguments: `query` (required substring), `root` (subtree root, default `"/"`),
+`backend` (optional filter on the full or short module name, case-insensitive —
+an unknown name is a `-32002`, not an empty result), and `cursor`
+(pagination). Backends without `search/3` are skipped; matches come back
+merged in registration order, each tagged with its `backend`:
+
+```elixir
+%{"matches" => [%{path: "/docs/a.md", line: 1, text: "alpha",
+                 backend: "MyApp.VFS.PM"}, ...], "nextCursor" => "..."}
+```
+
+Read-only by definition, so it keeps working under `vfs_readonly: true`.
+
+### The /etc/dev control tree
 
 `Noizu.MCP.VFS.Control` wraps an existing VFS backend and mounts a
 introspection-and-control tree at `/etc/dev` — tools, runtime state, cache
