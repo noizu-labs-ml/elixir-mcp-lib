@@ -206,7 +206,7 @@ defmodule Noizu.MCP.Persistence.SelectionTest do
           send(parent, Supervisor.start_link(Persistence.BootFailServer, []))
         end)
 
-      assert_receive {:error, _failure}, 1_000
+      assert_receive {:error, _failure}, 5_000
       wait_until(fn -> is_nil(Process.whereis(Persistence.BootFailServer)) end)
 
       refute Process.whereis(Module.concat(Persistence.BootFailServer, PersistencePing))

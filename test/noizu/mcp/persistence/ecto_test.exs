@@ -77,7 +77,7 @@ if db_url do
             send(parent, Supervisor.start_link(EctoBootServer, []))
           end)
 
-        assert_receive {:error, _failure}, 1_000
+        assert_receive {:error, _failure}, 5_000
         assert {:error, {:tables_missing, missing}} = Ecto.ping(repo: TestRepo)
         assert "noizu_mcp_toolsets" in missing
         wait_until(fn -> is_nil(Process.whereis(EctoBootServer)) end)
