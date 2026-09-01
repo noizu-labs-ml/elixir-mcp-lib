@@ -20,6 +20,11 @@ defmodule Noizu.MCP.Server.Tool.Fields do
     # `opts[:description]`, when present, is normalized to a `String.t()` or a
     # `Noizu.MCP.Description.t()` at build time so malformed variant lists fail
     # at compile time and rendering is a plain `Description.resolve/2`.
+    #
+    # `opts[:wire_key]` (toolset architecture) renames the field on the wire
+    # only: cast plans look incoming args up under the wire key but emit the
+    # coerced value under the ORIGINAL field atom, so handlers never see
+    # renamed keys. No new struct field — the wire key lives in opts.
     defstruct [:name, :type, :opts, children: nil]
   end
 
@@ -243,7 +248,12 @@ defmodule Noizu.MCP.Server.Tool.Fields do
 
     case check_type(name, type, opts, children) do
       :ok ->
-        %Field{name: name, type: type, opts: normalize_field_description(opts, name), children: children}
+        %Field{
+          name: name,
+          type: type,
+          opts: normalize_field_description(opts, name),
+          children: children
+        }
 
       {:error, message} ->
         raise ArgumentError, message
@@ -300,7 +310,9 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   def to_json_schema(fields), do: to_json_schema(fields, RenderCtx.default())
 
   def to_json_schema(fields, ctx) do
-    properties = Map.new(fields, fn field -> {to_string(field.name), field_schema(field, ctx)} end)
+    properties =
+      Map.new(fields, fn field -> {to_string(field.name), field_schema(field, ctx)} end)
+
     required = for field <- fields, field.opts[:required], do: to_string(field.name)
 
     %{"type" => "object", "properties" => properties}
@@ -408,9 +420,20 @@ defmodule Noizu.MCP.Server.Tool.Fields do
         key: to_string(field.name),
         name: field.name,
         type: cast_type(field),
-        default: Keyword.get(field.opts, :default)
+        default: Keyword.get(field.opts, :default),
+        wire_key: wire_key(field)
       }
     end)
+  end
+
+  # Wire-only rename (toolset architecture): `opts[:wire_key]` moves where the
+  # cast looks the argument up, never what the handler receives.
+  defp wire_key(%Field{opts: opts}) do
+    case Keyword.get(opts, :wire_key) do
+      nil -> nil
+      key when is_binary(key) -> key
+      key when is_atom(key) -> to_string(key)
+    end
   end
 
   defp cast_type(%Field{type: :enum, opts: opts}), do: {:enum, opts[:values]}
@@ -426,7 +449,7 @@ defmodule Noizu.MCP.Server.Tool.Fields do
   # ⟦𓏔𓍇𓅳𓉯⟧ cast :: Apply a cast plan to validated string-keyed arguments.
   def cast(plan, args) when is_list(plan) and is_map(args) do
     Enum.reduce(plan, %{}, fn entry, acc ->
-      case Map.fetch(args, entry.key) do
+      case Map.fetch(args, lookup_key(entry)) do
         {:ok, value} ->
           Map.put(acc, entry.name, cast_value(entry.type, value))
 
@@ -438,6 +461,13 @@ defmodule Noizu.MCP.Server.Tool.Fields do
       end
     end)
   end
+
+  # Input lookup resolves under the entry's `wire_key` when one is set
+  # (wire-only rename); the coerced value is always emitted under the original
+  # field atom. Entries without a wire key (all pre-toolset plans) behave as
+  # before.
+  defp lookup_key(%{wire_key: wire_key}) when is_binary(wire_key), do: wire_key
+  defp lookup_key(%{key: key}), do: key
 
   defp cast_value({:enum, values}, value) do
     Enum.find(values, value, fn atom -> to_string(atom) == value end)
