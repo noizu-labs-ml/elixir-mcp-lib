@@ -238,7 +238,6 @@ contract and `Noizu.MCP.Transport.VFSClient` for a ready-made client:
 ```
 
 ## VFS WebSocket transport
-
 The TCP-addressable sibling of the socket transport: a bandit-hosted Plug that
 upgrades `GET /vfs` into a WebSocket speaking the same `vfs/*` operations over
 JSON text frames (envelope `v: 2`), plus **live change events**:
@@ -276,6 +275,46 @@ echoes); `vfs/unsubscribe` stops delivery, `vfs/ping` round-trips, and the
 server sends WebSocket pings every 30 s (drop after two misses;
 `:keepalive_ms` overrides). Watch cap per connection is 10 000 → `-32047`.
 See `Noizu.MCP.Transport.VFSWS` and `Noizu.MCP.Server.VFSPubSub`.
+
+## The /etc/dev control tree
+
+`Noizu.MCP.VFS.Control` wraps an existing VFS backend and mounts a
+introspection-and-control tree at `/etc/dev` — tools, runtime state, cache
+management, and feature toggles, all through the ordinary filesystem
+operations (so the FUSE mount, transports, and permission layers apply
+unchanged):
+
+```elixir
+defmodule MyApp.MCP.FS do
+  use Noizu.MCP.VFS.Control,
+    server: MyApp.MCP,          # the MCP server module
+    real: MyApp.VFS.Backend,    # your existing backend (omit for control-only)
+    # optional gate hook — its verdict is final, destructive or not:
+    tool_gate: {MyApp.Auth, :vfs_tool_gate, ["vfs"]},
+    # optional extra toggles (get/set as {m, f, prefix_args}):
+    toggles: [%{name: "motd", get: {Cfg, :motd, []}, set: {Cfg, :set_motd, []}}]
+end
+```
+
+| Node | R | W | Notes |
+|------|---|---|-------|
+| `/etc/dev/tools/<tool>` | schema JSON | `{"args": {...}}` | invoke; result buffered per session, next read returns it |
+| `/etc/dev/runtime/status` | JSON | – | server name/version, uptime, capabilities, transports, session count |
+| `/etc/dev/runtime/sessions/` | ids | – | one JSON node per live session |
+| `/etc/dev/cache/stats` | JSON | – | per-backend generations and entry counts |
+| `/etc/dev/cache/flush` | hint | write | write bumps every cache generation, answers `ok` |
+| `/etc/dev/config/<toggle>` | value | JSON value | `trace`, `cache_enabled` seeded; registry for more |
+| *(every other path)* | | | delegated to `real:` unchanged |
+
+Invocation safety, in order: the `tool_gate` hook (when set) decides; else a
+`vfs_tool_allowlist` claim on the connection; else destructive tools
+(`destructive_hint`) are refused with `:eacces` — fail closed. Writes are also
+refused with `:erofs` server-wide when the server sets `vfs_readonly: true`.
+
+Security notes: invoke goes through `server.handle_call_tool/3`, so authz/PDP
+wrappers and tool middleware still apply; keep the VFS socket mode `0600` and
+behind its `vfs/auth` handshake, and remember a FUSE mount of the control tree
+is a local-privilege surface — mount it only for trusted users.
 
 ## Consuming servers (client)
 
