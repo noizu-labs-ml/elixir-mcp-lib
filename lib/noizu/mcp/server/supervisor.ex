@@ -42,6 +42,12 @@ defmodule Noizu.MCP.Server.Supervisor do
       :stdio ->
         [{Noizu.MCP.Transport.Stdio, Keyword.put(opts, :server, server)}]
 
+      {:vfs_socket, socket_opts} when is_list(socket_opts) ->
+        [{Noizu.MCP.Transport.VFSSocket, Keyword.put(socket_opts, :server, server)}]
+
+      :vfs_socket ->
+        [{Noizu.MCP.Transport.VFSSocket, [server: server]}]
+
       other ->
         raise ArgumentError, "unknown MCP server transport: #{inspect(other)}"
     end

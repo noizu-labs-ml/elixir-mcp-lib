@@ -200,6 +200,43 @@ DELETE teardown are handled per spec. Protect it as an OAuth 2.1 resource
 server with `auth: [verifier: {MyVerifier, []}, resource_metadata: "..."]`
 (see `Noizu.MCP.Auth.TokenVerifier`).
 
+## VFS socket transport
+
+For filesystem-shaped access (the MCP-FUSE stack), a server with a registered
+VFS backend can expose the `vfs/*` operation family over a local unix-domain
+socket — JSON-RPC 2.0 with a 4-byte big-endian length prefix per frame, and a
+`vfs/auth` API-key handshake instead of `initialize`:
+
+```elixir
+children = [
+  {MyApp.MCP,
+   transport:
+     {:vfs_socket,
+      socket_path: "/run/mcp/vfs.sock",
+      auth: [verifier: {Noizu.MCP.Auth.ApiKeyVerifier, keys: [{key, claims_map}]}],
+      # optional per-connection assigns (e.g. backend state), from the auth claims:
+      context: {MyApp.MCP, :vfs_assigns}}}
+]
+```
+
+The first frame on a connection must be `vfs/auth` with `{"api_key": "..."}`;
+it is validated by the configured token verifier and the resulting claims are
+bound to the connection's context (failed handshakes close the connection).
+Operations `vfs/stat`, `vfs/list`, `vfs/read`, `vfs/write`, `vfs/create`,
+`vfs/remove`, `vfs/search`, `vfs/xattr` run through the same feature layer as
+MCP-native requests; VFS errnos map to JSON-RPC codes `-32040..-32046`
+(`:enoent` → `-32002`) with `error.data.errno_atom` naming the errno. The
+socket is created mode `0600`, stale socket files are unlinked at startup and
+removed on shutdown. See `Noizu.MCP.Transport.VFSSocket` for the full wire
+contract and `Noizu.MCP.Transport.VFSClient` for a ready-made client:
+
+```elixir
+{:ok, client} = Noizu.MCP.Transport.VFSClient.connect("/run/mcp/vfs.sock")
+{:ok, _} = Noizu.MCP.Transport.VFSClient.auth(client, key)
+{:ok, %{"content" => content, "version" => v}} =
+  Noizu.MCP.Transport.VFSClient.read(client, "/etc/dev/flag")
+```
+
 ## Consuming servers (client)
 
 ```elixir

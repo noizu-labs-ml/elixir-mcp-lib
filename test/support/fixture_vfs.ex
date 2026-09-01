@@ -36,7 +36,9 @@ defmodule Noizu.MCP.VFS.Fixture.Memory do
 
   @doc "A ctx carrying a tree built from `spec` (`%{path => :dir | binary}`)."
   def seed(spec) when is_map(spec) do
-    tid = :ets.new(:mcp_vfs_fixture_tree, [:set, :private])
+    # :public — handler processes (transport connections, tasks) are not the
+    # seeding process, and the tid travels via ctx.assigns.
+    tid = :ets.new(:mcp_vfs_fixture_tree, [:set, :public])
 
     state =
       Enum.reduce(spec, {%{}, %{}}, fn
