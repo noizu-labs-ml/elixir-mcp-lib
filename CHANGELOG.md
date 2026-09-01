@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-09-02
+
+The 0.3.0 toolset architecture series (PRD-1..4): toolsets become first-class,
+per-caller participants with durable lib-owned state. Interfaces are FROZEN as
+of this release — post-freeze changes require an ADR amendment and a 0.4.0
+target, never a 0.3.0 re-publish.
+
+### Added
+
+- **Toolset protocol + behaviour** (PRD-1): `Noizu.MCP.Toolset` — explicit
+  participation (fail-closed `Any`; no `@derive`), `%Toolset.Entry{}` /
+  `%Toolset.Effective{}` / `%Toolset.Spec{}` shapes, a closed override
+  vocabulary (`Noizu.MCP.Toolset.Override`), stable catalog/compose version
+  fingerprints, and a dispatch shim that routes through the same defaults.
+
+- **Principal + ACL provider seam** (PRD-2): `%Noizu.MCP.Auth.Principal{}` is
+  the typed request identity (host-owned; `nil` is anonymous — the library
+  never synthesizes a system principal). `Noizu.MCP.ACL.Provider` is the
+  policy seam — `use Noizu.MCP.Server, acl: Provider | {Provider, opts}` —
+  with `check/5` (`:allow`/`:deny`, no third verdict), optional batched
+  `check_all/5`, `supported_kinds/0` (ungoverned kinds RAISE — fail-closed),
+  and provider crashes denying the whole set with `[:noizu_mcp, :acl, :error]`
+  telemetry while the server stays healthy. Enforcement lives inside the
+  behaviour defaults, so ACL is never decorative.
+
+- **Custom toolsets + the weighted merge engine** (PRD-3):
+  `%Noizu.MCP.Toolset.Custom{}` composes per caller through ONE pipeline
+  (static → context fold → materialize): base surface + include/exclude +
+  per-tool override ops, folded against any number of
+  `%Noizu.MCP.Toolset.Layer{}` opinions by `Noizu.MCP.Toolset.Merge.fold/2`
+  (max-weight wins; equal-weight conflicts are LOUD `:weight_conflict`
+  issues). `Noizu.MCP.Toolset.Validator.compile/3` validates compositions
+  before materialization; `Noizu.MCP.Toolset.Cache` adds opt-in memoization
+  keyed on `{toolset, principal, version}`. Servers select a surface with
+  `use Noizu.MCP.Server, toolset: %Custom{} | MFA | module` — the selected
+  toolset replaces listing AND dispatch (no static bypass).
+
+- **Persistence, migrations, grant/negotiation records, Store** (PRD-4):
+  `Noizu.MCP.Persistence` — a provider behaviour over three lib-owned stores
+  (`toolsets`, `toolset_grants`, `toolset_negotiations`) with three built-in
+  providers: `Memory` (public ETS, the default), `Disabled` (the `:disabled`
+  alias — a policy of no persisted layers, skipped silently), and `Ecto`
+  (raw SQL over the lib tables; `ecto_sql` stays optional). Provider
+  selection resolves lazily per call: explicit `persistence:`/`providers:`
+  opts (the combined `providers:` form wins) > per-server resolution stashed
+  at supervisor boot > Application env READ AT CALL TIME > `:memory`.
+  `Noizu.MCP.Migrations` (+ `%ChangeSet{}`, `Noizu.MCP.Migration.Runner`)
+  ships Oban-style host migrations with a transactional
+  `noizu_mcp_schema_versions` ledger, and `Migrations.V1Toolsets` carries the
+  shipped DDL (`noizu_mcp_toolsets`, `noizu_mcp_toolset_grants`,
+  `noizu_mcp_toolset_negotiations`, `noizu_mcp_store_versions`) — an
+  Ecto-backed server whose tables are missing FAILS TO BOOT (run
+  `Runner.up` first; config errors must not boot). `%Permission.Grant{}` /
+  `%Permission.Negotiation{}` are the policy records the context pass folds
+  as weight-200 layers: grants adjust/extend (renames, ops, extra scopes)
+  and NEVER hide (visibility gating belongs to ACL at weight 300 — absence
+  of a grant is not a denial); negotiations gate scope-requiring tools with
+  a consent conversation. `Noizu.MCP.Store` is the host write facade:
+  provider write → version bump → cache invalidate → `notify_changed(:tools)`
+  fan-out (notify failures logged, never raised). Provider correctness is
+  defined by the shared conformance battery
+  (`test/support/persistence_conformance_case.ex`) — a provider claims
+  support by passing it.
+
+### Changed
+
+- **Wire delta — consent envelope:** a negotiation-gated tool stays LISTED
+  (consent flows need discovery) but resolving it now returns the honest
+  `forbidden` error, carrying `tool`, `required_scopes`, `missing`, and the
+  matched negotiation's `{id, metadata}` passthrough (elevation URIs ride
+  `metadata_overrides` onto the tool's `_meta` once consent is granted).
+  ACL-hidden/absent tools keep the identical `invalid_params` answer — a
+  consent gate is honest, an ACL denial is silent.
+
+- **Wire delta — dotted-alias retirement:** legacy dotted tool aliases are
+  no longer served on listings or dispatch; tools answer under their single
+  canonical wire name only.
+
+### Compatibility
+
+- Additive by default: hosts with no `toolset:`/`acl:`/`persistence:`
+  configuration see zero behavior change (`:memory` persistence is consulted
+  only by the context pass and only when records exist).
+- `use Noizu.MCP.Server` now validates `acl:`, `persistence:` and
+  `providers:` opts at compile time — misconfiguration fails the build, not
+  a request.
+- Hex publish is a user-run step AFTER this merge (2FA OTP); if rolled back
+  post-publish, treat 0.3.0 as immutable and ship fixes as 0.3.1.
+
 ## [0.1.5] — 2026-07-27
 
 ### Added
