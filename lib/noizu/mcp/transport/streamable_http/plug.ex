@@ -469,18 +469,34 @@ if Code.ensure_loaded?(Plug.Conn) do
 
             final? and sse? ->
               Process.demonitor(monitor, [:flush])
-              {:ok, conn} = chunk(conn, SSE.encode(binary))
-              conn
+
+              case sse_chunk(conn, SSE.encode(binary)) do
+                {:ok, conn} -> conn
+                :closed -> conn
+              end
 
             not final? and sse? ->
-              {:ok, conn} = chunk(conn, SSE.encode(binary))
-              stream_request(conn, opts, id, monitor, deadline, true)
+              case sse_chunk(conn, SSE.encode(binary)) do
+                {:ok, conn} ->
+                  stream_request(conn, opts, id, monitor, deadline, true)
+
+                :closed ->
+                  Process.demonitor(monitor, [:flush])
+                  conn
+              end
 
             true ->
               # First non-final message — upgrade to SSE.
               conn = open_sse(conn)
-              {:ok, conn} = chunk(conn, SSE.encode(binary))
-              stream_request(conn, opts, id, monitor, deadline, true)
+
+              case sse_chunk(conn, SSE.encode(binary)) do
+                {:ok, conn} ->
+                  stream_request(conn, opts, id, monitor, deadline, true)
+
+                :closed ->
+                  Process.demonitor(monitor, [:flush])
+                  conn
+              end
           end
 
         {:DOWN, ^monitor, :process, _pid, _reason} ->
@@ -496,8 +512,14 @@ if Code.ensure_loaded?(Plug.Conn) do
               send_resp(conn, 504, "Request timed out")
 
             sse? ->
-              {:ok, conn} = chunk(conn, ": keepalive\n\n")
-              stream_request(conn, opts, id, monitor, deadline, true)
+              case sse_chunk(conn, ": keepalive\n\n") do
+                {:ok, conn} ->
+                  stream_request(conn, opts, id, monitor, deadline, true)
+
+                :closed ->
+                  Process.demonitor(monitor, [:flush])
+                  conn
+              end
 
             true ->
               # No response within the grace window — commit to SSE so the
@@ -513,6 +535,24 @@ if Code.ensure_loaded?(Plug.Conn) do
       |> put_resp_content_type("text/event-stream")
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
+    end
+
+    # Streams one SSE chunk. A client that disconnected mid-stream (tab closed,
+    # client timeout during a long tool call) makes Plug return
+    # {:error, :closed} — matching bare {:ok, _} raised MatchError and crashed
+    # the request process (observed ×3 in stage logs). Report :closed so the
+    # stream loop tears down cleanly instead.
+    defp sse_chunk(conn, data) do
+      require Logger
+
+      case chunk(conn, data) do
+        {:ok, conn} ->
+          {:ok, conn}
+
+        {:error, :closed} ->
+          Logger.debug("noizu_mcp SSE stream: client closed the connection; stopping stream")
+          :closed
+      end
     end
 
     defp final_response?(binary, id) do
