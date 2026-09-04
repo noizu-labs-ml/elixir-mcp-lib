@@ -27,6 +27,14 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
       `category:`), all others are dropped from the result
     * `include_hidden` — `true` (default) to include hidden items; `false` for
       visible-only
+    * `mode` — `"protocol"` (default, flipped from `"static"` in PRD-3 §4.8)
+      enumerates through the toolset protocol instead of the raw registry —
+      effective definitions post-override, with `visible`/`callable`/`reason`
+      per entry; non-callable entries are omitted. When the server has a
+      `toolset:` opt configured, protocol mode enumerates the SELECTED
+      toolset — the catalog becomes the host-facing audit surface for
+      effective per-caller state. `"mode" => "static"` retains the raw
+      registry expansion for hosts depending on the legacy shape.
 
   ## Result
 
@@ -73,10 +81,18 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
         "type" => "boolean",
         "default" => true,
         "description" => "When true (default), include items hidden from normal listings"
+      },
+      "mode" => %{
+        "type" => "string",
+        "enum" => ["static", "protocol"],
+        "default" => "protocol",
+        "description" =>
+          "protocol: toolset-resolution path (effective definitions, visible/callable/reason per entry, honoring the server's toolset: opt); static: raw registry expansion"
       }
     }
   }
 
+  alias Noizu.MCP.{Error, Toolset}
   alias Noizu.MCP.Server.Features
   alias Noizu.MCP.Types
 
@@ -87,54 +103,92 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
     query = args["query"]
     category = args["category"]
     include_hidden = Map.get(args, "include_hidden", true)
+    mode = args["mode"] || "protocol"
     server = ctx.server
 
-    sections =
-      case type do
-        "tools" ->
-          %{"tools" => tools(server)}
+    with {:ok, tool_items} <- tools(server, ctx, mode) do
+      sections =
+        case type do
+          "tools" ->
+            %{"tools" => tool_items}
 
-        "prompts" ->
-          %{"prompts" => prompts(server)}
+          "prompts" ->
+            %{"prompts" => prompts(server)}
 
-        "resources" ->
-          %{"resources" => resources(server)}
+          "resources" ->
+            %{"resources" => resources(server)}
 
-        "resource_templates" ->
-          %{"resource_templates" => resource_templates(server)}
+          "resource_templates" ->
+            %{"resource_templates" => resource_templates(server)}
 
-        _ ->
-          %{
-            "tools" => tools(server),
-            "prompts" => prompts(server),
-            "resources" => resources(server),
-            "resource_templates" => resource_templates(server)
-          }
-      end
+          _ ->
+            %{
+              "tools" => tool_items,
+              "prompts" => prompts(server),
+              "resources" => resources(server),
+              "resource_templates" => resource_templates(server)
+            }
+        end
 
-    sections =
-      Map.new(sections, fn {key, items} ->
-        items =
-          items
-          |> then(fn items ->
-            if include_hidden, do: items, else: Enum.reject(items, & &1["hidden"])
-          end)
-          |> then(fn items ->
-            if query,
-              do: Enum.filter(items, &matches_query?(&1, String.downcase(query))),
-              else: items
-          end)
-          |> then(fn items ->
-            if category, do: Enum.filter(items, &matches_category?(&1, category)), else: items
-          end)
+      sections =
+        Map.new(sections, fn {key, items} ->
+          hidden? =
+            if key == "tools" and mode == "protocol" do
+              fn item -> item["visible"] == false end
+            else
+              fn item -> item["hidden"] == true end
+            end
 
-        {key, items}
-      end)
+          items =
+            items
+            |> then(fn items ->
+              if include_hidden, do: items, else: Enum.reject(items, hidden?)
+            end)
+            |> then(fn items ->
+              if query,
+                do: Enum.filter(items, &matches_query?(&1, String.downcase(query))),
+                else: items
+            end)
+            |> then(fn items ->
+              if category, do: Enum.filter(items, &matches_category?(&1, category)), else: items
+            end)
 
-    {:ok, sections}
+          {key, items}
+        end)
+
+      {:ok, sections}
+    end
   end
 
-  defp tools(server) do
+  defp tools(server, _ctx, "static"), do: {:ok, static_tools(server)}
+
+  defp tools(server, ctx, "protocol") do
+    try do
+      # §4.8: with `toolset:` configured, protocol mode enumerates the
+      # SELECTED toolset — the audit surface sees effective per-caller state.
+      selected = Features.Tools.select_toolset(server, ctx)
+
+      case selected |> Toolset.coerce() |> Toolset.catalog(ctx, []) do
+        {:ok, entries, _version} ->
+          {:ok,
+           entries
+           |> Enum.reject(&(&1.callable == false))
+           |> Enum.map(&protocol_tool_entry/1)}
+
+        {:error, %Error{} = error} ->
+          {:error, error}
+      end
+    rescue
+      # Broken toolset targets surface as a tool-level protocol error, not a
+      # crash (D5).
+      e in [UndefinedFunctionError, ArgumentError] ->
+        {:error, Error.internal("protocol catalog failed: #{Exception.message(e)}")}
+    end
+  end
+
+  defp tools(server, _ctx, _other), do: {:ok, static_tools(server)}
+
+  defp static_tools(server) do
     server.__mcp__(:tools)
     |> Features.Tools.expand()
     |> Enum.map(fn spec ->
@@ -144,6 +198,19 @@ defmodule Noizu.MCP.Server.Tools.Catalog do
         |> Map.put("hidden", spec.hidden)
 
       case spec.definition.meta && spec.definition.meta["category"] do
+        nil -> map
+        category -> Map.put(map, "category", category)
+      end
+    end)
+  end
+
+  defp protocol_tool_entry(entry) do
+    Types.Tool.to_map(entry.definition)
+    |> Map.put("visible", entry.visible)
+    |> Map.put("callable", entry.callable)
+    |> then(&if(entry.reason, do: Map.put(&1, "reason", entry.reason), else: &1))
+    |> then(fn map ->
+      case entry.definition.meta && entry.definition.meta["category"] do
         nil -> map
         category -> Map.put(map, "category", category)
       end

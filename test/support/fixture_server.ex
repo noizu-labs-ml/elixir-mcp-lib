@@ -680,3 +680,90 @@ defmodule Noizu.MCP.Fixtures.EvalServer do
   # A tool with no evals — Eval.list/1 must omit it.
   tool Noizu.MCP.Fixtures.Echo
 end
+
+defmodule Noizu.MCP.Fixtures.StructToolset do
+  @moduledoc false
+  # Behaviour-backed struct toolset (duality): serves the Echo spec as a
+  # protocol participant. `callable?: false` demotes the tool so
+  # resolve-semantics tests can compare absent vs non-callable errors.
+  # The protocol impl is explicit (not @derive — derive delegates to the
+  # protocol's Any impl, which is deliberately fail-closed).
+  use Noizu.MCP.Toolset.Behaviour
+
+  alias Noizu.MCP.Toolset.{Override, Overrides}
+
+  defstruct callable?: true
+
+  def __toolset_specs__(%__MODULE__{callable?: callable?}, _ctx, _opts) do
+    spec = hd(Noizu.MCP.Fixtures.Echo.__mcp_tools__())
+
+    if callable? do
+      [spec]
+    else
+      {:ok, demoted} =
+        Overrides.apply(spec, [%Override{op: :set_callable, target: "echo", value: false}])
+
+      [demoted]
+    end
+  end
+
+  def metadata(_toolset, _ctx, _opts),
+    do: {:ok, %{slug: "struct_fixture", title: nil, description: nil, version: "1.0.0"}}
+end
+
+defimpl Noizu.MCP.Toolset, for: Noizu.MCP.Fixtures.StructToolset do
+  def coerce(%Noizu.MCP.Fixtures.StructToolset{} = toolset), do: toolset
+
+  def catalog(t, ctx, opts), do: Noizu.MCP.Fixtures.StructToolset.catalog(t, ctx, opts)
+
+  def resolve(t, name, ctx, opts),
+    do: Noizu.MCP.Fixtures.StructToolset.resolve(t, name, ctx, opts)
+
+  def invoke(t, effective, args, ctx, opts),
+    do: Noizu.MCP.Fixtures.StructToolset.invoke(t, effective, args, ctx, opts)
+
+  def permissions(t, ctx, opts), do: Noizu.MCP.Fixtures.StructToolset.permissions(t, ctx, opts)
+  def metadata(t, ctx, opts), do: Noizu.MCP.Fixtures.StructToolset.metadata(t, ctx, opts)
+end
+
+defmodule Noizu.MCP.Fixtures.HostOverrideServer do
+  @moduledoc false
+  # Host-defined handle_call_tool wins the defines? race against the generated
+  # protocol default — mirrors the NoizuPromptLingua pre-use override pattern.
+  use Noizu.MCP.Server, name: "host_override", version: "1.0.0"
+
+  @impl Noizu.MCP.Server
+  def handle_call_tool("host_" <> _ = name, _args, _ctx), do: {:ok, "host:#{name}"}
+
+  def handle_call_tool(name, args, ctx) do
+    Noizu.MCP.Server.Features.Tools.dispatch(__mcp__(:tools), name, args, ctx)
+  end
+
+  tool Noizu.MCP.Fixtures.Echo
+end
+
+defmodule Noizu.MCP.Fixtures.NotAToolset do
+  @moduledoc false
+  # A module WITHOUT toolset behaviour functions: Ref targets like this must
+  # surface as a disabled toolset (D5), never crash the server (AP-1).
+  def just_a_function, do: :hi
+end
+
+defmodule Noizu.MCP.Fixtures.UncallableServer do
+  @moduledoc false
+  # Host-level __toolset_specs__ override (the injected functions are
+  # defoverridable): demotes echo to callable:false, so protocol surfaces
+  # omit it while the static expansion still shows it.
+  use Noizu.MCP.Server, name: "uncallable", version: "1.0.0"
+
+  tool Noizu.MCP.Fixtures.Echo
+
+  def __toolset_specs__(_toolset, _ctx, _opts) do
+    {:ok, demoted} =
+      Noizu.MCP.Toolset.Overrides.apply(hd(Noizu.MCP.Fixtures.Echo.__mcp_tools__()), [
+        %Noizu.MCP.Toolset.Override{op: :set_callable, target: "echo", value: false}
+      ])
+
+    [demoted]
+  end
+end

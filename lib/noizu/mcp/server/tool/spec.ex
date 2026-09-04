@@ -14,6 +14,11 @@ defmodule Noizu.MCP.Server.Tool.Spec do
   description-tuning eval definitions attached via the tool DSL. They are
   compile-time metadata for the `mix noizu.mcp.eval` harness and are **never**
   serialized onto the wire: only `definition` reaches `tools/list` / the catalog.
+
+  `callable` (toolset architecture, 0.3.0 series) marks whether the tool may be
+  dispatched at all — `hidden` controls listing, `callable` controls dispatch;
+  both feed the `%Noizu.MCP.Toolset.Entry{}` projection. Static registrations
+  default to `callable: true`; the override vocabulary flips it per caller.
   """
 
   defstruct [
@@ -24,6 +29,7 @@ defmodule Noizu.MCP.Server.Tool.Spec do
     :cast_plan,
     :output_schema,
     hidden: false,
+    callable: true,
     evals: []
   ]
 
@@ -35,6 +41,7 @@ defmodule Noizu.MCP.Server.Tool.Spec do
           cast_plan: list() | nil,
           output_schema: map() | nil,
           hidden: boolean(),
+          callable: boolean(),
           evals: [Noizu.MCP.Eval.Spec.t()]
         }
 end

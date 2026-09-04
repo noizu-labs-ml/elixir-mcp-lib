@@ -21,15 +21,20 @@ defmodule Noizu.MCP.Server.Features.Tools do
   list into normalized `Noizu.MCP.Server.Tool.Spec` structs you can filter or
   remap before building the response.
 
+  The generated defaults route through the toolset protocol
+  (`protocol_list/3` / `protocol_call/4` — one resolution path for listing,
+  dispatch, and the catalog tool); `list_registered/3` and `dispatch/4` are
+  thin shims over the same behaviour defaults, so hand-written callbacks and
+  generated ones share the effective-materialization semantics.
+
   Also handled here: pagination, JSON Schema validation (per SEP-1303,
   input-validation failures are `isError` execution results, not protocol
   errors), argument casting for DSL tools, and normalization of handler
   return values to wire maps.
   """
 
-  alias Noizu.MCP.{Error, RenderCtx, Schema}
+  alias Noizu.MCP.{Error, RenderCtx, Schema, Toolset}
   alias Noizu.MCP.Server.Features.Pagination
-  alias Noizu.MCP.Server.Tool.{Fields, Spec}
   alias Noizu.MCP.Types.{Content, Tool, ToolResult}
 
   require Logger
@@ -149,16 +154,26 @@ defmodule Noizu.MCP.Server.Features.Tools do
   @doc "Default `handle_list_tools` over the registered tool modules."
   # ⟦𓉶𓌖𓋦𓋢⟧ list_registered :: Default `handle_list_tools` over the registered tool modules.
   def list_registered(registered, cursor, opts \\ []) do
-    page_size = Keyword.get(opts, :page_size, Pagination.default_page_size())
     include_hidden = Keyword.get(opts, :include_hidden, false)
+    page_size = Keyword.get(opts, :page_size, Pagination.default_page_size())
+    toolset = %Toolset.Static{specs: expand(registered), opts: opts}
 
-    definitions =
-      registered
-      |> expand()
-      |> then(&if include_hidden, do: &1, else: Enum.reject(&1, fn spec -> spec.hidden end))
-      |> Enum.map(& &1.definition)
+    # Thin shim over the behaviour defaults (D1) — same resolution path as the
+    # protocol, one code path for the wire.
+    case Noizu.MCP.Toolset.Behaviour.catalog(toolset, nil, opts) do
+      {:ok, entries, _version} ->
+        definitions =
+          entries
+          |> then(fn entries ->
+            if include_hidden, do: entries, else: Enum.filter(entries, & &1.visible)
+          end)
+          |> Enum.map(& &1.definition)
 
-    Pagination.paginate(definitions, cursor, page_size)
+        Pagination.paginate(definitions, cursor, page_size)
+
+      {:error, %Error{}} = error ->
+        error
+    end
   end
 
   # ── tools/call ────────────────────────────────────────────────────────────
@@ -181,34 +196,179 @@ defmodule Noizu.MCP.Server.Features.Tools do
   @doc "Default `handle_call_tool`: dispatch to a registered tool spec."
   # ⟦𓇼𓁟𓆋𓇇⟧ dispatch :: Default `handle_call_tool`: dispatch to a registered tool spec.
   def dispatch(registered, name, args, ctx) do
-    case registered |> expand() |> Enum.find(&(&1.definition.name == name)) do
-      nil -> {:error, Error.invalid_params("Unknown tool: #{name}")}
-      spec -> run_spec(spec, args, ctx)
+    # AP-9 (PRD-3): a server with `toolset:` configured has NO static bypass —
+    # the selected toolset replaces listing AND dispatch on this shim too.
+    case selection_from_ctx(ctx) do
+      nil ->
+        toolset = %Toolset.Static{specs: expand(registered)}
+
+        # Thin shim over the behaviour defaults (D1): resolve+invoke through the
+        # same effective-materialization path the protocol serves. ctx flows to
+        # arity-2 handlers exactly as the pre-toolset run_spec did — and through
+        # to the ACL pass inside the defaults, so the server's provider governs
+        # this shim too (a denied tool resolves like an absent one, PRD-2 AP-5).
+        case Noizu.MCP.Toolset.Behaviour.resolve(toolset, name, ctx, []) do
+          {:ok, effective} ->
+            Noizu.MCP.Toolset.Behaviour.invoke(toolset, effective, args, ctx, [])
+
+          {:error, %Error{}} = error ->
+            error
+        end
+
+      selected ->
+        protocol_call(selected, name, args, ctx)
     end
   end
 
-  defp run_spec(%Spec{} = spec, args, ctx) do
-    case Schema.validate(spec.definition.input_schema, args) do
-      :ok ->
-        args =
-          case spec.cast_plan do
-            nil -> args
-            plan -> Fields.cast(plan, args)
-          end
+  # The per-request toolset selection when the ctx carries the governing
+  # server; nil when the server has no `toolset:` opt (static shim path).
+  defp selection_from_ctx(ctx) do
+    server = if is_map(ctx), do: Map.get(ctx, :server)
 
-        call_args =
-          case spec.arity do
-            0 -> []
-            1 -> [args]
-            2 -> [args, ctx]
-          end
+    if is_atom(server) and server != nil do
+      opts = safe_server_opts(server)
 
-        apply(spec.module, spec.fun, call_args) |> normalize(spec.output_schema)
-
-      {:error, message} ->
-        # SEP-1303: validation failures are execution errors the model can fix.
-        ToolResult.error("Invalid arguments for tool #{spec.definition.name}: #{message}")
+      case opts && Keyword.get(opts, :toolset) do
+        nil -> nil
+        :none -> nil
+        _selection -> select_toolset(server, ctx)
+      end
+    else
+      nil
     end
+  end
+
+  # ── protocol path (toolset architecture) ─────────────────────────────────
+
+  @doc """
+  The toolset governing this request (PRD-3 §4.7): the server's `toolset:`
+  opt resolved PER REQUEST (D3 — no compile-time capture).
+
+    * unset or `:none` — the server's own surface (PRD-1 behavior);
+    * a static value (module | `%Noizu.MCP.Toolset.Ref{}` | behaviour-backed
+      struct such as `%Noizu.MCP.Toolset.Custom{}`) — that toolset;
+    * `{mod, fun, args}` — invoked per request as `mod.fun(ctx, args)`; its
+      return follows the static rules (`:none` falls back to self).
+
+  Anything else — an invalid static shape or a bad MFA return/raise — logs a
+  warning and falls back to the server's own surface (fail-open PER SERVER;
+  the config error is loud, the server stays healthy). Non-server toolset
+  values pass through untouched.
+  """
+  # ⟦𓋴𓄿𓎼𓆑⟧ select_toolset :: The toolset governing this request (PRD-3 §4.7): the server's `toolset:` opt resolved PER REQUEST (D3 — no compile-time capture).
+  def select_toolset(toolset, ctx)
+
+  def select_toolset(toolset, ctx) when is_atom(toolset) and toolset != nil do
+    opts = safe_server_opts(toolset)
+    selection = opts && Keyword.get(opts, :toolset)
+    resolve_selection(toolset, ctx, selection)
+  end
+
+  def select_toolset(toolset, _ctx), do: toolset
+
+  defp resolve_selection(server, _ctx, nil), do: server
+  defp resolve_selection(server, _ctx, :none), do: server
+
+  defp resolve_selection(server, ctx, {m, f, args})
+       when is_atom(m) and is_atom(f) and is_list(args) do
+    case per_request_value(m, f, [ctx, args]) do
+      {:ok, value} ->
+        resolve_selection(server, ctx, value)
+
+      {:error, reason} ->
+        Logger.warning(
+          "toolset: resolver #{inspect({m, f})} failed (#{inspect(reason)}) — serving the " <>
+            "server's own surface (fail-open per server)"
+        )
+
+        server
+    end
+  end
+
+  defp resolve_selection(_server, _ctx, value) when is_atom(value) and value != nil, do: value
+  defp resolve_selection(_server, _ctx, %Toolset.Ref{} = ref), do: ref
+  defp resolve_selection(_server, _ctx, %{__struct__: _} = struct), do: struct
+
+  defp resolve_selection(server, _ctx, other) do
+    Logger.warning(
+      "toolset: invalid selection #{inspect(other)} — serving the server's own surface " <>
+        "(fail-open per server; expected a module, %Noizu.MCP.Toolset.Ref{}, a toolset " <>
+        "struct, :none, or an {m, f, opts} resolver)"
+    )
+
+    server
+  end
+
+  defp per_request_value(m, f, args) do
+    {:ok, apply(m, f, args)}
+  rescue
+    e -> {:error, Exception.message(e)}
+  catch
+    kind, reason -> {:error, {:exited, kind, reason}}
+  end
+
+  defp safe_server_opts(server) do
+    server.__mcp__(:opts)
+  rescue
+    _ -> nil
+  end
+
+  @doc """
+  `handle_list_tools` default over the toolset protocol: coerce the server to
+  a toolset, materialize the effective catalog, drop non-visible entries, and
+  paginate DEFINITIONS (so `nextCursor` semantics match the static path).
+  A toolset whose resolution raises is disabled, not fatal — the failure is
+  normalized to a protocol error (D5).
+  """
+  def protocol_list(toolset, cursor, ctx) do
+    toolset = select_toolset(toolset, ctx)
+
+    case catalog(toolset, ctx) do
+      {:ok, entries, _version} ->
+        definitions =
+          entries
+          |> Enum.filter(& &1.visible)
+          |> Enum.map(& &1.definition)
+
+        Pagination.paginate(definitions, cursor, Pagination.default_page_size())
+
+      {:error, %Error{}} = error ->
+        error
+    end
+  end
+
+  @doc """
+  `handle_call_tool` default over the toolset protocol: coerce → resolve →
+  invoke against the effective triple. Invoke raises propagate to the session
+  task handler exactly as the static path's handler raises always did; only
+  toolset-plumbing failures (coerce/catalog/resolve) normalize to a protocol
+  error (D5).
+  """
+  def protocol_call(toolset, name, args, ctx) do
+    toolset = select_toolset(toolset, ctx)
+
+    case resolve(toolset, name, ctx) do
+      {:ok, effective} ->
+        Toolset.invoke(toolset, effective, args, ctx, [])
+
+      {:error, %Error{}} = error ->
+        error
+    end
+  end
+
+  # Toolset plumbing rescue boundary (D5): a toolset that fails to materialize
+  # disables the set, not the server. Invoke is deliberately OUTSIDE this
+  # boundary — handler crashes keep their existing session-level handling.
+  defp catalog(toolset, ctx) do
+    Toolset.catalog(toolset, ctx, [])
+  rescue
+    e -> {:error, Error.internal("toolset catalog failed: #{Exception.message(e)}")}
+  end
+
+  defp resolve(toolset, name, ctx) do
+    Toolset.resolve(toolset, name, ctx, [])
+  rescue
+    e -> {:error, Error.internal("toolset resolve failed: #{Exception.message(e)}")}
   end
 
   # ── return normalization ──────────────────────────────────────────────────

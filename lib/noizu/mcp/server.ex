@@ -31,6 +31,19 @@ defmodule Noizu.MCP.Server do
     * `:title`, `:description`, `:website_url`, `:icons` — optional
       `serverInfo` metadata
     * `:instructions` — usage hints delivered to the client on initialize
+    * `:toolset` (PRD-3) — per-request tool surface selection:
+      `%Noizu.MCP.Toolset.Custom{}` (recommended shape: `base: __MODULE__`'s
+      module name passed explicitly — the literal is not `__MODULE__`-safe
+      pre-expansion), a toolset module, `%Noizu.MCP.Toolset.Ref{}`, or
+      `{Resolver, :resolve, [opts]}` invoked per request as
+      `Resolver.resolve(ctx, opts)` returning one of the static forms or
+      `:none`. Unset means the server's own surface (PRD-1 behavior); an
+      invalid selection or resolver failure logs a warning and serves the
+      raw surface (fail-open per server). With `:toolset` set, the selection
+      replaces listing AND dispatch — see `Noizu.MCP.Toolset.Custom`.
+    * `:toolset_cache` (PRD-3) — `true` or `[ttl: ms]` to opt into
+      `Noizu.MCP.Toolset.Cache` memoization of composed custom-toolset
+      catalogs (default off)
 
   ## Escape hatch: behaviours without macros
 
@@ -137,6 +150,10 @@ defmodule Noizu.MCP.Server do
 
   # ⟦𓍂𓐝𓋠𓍒⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
+    validate_acl_opt!(opts, __CALLER__)
+    validate_persistence_opt!(opts, __CALLER__)
+    validate_providers_opt!(opts, __CALLER__)
+
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server
       import Noizu.MCP.Server,
@@ -237,6 +254,258 @@ defmodule Noizu.MCP.Server do
     end
   end
 
+  # ── `acl:` registration validation (PRD-2 §4.7) ───────────────────────────
+  #
+  # Config errors must not boot: an invalid `acl:` opt is a CompileError at
+  # `use` expansion, not a runtime surprise. The opt must be a compile-time
+  # literal — `:disabled` | `:deny_all` | a `Noizu.MCP.ACL.Provider` module |
+  # `{Provider, opts}` — because misconfiguration fails the build, not a
+  # request (D5-worse-than-runtime: validation reads behaviour_info, which no
+  # MFA could do).
+  defp validate_acl_opt!(opts, caller) do
+    case Keyword.keyword?(opts) && Keyword.get(opts, :acl) do
+      nil -> :ok
+      ast -> validate_acl_opt!(Macro.expand(ast, caller), ast, caller)
+    end
+  end
+
+  defp validate_acl_opt!(:disabled, _ast, _caller), do: :ok
+  defp validate_acl_opt!(:deny_all, _ast, _caller), do: :ok
+
+  defp validate_acl_opt!(module, _ast, caller) when is_atom(module) and module != nil,
+    do: validate_acl_provider!(module, caller)
+
+  defp validate_acl_opt!({module, opts}, _ast, caller)
+       when is_atom(module) and module != nil and is_list(opts),
+       do: validate_acl_provider!(module, caller)
+
+  defp validate_acl_opt!(_expanded, ast, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description:
+        "use Noizu.MCP.Server: invalid `acl:` opt #{Macro.to_string(ast)} — expected " <>
+          ":disabled, :deny_all, a Noizu.MCP.ACL.Provider module, or {provider, opts}. " <>
+          "The opt must be a compile-time literal so misconfiguration fails the build (PRD-2 §4.7)."
+  end
+
+  defp validate_acl_provider!(module, caller) do
+    case Code.ensure_compiled(module) do
+      {:module, _} ->
+        :ok
+
+      {:error, reason} ->
+        raise CompileError,
+          file: caller.file,
+          line: caller.line,
+          description:
+            "use Noizu.MCP.Server: `acl:` provider #{inspect(module)} is not available " <>
+              "(#{inspect(reason)}) — it must be compiled before the server module (PRD-2 §4.7)."
+    end
+
+    missing = Enum.reject([:check, :check_all], &MapSet.member?(acl_callbacks(module), &1))
+
+    unless missing == [] do
+      raise CompileError,
+        file: caller.file,
+        line: caller.line,
+        description:
+          "use Noizu.MCP.Server: `acl:` provider #{inspect(module)} must implement the " <>
+            "Noizu.MCP.ACL.Provider behaviour (missing callbacks: #{inspect(missing)}) — " <>
+            "declare `@behaviour Noizu.MCP.ACL.Provider` and define check/5 (check_all/5 has a " <>
+            "default; PRD-2 §4.7)."
+    end
+  end
+
+  # The declared callback set of `module`. behaviour_info/1 is undefined for
+  # modules compiled in the SAME compilation unit (the attribute lands with the
+  # beam), so fall back to the module's declared @behaviour attributes there —
+  # declaring the behaviour IS the callback contract; anything else is "not a
+  # behaviour at all" and fails validation.
+  defp acl_callbacks(module) do
+    if function_exported?(module, :behaviour_info, 1) do
+      MapSet.new(module.behaviour_info(:callbacks))
+    else
+      attributes = module.module_info(:attributes)
+      behaviours = attributes |> Keyword.get_values(:behaviour) |> List.flatten()
+
+      if Noizu.MCP.ACL.Provider in behaviours do
+        MapSet.new([:check, :check_all])
+      else
+        MapSet.new()
+      end
+    end
+  end
+
+  # ── `persistence:`/`providers:` registration validation (PRD-4 D4) ────────
+  #
+  # Same posture as `acl:` (§4.7): config errors must not boot, so an invalid
+  # opt is a CompileError at `use` expansion. `providers:` must be a keyword
+  # list whose known keys meet the individual keys' bar; `persistence:` must
+  # be `:memory | :disabled | Provider | {Provider, opts}` with Provider
+  # declaring the Noizu.MCP.Persistence behaviour. The AST dispatch handles
+  # the alias/tuple shapes (`{Alias, []}` quotes as {:{}, meta, [...]}, not a
+  # literal 2-tuple).
+  defp validate_persistence_opt!(opts, caller) do
+    case Keyword.keyword?(opts) && Keyword.get(opts, :persistence) do
+      nil -> :ok
+      ast -> validate_persistence_ast!(ast, ast, caller)
+    end
+  end
+
+  defp validate_persistence_ast!(:memory, _orig, _caller), do: :ok
+  defp validate_persistence_ast!(:disabled, _orig, _caller), do: :ok
+
+  defp validate_persistence_ast!(ast, _orig, caller) when is_atom(ast) and ast != nil,
+    do: validate_persistence_provider!(ast, caller)
+
+  defp validate_persistence_ast!({:__aliases__, _, _parts} = ast, _orig, caller),
+    do: validate_persistence_provider!(Macro.expand(ast, caller), caller)
+
+  # {Provider, opts} — the tuple quotes either as {:{}, meta, [inner, opts]}
+  # or as a literal 2-tuple whose first element is the alias AST; recurse on
+  # the inner node either way, keeping `orig` for the error message.
+  defp validate_persistence_ast!({:{}, _meta, [inner, opts]}, orig, caller)
+       when is_list(opts),
+       do: validate_persistence_ast!(inner, orig, caller)
+
+  defp validate_persistence_ast!({inner, opts}, orig, caller) when is_list(opts),
+    do: validate_persistence_ast!(inner, orig, caller)
+
+  defp validate_persistence_ast!(_expanded, orig, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description:
+        "use Noizu.MCP.Server: invalid `persistence:` opt #{Macro.to_string(orig)} — expected " <>
+          ":memory, :disabled, a Noizu.MCP.Persistence provider module, or {provider, opts}. " <>
+          "The opt must be a compile-time literal so misconfiguration fails the build (PRD-4 D4)."
+  end
+
+  defp validate_persistence_provider!(module, caller) do
+    case Code.ensure_compiled(module) do
+      {:module, _} ->
+        :ok
+
+      {:error, reason} ->
+        raise CompileError,
+          file: caller.file,
+          line: caller.line,
+          description:
+            "use Noizu.MCP.Server: `persistence:` provider #{inspect(module)} is not available " <>
+              "(#{inspect(reason)}) — it must be compiled before the server module (PRD-4 D4)."
+    end
+
+    required = [:put, :get, :list, :delete, :version]
+    callbacks = behaviour_callbacks(module, Noizu.MCP.Persistence, required)
+
+    missing = Enum.reject(required, &MapSet.member?(callbacks, &1))
+
+    unless missing == [] do
+      raise CompileError,
+        file: caller.file,
+        line: caller.line,
+        description:
+          "use Noizu.MCP.Server: `persistence:` provider #{inspect(module)} must implement the " <>
+            "Noizu.MCP.Persistence behaviour (missing callbacks: #{inspect(missing)}) — " <>
+            "declare `@behaviour Noizu.MCP.Persistence` and define put/4, get/3, list/3, " <>
+            "delete/3 and version/2 (ping/1 is optional; PRD-4 §4.1)."
+    end
+  end
+
+  defp validate_providers_opt!(opts, caller) do
+    case Keyword.keyword?(opts) && Keyword.get(opts, :providers) do
+      nil -> :ok
+      ast -> validate_providers_ast!(ast, ast, caller)
+    end
+  end
+
+  defp validate_providers_ast!(providers, _orig, _caller) when providers in [nil, []], do: :ok
+
+  defp validate_providers_ast!(providers, orig, caller) when is_list(providers) do
+    unless Keyword.keyword?(providers) do
+      raise CompileError,
+        file: caller.file,
+        line: caller.line,
+        description:
+          "use Noizu.MCP.Server: invalid `providers:` opt #{Macro.to_string(orig)} — expected a " <>
+            "keyword list, e.g. providers: [persistence: Provider, acl: Provider] (PRD-4 §4.3)."
+    end
+
+    # Each known key validates through its own opt rules (the combined form
+    # wins at resolution, so it must meet the same bar at `use` time).
+    case Keyword.get(providers, :acl) do
+      nil -> :ok
+      ast -> validate_providers_key_ast!(ast, :acl, caller)
+    end
+
+    case Keyword.get(providers, :persistence) do
+      nil -> :ok
+      ast -> validate_providers_key_ast!(ast, :persistence, caller)
+    end
+
+    :ok
+  end
+
+  defp validate_providers_ast!(_expanded, orig, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description:
+        "use Noizu.MCP.Server: invalid `providers:` opt #{Macro.to_string(orig)} — expected a " <>
+          "keyword list, e.g. providers: [persistence: Provider, acl: Provider] (PRD-4 §4.3)."
+  end
+
+  defp validate_providers_key_ast!(ast, :acl, caller) do
+    case expand_opt_module(ast, caller) do
+      {:module, module} ->
+        Code.ensure_compiled(module)
+
+        case Enum.reject([:check], &MapSet.member?(acl_callbacks(module), &1)) do
+          [] ->
+            :ok
+
+          missing ->
+            raise CompileError,
+              file: caller.file,
+              line: caller.line,
+              description:
+                "providers: [acl: #{inspect(module)}] must implement the " <>
+                  "Noizu.MCP.ACL.Provider behaviour (missing: #{inspect(missing)}) (PRD-4 §4.3)."
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_providers_key_ast!(ast, :persistence, caller) do
+    validate_persistence_ast!(ast, ast, caller)
+  end
+
+  # `Alias` | `Alias.sub` → {:module, expanded}; anything else → :other (the
+  # key validators decide whether a literal module atom is required).
+  defp expand_opt_module({:__aliases__, _, _parts} = ast, caller),
+    do: {:module, Macro.expand(ast, caller)}
+
+  defp expand_opt_module(module, _caller) when is_atom(module) and module != nil,
+    do: {:module, module}
+
+  defp expand_opt_module(_other, _caller), do: :other
+
+  # The declared callback set of `module` against `behaviour` — same
+  # behaviour_info-or-@behaviour fallback `acl_callbacks/1` uses.
+  defp behaviour_callbacks(module, behaviour, fallback) do
+    if function_exported?(module, :behaviour_info, 1) do
+      MapSet.new(module.behaviour_info(:callbacks))
+    else
+      attributes = module.module_info(:attributes)
+      behaviours = attributes |> Keyword.get_values(:behaviour) |> List.flatten()
+
+      if behaviour in behaviours, do: MapSet.new(fallback), else: MapSet.new()
+    end
+  end
+
   # ⟦𓃴𓎜𓁘𓁇⟧ __before_compile__ :: auto-generated pointer for public function __before_compile__
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :__mcp_server_opts__)
@@ -272,12 +541,14 @@ defmodule Noizu.MCP.Server do
 
     default_impls =
       [
-        # tools
+        # tools — routed through the toolset protocol (one resolution path for
+        # listing + dispatch + catalog; host handle_* overrides still win via
+        # the defines? guards)
         unless defines?.({:handle_list_tools, 2}) or tools == [] do
           quote do
             @impl Noizu.MCP.Server
-            def handle_list_tools(cursor, _ctx) do
-              Noizu.MCP.Server.Features.Tools.list_registered(__mcp__(:tools), cursor)
+            def handle_list_tools(cursor, ctx) do
+              Noizu.MCP.Server.Features.Tools.protocol_list(__MODULE__, cursor, ctx)
             end
           end
         end,
@@ -285,7 +556,7 @@ defmodule Noizu.MCP.Server do
           quote do
             @impl Noizu.MCP.Server
             def handle_call_tool(name, args, ctx) do
-              Noizu.MCP.Server.Features.Tools.dispatch(__mcp__(:tools), name, args, ctx)
+              Noizu.MCP.Server.Features.Tools.protocol_call(__MODULE__, name, args, ctx)
             end
           end
         end,
@@ -381,6 +652,61 @@ defmodule Noizu.MCP.Server do
       ]
       |> Enum.reject(&is_nil/1)
 
+    # Toolset behaviour functions (protocol+behaviour duality): the server
+    # module itself is a toolset entity. Hosts defining their own `catalog/3`
+    # etc. win via the same defines? race as the handle_* callbacks; the
+    # generated ones are defoverridable at the injection site.
+    toolset_defaults = [
+      {{:__toolset_specs__, 3},
+       quote do
+         def __toolset_specs__(_toolset, _ctx, _opts) do
+           Noizu.MCP.Server.Features.Tools.expand(__mcp__(:tools))
+         end
+       end},
+      {{:catalog, 3},
+       quote do
+         def catalog(toolset, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.catalog(toolset, ctx, opts)
+       end},
+      {{:resolve, 4},
+       quote do
+         def resolve(toolset, name, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.resolve(toolset, name, ctx, opts)
+       end},
+      {{:invoke, 5},
+       quote do
+         def invoke(toolset, effective, args, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.invoke(toolset, effective, args, ctx, opts)
+       end},
+      {{:permissions, 3},
+       quote do
+         def permissions(toolset, ctx, opts),
+           do: Noizu.MCP.Toolset.Behaviour.permissions(toolset, ctx, opts)
+       end},
+      {{:metadata, 3},
+       quote do
+         def metadata(_toolset, _ctx, _opts) do
+           opts = __mcp__(:opts)
+
+           {:ok,
+            %{
+              slug: opts[:name],
+              title: nil,
+              description: opts[:instructions],
+              version: opts[:version]
+            }}
+         end
+       end}
+    ]
+
+    injected_toolset = Enum.filter(toolset_defaults, fn {fa, _impl} -> not defines?.(fa) end)
+    toolset_impls = Enum.map(injected_toolset, &elem(&1, 1))
+
+    toolset_overridable =
+      for {{name, arity}, _impl} <- injected_toolset do
+        {name, arity}
+      end
+
     quote do
       @impl Noizu.MCP.Server
       # ⟦𓏚𓈵𓋵𓈎⟧ server_info :: auto-generated pointer for public function server_info
@@ -417,6 +743,9 @@ defmodule Noizu.MCP.Server do
       end
 
       unquote(default_impls)
+
+      unquote(toolset_impls)
+      defoverridable(unquote(toolset_overridable))
     end
   end
 

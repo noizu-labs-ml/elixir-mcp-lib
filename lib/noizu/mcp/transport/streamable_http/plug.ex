@@ -351,7 +351,7 @@ if Code.ensure_loaded?(Plug.Conn) do
 
           :one_way ->
             with {:ok, session} <- find_session(conn, opts.server) do
-              Session.deliver(session, Jason.encode!(body))
+              Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
               send_resp(conn, 202, "")
             else
               {:error, conn_response} -> conn_response
@@ -391,9 +391,21 @@ if Code.ensure_loaded?(Plug.Conn) do
           nil -> %{}
         end
         |> then(fn assigns ->
-          case conn.assigns[:mcp_auth_claims] do
+          # Initialize folds the verified claims into base assigns (back-compat:
+          # handlers read `ctx.assigns[:auth_claims]`); build_ctx re-resolves them
+          # per request through the principal mapping, and later requests carry
+          # their own per-request claims via deliver/3.
+          assigns =
+            case conn.assigns[:mcp_auth_claims] do
+              nil -> assigns
+              claims -> Map.put(assigns, :auth_claims, claims)
+            end
+
+          # PRD-2 §4.5b: a plug seam may assign a READY principal — it wins over
+          # claims mapping in build_ctx's precedence.
+          case conn.assigns[:mcp_principal] do
             nil -> assigns
-            claims -> Map.put(assigns, :auth_claims, claims)
+            principal -> Map.put(assigns, :mcp_principal, principal)
           end
         end)
 
@@ -408,7 +420,7 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       registry = Module.concat(server, Registry)
       Registry.register(registry, {:http_stream, session_id, id}, nil)
-      Session.deliver(session, Jason.encode!(body))
+      Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
 
       receive do
         {:mcp_http, binary} ->
@@ -431,7 +443,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       monitor = Process.monitor(session)
       Registry.register(registry, {:http_stream, session_id, id}, nil)
-      Session.deliver(session, Jason.encode!(body))
+      # Per-request claims (PRD-2): each request forwards THIS request's
+      # verified claims, so a token refresh mid-session is visible on the
+      # next request instead of being frozen at initialize.
+      Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
 
       deadline = System.monotonic_time(:millisecond) + opts.request_timeout
       stream_request(conn, opts, id, monitor, deadline, false)
@@ -454,18 +469,34 @@ if Code.ensure_loaded?(Plug.Conn) do
 
             final? and sse? ->
               Process.demonitor(monitor, [:flush])
-              {:ok, conn} = chunk(conn, SSE.encode(binary))
-              conn
+
+              case sse_chunk(conn, SSE.encode(binary)) do
+                {:ok, conn} -> conn
+                :closed -> conn
+              end
 
             not final? and sse? ->
-              {:ok, conn} = chunk(conn, SSE.encode(binary))
-              stream_request(conn, opts, id, monitor, deadline, true)
+              case sse_chunk(conn, SSE.encode(binary)) do
+                {:ok, conn} ->
+                  stream_request(conn, opts, id, monitor, deadline, true)
+
+                :closed ->
+                  Process.demonitor(monitor, [:flush])
+                  conn
+              end
 
             true ->
               # First non-final message — upgrade to SSE.
               conn = open_sse(conn)
-              {:ok, conn} = chunk(conn, SSE.encode(binary))
-              stream_request(conn, opts, id, monitor, deadline, true)
+
+              case sse_chunk(conn, SSE.encode(binary)) do
+                {:ok, conn} ->
+                  stream_request(conn, opts, id, monitor, deadline, true)
+
+                :closed ->
+                  Process.demonitor(monitor, [:flush])
+                  conn
+              end
           end
 
         {:DOWN, ^monitor, :process, _pid, _reason} ->
@@ -481,8 +512,14 @@ if Code.ensure_loaded?(Plug.Conn) do
               send_resp(conn, 504, "Request timed out")
 
             sse? ->
-              {:ok, conn} = chunk(conn, ": keepalive\n\n")
-              stream_request(conn, opts, id, monitor, deadline, true)
+              case sse_chunk(conn, ": keepalive\n\n") do
+                {:ok, conn} ->
+                  stream_request(conn, opts, id, monitor, deadline, true)
+
+                :closed ->
+                  Process.demonitor(monitor, [:flush])
+                  conn
+              end
 
             true ->
               # No response within the grace window — commit to SSE so the
@@ -498,6 +535,24 @@ if Code.ensure_loaded?(Plug.Conn) do
       |> put_resp_content_type("text/event-stream")
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
+    end
+
+    # Streams one SSE chunk. A client that disconnected mid-stream (tab closed,
+    # client timeout during a long tool call) makes Plug return
+    # {:error, :closed} — matching bare {:ok, _} raised MatchError and crashed
+    # the request process (observed ×3 in stage logs). Report :closed so the
+    # stream loop tears down cleanly instead.
+    defp sse_chunk(conn, data) do
+      require Logger
+
+      case chunk(conn, data) do
+        {:ok, conn} ->
+          {:ok, conn}
+
+        {:error, :closed} ->
+          Logger.debug("noizu_mcp SSE stream: client closed the connection; stopping stream")
+          :closed
+      end
     end
 
     defp final_response?(binary, id) do

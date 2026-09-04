@@ -124,12 +124,16 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
       {session_id, _} = initialize()
 
       conn =
-        conn(:post, "/", Jason.encode!(%{
-          "jsonrpc" => "2.0",
-          "id" => 7,
-          "method" => "tools/call",
-          "params" => %{"name" => "slow", "arguments" => %{"ms" => 400}}
-        }))
+        conn(
+          :post,
+          "/",
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => 7,
+            "method" => "tools/call",
+            "params" => %{"name" => "slow", "arguments" => %{"ms" => 400}}
+          })
+        )
         |> put_req_header("content-type", "application/json")
         |> put_req_header("accept", "application/json, text/event-stream")
         |> put_req_header("mcp-session-id", session_id)
@@ -247,6 +251,60 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
         |> StreamableHTTP.Plug.call(@plug_opts)
 
       assert conn.status == 400
+    end
+  end
+
+  # ── client-disconnect teardown (noizu_mcp stage noise ×3) ─────────────────
+
+  describe "client disconnects mid-stream" do
+    defp closed_conn(method, path, body, headers) do
+      base =
+        conn(method, path, body)
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("accept", "application/json, text/event-stream")
+
+      headers
+      |> Enum.reduce(base, fn {key, value}, c -> put_req_header(c, key, value) end)
+      # Swap in an adapter whose chunk/2 reports the client as gone.
+      |> then(fn c ->
+        %{
+          c
+          | adapter:
+              {Noizu.MCP.Test.ClosedConnAdapter, Noizu.MCP.Test.ClosedConnAdapter.init(body)}
+        }
+      end)
+    end
+
+    test "a chunk against a closed client tears down instead of MatchError-raising" do
+      # Pre-fix: the stream loop matched bare `{:ok, conn} = chunk(conn, ...)`;
+      # a client that disconnected mid-call (tab closed, client timeout) made
+      # Plug return {:error, :closed} and the request process died with
+      # ** (MatchError) {:error, :closed} — the noise seen in stage logs.
+      opts = StreamableHTTP.Plug.init(server: Fixtures.Server, sse_commit_after: 5_000)
+      {session_id, _} = initialize()
+
+      body =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 11,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "get_weather",
+            "arguments" => %{"location" => "NYC"},
+            "_meta" => %{"progressToken" => "pt"}
+          }
+        })
+
+      conn =
+        closed_conn(:post, "/", body, [
+          {"mcp-session-id", session_id},
+          {"mcp-protocol-version", "2025-11-25"}
+        ])
+
+      # get_weather emits progress (non-final) first: the loop upgrades to SSE
+      # and chunks into the closed connection. Post-fix that folds to a clean
+      # teardown; pre-fix Plug.call/2 raised here.
+      assert %Plug.Conn{status: 200} = StreamableHTTP.Plug.call(conn, opts)
     end
   end
 
