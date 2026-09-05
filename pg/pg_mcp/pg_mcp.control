@@ -1,0 +1,12 @@
+comment = 'Call Model Context Protocol servers from SQL'
+default_version = '0.1.0'
+module_pathname = '$libdir/pg_mcp'
+relocatable = false
+superuser = true
+# Note: no `schema = 'mcp'` here on purpose. A control-file schema is created
+# by CREATE EXTENSION as a *non-member* precondition, which then makes the
+# script's own `CREATE SCHEMA mcp` (emitted by pgrx for `#[pg_schema] mod mcp`)
+# fail with "schema mcp is not a member of extension pg_mcp". Letting the
+# script create the schema makes it extension-owned, so `DROP EXTENSION
+# pg_mcp CASCADE` removes it. `relocatable = false` plus the hardcoded `mcp.*`
+# qualification throughout the script keep the placement pinned.
