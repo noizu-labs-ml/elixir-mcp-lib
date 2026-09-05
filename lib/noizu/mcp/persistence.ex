@@ -1,8 +1,9 @@
 defmodule Noizu.MCP.Persistence do
   @moduledoc """
   The persistence contract (PRD-4 §4.1) for lib-owned toolset state: DB-defined
-  toolsets, per-caller grants, and consent negotiations, across three store
-  keys — `"toolsets"`, `"toolset_grants"`, `"toolset_negotiations"`.
+  toolsets, per-caller grants, and consent negotiations, across the `"toolsets"`,
+  `"toolset_grants"`, `"toolset_negotiations"` store keys — plus `"engine_servers"`
+  (PRD-11), the `Noizu.MCP.Engine` upstream registry.
 
   Three providers ship: `Noizu.MCP.Persistence.Memory` (public ETS, the
   default), `Noizu.MCP.Persistence.Disabled` (the `:disabled` alias — every
@@ -54,7 +55,7 @@ defmodule Noizu.MCP.Persistence do
   Value shapes everywhere: `:memory | :disabled | Provider | {Provider, opts}`.
   """
 
-  @store_keys ["toolsets", "toolset_grants", "toolset_negotiations"]
+  @store_keys ["toolsets", "toolset_grants", "toolset_negotiations", "engine_servers"]
 
   @type store_key :: String.t()
   @type opts :: keyword()
@@ -237,6 +238,11 @@ defmodule Noizu.MCP.Persistence do
     :metadata
   ]
 
+  # PRD-11: the engine's upstream registry. Operator-writable columns only —
+  # the derived columns (status, last_seen, tool_count, ...) are live session
+  # state, never persisted.
+  @engine_server_fields [:name, :transport, :command, :url, :auth_ref, :enabled]
+
   @doc """
   Encode `record` for storage (§4.1): validate + normalize into the store's
   field map, stamp `inserted_at` (provider-on-put when the record carries
@@ -343,9 +349,34 @@ defmodule Noizu.MCP.Persistence do
   defp normalize_record("toolset_negotiations", %{} = record),
     do: normalize_negotiation(normalize_fields(record, @negotiation_fields))
 
+  defp normalize_record("engine_servers", %{} = record) do
+    fields = normalize_fields(record, @engine_server_fields)
+
+    with :ok <- required(fields, :name),
+         :ok <- transport_valid?(fields.transport) do
+      {:ok,
+       %{
+         name: fields.name,
+         transport: to_string(fields.transport),
+         command: fields.command,
+         url: fields.url,
+         auth_ref: fields.auth_ref,
+         enabled: !!fields.enabled,
+         # Store invariants (§4.1): every record carries its insert stamp; the
+         # registry has no expiry.
+         expires_at: nil,
+         inserted_at: DateTime.utc_now()
+       }}
+    end
+  end
+
   defp normalize_record(store_key, other) do
     {:error, {:invalid_record, store_key, other}}
   end
+
+  defp transport_valid?(t) when t in ["stdio", "http", :stdio, :http], do: :ok
+
+  defp transport_valid?(other), do: {:error, {:invalid_transport, other}}
 
   defp normalize_toolset(record) do
     with :ok <- required(record, :slug),
@@ -558,6 +589,18 @@ defmodule Noizu.MCP.Persistence do
        expires_at: restore_dt(raw["expires_at"]),
        inserted_at: restore_dt(raw["inserted_at"]),
        metadata: raw["metadata"] || %{}
+     }}
+  end
+
+  defp revive("engine_servers", raw) do
+    {:ok,
+     %{
+       "name" => raw["name"],
+       "transport" => raw["transport"],
+       "command" => raw["command"],
+       "url" => raw["url"],
+       "auth_ref" => raw["auth_ref"],
+       "enabled" => !!raw["enabled"]
      }}
   end
 

@@ -47,6 +47,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     @toolsets_table "noizu_mcp_toolsets"
     @grants_table "noizu_mcp_toolset_grants"
     @negotiations_table "noizu_mcp_toolset_negotiations"
+    @engine_servers_table "noizu_mcp_engine_servers"
     @versions_table "noizu_mcp_store_versions"
     @ledger_table "noizu_mcp_schema_versions"
 
@@ -60,14 +61,22 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
       with :ok <- Persistence.guard_store_key(store_key),
            {:ok, _json, fields, _meta} <- Persistence.encode_record(store_key, record) do
-        sql =
+        {sql, params} =
           case store_key do
-            "toolsets" -> toolset_upsert()
-            "toolset_grants" -> grant_upsert()
-            "toolset_negotiations" -> negotiation_upsert()
+            "toolsets" ->
+              {toolset_upsert(), put_params("toolsets", id, fields)}
+
+            "toolset_grants" ->
+              {grant_upsert(), put_params("toolset_grants", id, fields)}
+
+            "toolset_negotiations" ->
+              {negotiation_upsert(), put_params("toolset_negotiations", id, fields)}
+
+            "engine_servers" ->
+              {engine_server_upsert(), put_params("engine_servers", id, fields)}
           end
 
-        case query(repo, sql, put_params(store_key, id, fields)) do
+        case query(repo, sql, params) do
           {:ok, _} ->
             bump_version(repo, store_key)
             :ok
@@ -122,52 +131,69 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       """
     end
 
+    defp engine_server_upsert do
+      """
+      INSERT INTO #{@engine_servers_table}
+        (name, transport, command, url, auth_ref, enabled, inserted_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+      ON CONFLICT (name) DO UPDATE SET
+        transport = EXCLUDED.transport, command = EXCLUDED.command,
+        url = EXCLUDED.url, auth_ref = EXCLUDED.auth_ref,
+        enabled = EXCLUDED.enabled, updated_at = now()
+      """
+    end
+
     # jsonb/text columns bind as Jason strings + `::jsonb` casts; datetimes
     # bind natively. Params line up 1:1 with the upsert column lists.
-    defp put_params("toolsets", id, f) do
-      [
-        id,
-        f.title,
-        f.description,
-        f.base,
-        f.immutable,
-        j(f.include),
-        j(f.exclude),
-        j(f.tools),
-        j(f.metadata),
-        f.inserted_at
-      ]
-    end
+    defp put_params(store_key, id, f) do
+      case store_key do
+        "toolsets" ->
+          [
+            id,
+            f.title,
+            f.description,
+            f.base,
+            f.immutable,
+            j(f.include),
+            j(f.exclude),
+            j(f.tools),
+            j(f.metadata),
+            f.inserted_at
+          ]
 
-    defp put_params("toolset_grants", id, f) do
-      # effect stores as its string form (text column + check constraint).
-      [
-        id,
-        f.toolset_slug,
-        f.authenticator,
-        f.subject,
-        Atom.to_string(f.effect),
-        j(f.scopes),
-        j(f.tool_overrides),
-        f.expires_at,
-        j(f.metadata),
-        f.inserted_at
-      ]
-    end
+        "toolset_grants" ->
+          # effect stores as its string form (text column + check constraint).
+          [
+            id,
+            f.toolset_slug,
+            f.authenticator,
+            f.subject,
+            Atom.to_string(f.effect),
+            j(f.scopes),
+            j(f.tool_overrides),
+            f.expires_at,
+            j(f.metadata),
+            f.inserted_at
+          ]
 
-    defp put_params("toolset_negotiations", id, f) do
-      [
-        id,
-        f.toolset_slug,
-        f.authenticator,
-        f.tool,
-        j(f.required_scopes),
-        f.granted,
-        j(f.metadata_overrides),
-        f.expires_at,
-        j(f.metadata),
-        f.inserted_at
-      ]
+        "toolset_negotiations" ->
+          [
+            id,
+            f.toolset_slug,
+            f.authenticator,
+            f.tool,
+            j(f.required_scopes),
+            f.granted,
+            j(f.metadata_overrides),
+            f.expires_at,
+            j(f.metadata),
+            f.inserted_at
+          ]
+
+        "engine_servers" ->
+          # The primary key IS the name — the id argument carries it.
+          [f.name, f.transport, f.command, f.url, f.auth_ref, f.enabled, f.inserted_at]
+      end
     end
 
     defp j(term), do: Jason.encode!(term)
@@ -182,10 +208,12 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
         table = table_for(store_key)
 
         # Expiry is a store invariant for the grant/negotiation stores; the
-        # toolsets table has no expires_at column (records outlive callers).
+        # toolsets and engine_servers tables have no expires_at column
+        # (records outlive callers).
         {id_column, expiry} =
           case store_key do
             "toolsets" -> {"slug", ""}
+            "engine_servers" -> {"name", ""}
             _other -> {"id", " AND (expires_at IS NULL OR expires_at > $2)"}
           end
 
@@ -193,7 +221,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
         params =
           case store_key do
-            "toolsets" -> [id]
+            key when key in ["toolsets", "engine_servers"] -> [id]
             _other -> [id, DateTime.utc_now()]
           end
 
@@ -219,7 +247,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
         expiry =
           case store_key do
-            "toolsets" -> ""
+            key when key in ["toolsets", "engine_servers"] -> ""
             _other -> "WHERE (expires_at IS NULL OR expires_at > $1)\n"
           end
 
@@ -259,7 +287,12 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       repo = fetch_repo!(opts)
 
       with :ok <- Persistence.guard_store_key(store_key) do
-        id_column = if store_key == "toolsets", do: "slug", else: "id"
+        id_column =
+          case store_key do
+            "toolsets" -> "slug"
+            "engine_servers" -> "name"
+            _other -> "id"
+          end
 
         case query(repo, "DELETE FROM #{table_for(store_key)} WHERE #{id_column} = $1", [id]) do
           {:ok, _} ->
@@ -338,6 +371,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     defp table_for("toolsets"), do: @toolsets_table
     defp table_for("toolset_grants"), do: @grants_table
     defp table_for("toolset_negotiations"), do: @negotiations_table
+    defp table_for("engine_servers"), do: @engine_servers_table
 
     # Column list per store — the revive step consumes these back into the
     # lib structs through the shared pipeline. (The toolsets table's primary
@@ -352,6 +386,10 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
     defp select_cols("toolset_negotiations") do
       "id, toolset_slug, authenticator, tool, required_scopes, granted, metadata_overrides, expires_at, inserted_at, metadata"
+    end
+
+    defp select_cols("engine_servers") do
+      "name, transport, command, url, auth_ref, enabled"
     end
 
     # Rebuild the string-keyed raw payload from the row and revive through the
@@ -433,6 +471,17 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
         "expires_at" => iso(expires_at),
         "inserted_at" => iso(inserted_at),
         "metadata" => jsonb(metadata)
+      })
+    end
+
+    defp revive_row("engine_servers", [name, transport, command, url, auth_ref, enabled]) do
+      Persistence.revive_record("engine_servers", %{
+        "name" => name,
+        "transport" => transport,
+        "command" => command,
+        "url" => url,
+        "auth_ref" => auth_ref,
+        "enabled" => enabled
       })
     end
 

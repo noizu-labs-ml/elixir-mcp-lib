@@ -129,17 +129,17 @@ defmodule Noizu.MCP.Test do
           {:ok, map()} | {:error, map()}
   # ⟦𓂕𓀂𓈬𓌰⟧ request :: auto-generated pointer for public function request
   def request(%Client{} = client, method, params \\ nil, opts \\ []) do
-    id = send_request(client, method, params)
+    id = send_request(client, method, params, opts)
     await(client, id, opts)
   end
 
   @doc "Send a request and return its id without awaiting the response."
-  @spec send_request(%Client{}, String.t(), map() | nil) :: integer()
+  @spec send_request(%Client{}, String.t(), map() | nil, keyword()) :: integer()
   # ⟦𓁎𓎼𓌮𓊚⟧ send_request :: Send a request and return its id without awaiting the response.
-  def send_request(%Client{} = client, method, params \\ nil) do
+  def send_request(%Client{} = client, method, params \\ nil, opts \\ []) do
     :counters.add(client.counter, 1, 1)
     id = :counters.get(client.counter, 1)
-    deliver(client, %Request{id: id, method: method, params: params})
+    deliver(client, %Request{id: id, method: method, params: params}, opts)
     id
   end
 
@@ -173,8 +173,16 @@ defmodule Noizu.MCP.Test do
   # ⟦𓉖𓆢𓇶𓏂⟧ deliver_raw :: Send a raw wire binary (escape hatch for malformed-input tests).
   def deliver_raw(%Client{} = client, binary), do: Session.deliver(client.session, binary)
 
-  defp deliver(client, message) do
-    Session.deliver(client.session, IO.iodata_to_binary(JsonRpc.encode!(message)))
+  # `opts[:claims]` scopes the request's principal (PRD-2 per-request identity):
+  # every wrapper that forwards opts (call_tool, list_tools, sql_*, ...) can
+  # therefore carry auth like the wire transports do.
+  defp deliver(client, message, opts \\ []) do
+    binary = IO.iodata_to_binary(JsonRpc.encode!(message))
+
+    case Keyword.get(opts, :claims) do
+      nil -> Session.deliver(client.session, binary)
+      claims -> Session.deliver(client.session, binary, claims)
+    end
   end
 
   # ── feature wrappers ──────────────────────────────────────────────────────
@@ -415,17 +423,7 @@ defmodule Noizu.MCP.Test do
   end
 
   defp sql_request(%Client{} = client, method, params, opts) do
-    :counters.add(client.counter, 1, 1)
-    id = :counters.get(client.counter, 1)
-
-    binary =
-      IO.iodata_to_binary(JsonRpc.encode!(%Request{id: id, method: method, params: params}))
-
-    case Keyword.get(opts, :claims) do
-      nil -> Session.deliver(client.session, binary)
-      claims -> Session.deliver(client.session, binary, claims)
-    end
-
+    id = send_request(client, method, params, opts)
     await(client, id, timeout: Keyword.get(opts, :timeout, @default_timeout))
   end
 
@@ -439,6 +437,62 @@ defmodule Noizu.MCP.Test do
       Enum.map(sort, fn {column, direction} ->
         %{"column" => column, "direction" => to_string(direction)}
       end)
+
+  @doc """
+  Attach an upstream by inserting a `servers` row through `sql/modify` (PRD-11):
+  the same dataset path the FDW's `INSERT INTO engine.servers` takes.
+
+      attach_upstream(client, %{"name" => "github", "transport" => "stdio",
+                                "command" => "...", "auth_ref" => "env:GITHUB_TOKEN"})
+
+  Options: `:claims`, `:timeout` as in `sql_modify/5`.
+  """
+  @spec attach_upstream(%Client{}, map(), keyword()) :: {:ok, map()} | {:error, map()}
+  def attach_upstream(%Client{} = client, row, opts \\ []) when is_map(row) do
+    sql_modify(client, "servers", :insert, [rows: [row]], opts)
+  end
+
+  @doc """
+  Poll `sql/scan` on `servers` until upstream `name` reads `ready` (or the
+  given status), returning its row map. Raises on timeout (default 5s).
+  """
+  @spec await_upstream_status(%Client{}, String.t(), String.t(), keyword()) :: map()
+  def await_upstream_status(%Client{} = client, name, status \\ "ready", opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 5_000)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_status(client, name, status, deadline)
+  end
+
+  defp do_await_status(client, name, status, deadline) do
+    row = upstream_row(client, name)
+
+    if row && row["status"] == status do
+      row
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        raise ExUnit.AssertionError,
+          message: "Timed out awaiting upstream #{inspect(name)} status #{inspect(status)}"
+      end
+
+      Process.sleep(50)
+      do_await_status(client, name, status, deadline)
+    end
+  end
+
+  @doc "One `servers` scan row for `name`, as a column-keyed map, or nil."
+  @spec upstream_row(%Client{}, String.t(), keyword()) :: map() | nil
+  def upstream_row(%Client{} = client, name, opts \\ []) do
+    scan_opts =
+      Keyword.merge([quals: [%{"column" => "name", "op" => "eq", "value" => name}]], opts)
+
+    case sql_scan(client, "servers", scan_opts) do
+      {:ok, %{"columns" => columns, "rows" => [row | _rest]}} ->
+        columns |> Enum.zip(row) |> Map.new()
+
+      _other ->
+        nil
+    end
+  end
 
   # ── notification assertions ───────────────────────────────────────────────
 

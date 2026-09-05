@@ -3,10 +3,12 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     @moduledoc """
     The shipped v1 change set (PRD-4 §4.6): the lib-owned Postgres tables —
     `noizu_mcp_toolsets`, `noizu_mcp_toolset_grants`,
-    `noizu_mcp_toolset_negotiations` and their `noizu_mcp_store_versions`
-    counters. Raw-SQL DDL; `if not exists` guards make re-runs idempotent (the
-    Runner's ledger skips applied sets anyway — the guards cover a crashed
-    pre-ledger half-apply and hand-run psql).
+    `noizu_mcp_toolset_negotiations`, the `noizu_mcp_engine_servers` registry
+    (PRD-11) and their `noizu_mcp_store_versions` counters. Raw-SQL DDL;
+    `if not exists` guards make re-runs idempotent (the Runner's ledger skips
+    applied sets anyway — the guards cover a crashed pre-ledger half-apply and
+    hand-run psql). An existing deployment that predates PRD-11 re-runs
+    `Runner.up/3` (idempotent) to pick up the engine_servers table.
 
     Ownership (decision 2): these tables serve lib-default and non-NPL
     consumers. The ONLY reader is `Noizu.MCP.Persistence.Ecto` (AP-11); NPL
@@ -104,12 +106,25 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
           version bigint not null default 0,
           bumped_at timestamptz not null default now()
         )
+        """,
+        """
+        create table if not exists noizu_mcp_engine_servers (
+          name text primary key,
+          transport text not null check (transport in ('stdio','http')),
+          command text,
+          url text,
+          auth_ref text,
+          enabled boolean not null default true,
+          inserted_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        )
         """
       ]
     end
 
     def down_statements do
       [
+        "drop table if exists noizu_mcp_engine_servers",
         "drop table if exists noizu_mcp_store_versions",
         "drop index if exists noizu_mcp_negotiations_lookup_idx",
         "drop table if exists noizu_mcp_toolset_negotiations",

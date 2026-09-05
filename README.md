@@ -526,6 +526,18 @@ The capability appears under `capabilities.experimental.sql` only for servers
 that opted in; servers that did not are wire-identical to before. Protocol
 reference: `docs/arch/sql.md`; operator guide: `guides/postgres.md`.
 
+## Engine federation (experimental)
+
+`Noizu.MCP.Engine` turns "connect another MCP server" into a row insert: one
+MCP server whose catalog is the union of its attached upstreams — stdio-only
+ones included — namespaced `<server>.<tool>`, with ACL, operator overrides and
+health supervision applied through the ordinary toolset machinery. Attach via
+`sql/modify` on the `servers` relation, the `engine.attach` tool, or static
+config; credentials live by reference (`env:`, `secret:`, `infisical:`,
+`passthrough`), never inline. Run standalone with `mix mcp.engine`. See
+[guides/engine.md](guides/engine.md) (operator) and `docs/arch/engine.md`
+(design).
+
 ## Consuming servers (client)
 
 ```elixir

@@ -7,7 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0]
+
+Release covering the pg_mcp series-2 library surface: PRD-9 (`sql/*` +
+datasets), PRD-11 (the Engine) and the PRD-6 groundwork. Consumers should pin
+`~> 0.4`. Publish is user-run (`mix hex.publish` with 2FA); tag `v0.4.0`.
+
 ### Added
+
+- **`Noizu.MCP.Engine` — upstream federation** (PRD-11, ADR-007): an MCP
+  server whose content is other MCP servers. Attach an upstream with a
+  `servers` row (via `sql/modify`, the `engine.attach` tool, or static
+  config — one implementation, D1): namespaced `<server>.<tool>` tools,
+  prompts and resources (resource URIs prefixed `mcp+engine://<server>/`),
+  one Toolset layer per ready upstream at weight 100 folded by the existing
+  merge engine, so operator overrides (200) and ACL (300) apply to federated
+  tools with no federation-specific precedence code. Supervised per-upstream
+  sessions with exponential backoff and jitter (reset on success): a down
+  upstream sets `status = 'error'` and contributes an empty layer — every
+  healthy upstream keeps serving, `tools/list` never fails. Upstream
+  `list_changed` notifications, a periodic backstop and `engine.refresh`
+  re-list; a changed layer emits the engine's own downstream notification.
+  Credentials are stored BY REFERENCE ONLY (`env:`, `secret:`, `infisical:`,
+  `passthrough`); anything credential-shaped is rejected at insert and
+  resolved values never reach a row, log, telemetry payload or error.
+  Pass-through (opt-in per upstream) forwards the caller's credential through
+  per-principal, idle-evicted sessions and refuses a tokenless caller.
+  `engine.attach` / `engine.detach` / `engine.refresh` wrap the dataset
+  callbacks. Upstreams advertising `experimental.sql` have their relations
+  re-exported as `<server>.<relation>` with `sql/scan` proxying. Run embedded
+  behind the Streamable HTTP plug or standalone with `mix mcp.engine`
+  (`--no-auth` binds loopback-only). Guides: `guides/engine.md`;
+  design: `docs/arch/engine.md`.
+
+- **`engine_servers` persistence**: a fourth record kind in the shared
+  persistence codec (PRD-4 providers), with the Ecto adapter and the v1
+  migration gaining the `noizu_mcp_engine_servers` table. Existing
+  deployments re-run `Migration.Runner.up/3` (idempotent) once; the ping
+  boot gate is unchanged.
+
+- **`Noizu.MCP.Client.protocol_version/1`**: accessor for the negotiated
+  protocol version.
+
+- **`Noizu.MCP.Test` engine helpers**: `attach_upstream/3` (attach through
+  the `servers` SQL path), `await_upstream_status/4`, `upstream_row/3`;
+  per-request `:claims` are now honored by every request wrapper (previously
+  only the `sql/*` wrappers).
+
+### Fixed
+
+- `Noizu.MCP.Persistence.Memory`: the record table is created with an heir
+  owner process. A put arriving from an ephemeral process (a session handler
+  task) used to leave the table owned by that process; when it exited the
+  table — and every stored record — silently disappeared.
+
 
 - **Experimental `sql/*` method family** (PRD-9, ADR-005): `sql/schema`,
   `sql/scan` and `sql/modify` let a foreign-data wrapper project an MCP

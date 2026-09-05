@@ -200,12 +200,19 @@ defmodule Noizu.MCP.Persistence.Memory do
   defp table do
     case :ets.whereis(@table) do
       :undefined ->
+        owner = spawn_table_owner()
+
         try do
           :ets.new(@table, [
             :named_table,
             :public,
             read_concurrency: true,
-            write_concurrency: true
+            write_concurrency: true,
+            # PRD-11: a put can arrive from an EPHEMERAL process (a session
+            # handler task). Without an heir the table would die with its
+            # creator, silently dropping every stored record — so ownership
+            # transfers to a parked owner process that never exits.
+            heir: owner
           ])
         catch
           _kind, _reason -> :ok
@@ -215,6 +222,21 @@ defmodule Noizu.MCP.Persistence.Memory do
 
       ref ->
         ref
+    end
+  end
+
+  # The parked heir: keeps the table alive no matter which process created it.
+  defp spawn_table_owner do
+    spawn(fn ->
+      Process.flag(:trap_exit, true)
+      receive_loop()
+    end)
+  end
+
+  defp receive_loop do
+    receive do
+      :stop -> :ok
+      _other -> receive_loop()
     end
   end
 end
