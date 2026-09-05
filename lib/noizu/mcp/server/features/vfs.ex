@@ -13,6 +13,13 @@ defmodule Noizu.MCP.Server.Features.VFS do
     * Server-level (`stat(server, params, ctx)`, ...) — param extraction and
       validation over the server's registered backend (first entry of
       `__mcp__(:vfs)`), returning wire-shaped maps or `Noizu.MCP.Error` structs.
+
+  Every mount also serves a generated, read-only `/README.md`
+  (`Noizu.MCP.VFS.Readme`) at its root, backend-wins: paths the backend
+  answers `:enoent` fall back to the generated document, first-page root
+  listings gain a `README.md` entry when the backend does not list one, and
+  writes to the reserved path are `:erofs` unless the backend owns a writable
+  node there.
   """
 
   alias Noizu.MCP.Ctx
@@ -21,6 +28,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   alias Noizu.MCP.Server.VFSPubSub
   alias Noizu.MCP.VFS
   alias Noizu.MCP.VFS.Cache
+  alias Noizu.MCP.VFS.Readme
 
   @errno_codes %{
     eacces: -32040,
@@ -47,6 +55,9 @@ defmodule Noizu.MCP.Server.Features.VFS do
             Cache.put(backend, :stat, path, node, ttl())
             {:ok, stamp(backend, node)}
 
+          {:error, :enoent} = error ->
+            if Readme.path?(path), do: readme_stat(backend, path, ctx), else: error
+
           {:error, _} = error ->
             error
         end
@@ -54,6 +65,13 @@ defmodule Noizu.MCP.Server.Features.VFS do
       node ->
         {:ok, stamp(backend, node)}
     end
+  end
+
+  # Generated /README.md fallback — cached like any backend node.
+  defp readme_stat(backend, path, ctx) do
+    node = Readme.node(backend, ctx)
+    Cache.put(backend, :stat, path, node, ttl())
+    {:ok, stamp(backend, node)}
   end
 
   @doc "List `path`'s children against `backend`, through the cache."
@@ -68,6 +86,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
         case backend.list(path, cursor, ctx) do
           {:ok, entries, next_cursor} ->
             entries = Enum.map(entries, &stamp_entry(backend, &1))
+            entries = first_root_page(path, cursor, entries, backend, ctx)
             Cache.put(backend, :list, cache_key, {entries, next_cursor}, ttl())
             {:ok, entries, next_cursor}
 
@@ -79,6 +98,11 @@ defmodule Noizu.MCP.Server.Features.VFS do
         {:ok, entries, next_cursor}
     end
   end
+
+  # The generated README node joins first-page root listings when the backend
+  # does not list its own README.md.
+  defp first_root_page("/", nil, entries, backend, ctx), do: Readme.prepend(backend, entries, ctx)
+  defp first_root_page(_path, _cursor, entries, _backend, _ctx), do: entries
 
   @doc "Read `path` against `backend`, through the cache."
   # ⟦𓆒⟧ read
@@ -94,6 +118,9 @@ defmodule Noizu.MCP.Server.Features.VFS do
             Cache.put(backend, :read, path, result, ttl())
             {:ok, content, version + Cache.generation(backend)}
 
+          {:error, :enoent} = error ->
+            if Readme.path?(path), do: readme_read(backend, path, ctx), else: error
+
           {:error, _} = error ->
             error
         end
@@ -106,10 +133,23 @@ defmodule Noizu.MCP.Server.Features.VFS do
     end
   end
 
+  # Generated /README.md fallback — cached like any backend node.
+  defp readme_read(backend, path, ctx) do
+    result = {:ok, Readme.content(backend, ctx), 1}
+    Cache.put(backend, :read, path, result, ttl())
+    {:ok, elem(result, 1), 1 + Cache.generation(backend)}
+  end
+
   @doc "Overwrite `path` via `backend`; bumps the generation on success."
   # ⟦𓆒⟧ write
   @spec write(module(), String.t(), binary(), Ctx.t()) :: {:ok, VFS.t()} | {:error, term()}
   def write(backend, path, data, ctx) when is_binary(path) and is_binary(data) do
+    if Readme.reserved?(backend, path, ctx),
+      do: {:error, :erofs},
+      else: write_node(backend, path, data, ctx)
+  end
+
+  defp write_node(backend, path, data, ctx) do
     case backend.write(path, data, ctx) do
       {:ok, node} ->
         Cache.bump_generation(backend)
@@ -127,6 +167,12 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @spec create(module(), String.t(), binary() | :dir, Ctx.t()) ::
           {:ok, VFS.t()} | {:error, term()}
   def create(backend, path, data, ctx) when is_binary(path) do
+    if Readme.reserved?(backend, path, ctx),
+      do: {:error, :erofs},
+      else: create_node(backend, path, data, ctx)
+  end
+
+  defp create_node(backend, path, data, ctx) do
     case backend.create(path, data, ctx) do
       {:ok, node} ->
         Cache.bump_generation(backend)
@@ -143,6 +189,12 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # ⟦𓆒⟧ remove
   @spec remove(module(), String.t(), Ctx.t()) :: :ok | {:error, term()}
   def remove(backend, path, ctx) when is_binary(path) do
+    if Readme.reserved?(backend, path, ctx),
+      do: {:error, :erofs},
+      else: remove_node(backend, path, ctx)
+  end
+
+  defp remove_node(backend, path, ctx) do
     case backend.remove(path, ctx) do
       :ok ->
         gen = Cache.bump_generation(backend)
@@ -170,8 +222,18 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @spec xattr(module(), String.t(), Ctx.t()) :: {:ok, map()} | {:error, term()}
   def xattr(backend, path, ctx) when is_binary(path) do
     case backend.xattr(path, ctx) do
-      {:ok, xattrs} -> {:ok, xattrs}
-      {:error, _} = error -> error
+      {:ok, xattrs} ->
+        {:ok, xattrs}
+
+      {:error, :enoent} = error ->
+        if Readme.path?(path) do
+          {:ok, Readme.node(backend, ctx).xattrs}
+        else
+          error
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 

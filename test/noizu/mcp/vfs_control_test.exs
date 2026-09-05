@@ -480,7 +480,10 @@ defmodule Noizu.MCP.VFS.ControlTest do
     wrapper = Noizu.MCP.VFS.ControlTest.StandaloneWrapper
 
     assert {:ok, %Noizu.MCP.VFS{type: :dir}} = VFS.stat(wrapper, "/", ctx)
-    assert {:ok, [%{name: "etc"}], nil} = VFS.list(wrapper, "/", nil, ctx)
+
+    assert {:ok, [%{name: "README.md", type: :file}, %{name: "etc", type: :dir}], nil} =
+             VFS.list(wrapper, "/", nil, ctx)
+
     assert {:ok, _} = VFS.stat(wrapper, "/etc/dev", ctx)
 
     assert {:error, :enoent} = VFS.stat(wrapper, "/hello.txt", ctx)

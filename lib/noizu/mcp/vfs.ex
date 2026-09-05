@@ -49,6 +49,11 @@ defmodule Noizu.MCP.VFS do
   writes return `{:error, :enosys}`, `xattr/2` returns `{:ok, %{}}`. Override
   them to advertise write capability (see `Noizu.MCP.Server.VFS`).
 
+  Every mount also serves a generated, read-only `/README.md` (see
+  `Noizu.MCP.VFS.Readme`); a backend customizes its section there by
+  overriding `__mcp_vfs__(:describe)` — default `nil` falls back to generic
+  text. A backend that serves its own `/README.md` node wins outright.
+
   Conformance: any backend can be verified against the shared battery with
   `use Noizu.MCP.VFS.Conformance, backend: MyBackend, seed: {MyBackend, :seed}`.
   """
@@ -126,6 +131,9 @@ defmodule Noizu.MCP.VFS do
   @doc false
   @callback __mcp_vfs__(:implemented) :: [atom()]
 
+  @doc "Short markdown blurb for the backend's section in the mount's generated `/README.md` (see `Noizu.MCP.VFS.Readme`)."
+  @callback __mcp_vfs__(:describe) :: String.t() | nil
+
   @optional_callbacks write: 3, create: 3, remove: 2, search: 3, xattr: 2
 
   # ⟦𓆒⟧ __using__
@@ -167,9 +175,21 @@ defmodule Noizu.MCP.VFS do
         end
       end
 
+    # `__mcp_vfs__(:describe)` — a backend that defines its own clause keeps
+    # it; everyone else gets the `nil` default.
+    describe_default =
+      unless Module.defines?(env.module, {:__mcp_vfs__, 1}) do
+        quote do
+          @doc false
+          def __mcp_vfs__(:describe), do: nil
+        end
+      end
+
     quote do
       @doc false
       def __mcp_vfs__(:implemented), do: unquote(implemented)
+
+      unquote_splicing(List.wrap(describe_default))
 
       unquote_splicing(defaults)
     end
