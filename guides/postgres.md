@@ -139,3 +139,11 @@ Datasets authorize under a subject of their own, `{:dataset, name}`. An
 dataset scans (its own default), so bolt a dataset onto an ACL-configured
 server only when the provider knows the subject. Tool-derived relations need
 nothing: they borrow the tool's verdict.
+
+## Install (pg_mcp on a Postgres)
+
+The extension ships as an image layer (`pg/docker/`), not through hex. The
+operator runbook — image roll with failover warning, one foreign server for
+the engine, USER MAPPINGS from Infisical, import, attach-as-rows, upgrade
+(`ALTER EXTENSION pg_mcp UPDATE`) and rollback (`DROP EXTENSION pg_mcp
+CASCADE`; audit tables survive) — lives at `docs/pg-mcp-install.md`.

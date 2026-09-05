@@ -2,7 +2,11 @@
 //!
 //! PRD-6 scope: the extension skeleton, a blocking Streamable HTTP JSON-RPC
 //! client, `USER MAPPING` credential sourcing, option validators and the
-//! `mcp.*` function surface. Foreign tables and the catalog arrive in PRD-7.
+//! `mcp.*` function surface. PRD-7 adds the FDW: the foreign-table registry
+//! (`tables`), the `FdwRoutine` plumbing (`fdw`), quals, the ten catalog /
+//! read-through / invocation tables (tracks A-C), the §4.10 catalog cache,
+//! `IMPORT FOREIGN SCHEMA` + `mcp.import/3` (track D), and the integration
+//! battery (`e2e`, track E).
 //!
 //! ## ADR deviation (recorded, not silent)
 //!
@@ -25,11 +29,19 @@ extern "C-unwind" fn _PG_init() {
 }
 
 pub mod api;
+pub mod cache;
 pub mod client;
+pub mod codegen;
+#[cfg(any(test, feature = "pg_test"))]
+mod e2e;
 pub mod errors;
+pub mod fdw;
+pub mod import;
 pub mod options;
+pub mod quals;
 pub mod session;
 pub mod sse;
+pub mod tables;
 
 // The `mcp` schema is created before anything is placed in it. `#[pg_schema] mod
 // mcp` in api.rs emits `CREATE SCHEMA mcp` itself, but the FDW SQL below is
@@ -44,7 +56,7 @@ CREATE SCHEMA IF NOT EXISTS mcp;
 
 -- FR-6.3: register the mcp_fdw foreign-data wrapper so CREATE SERVER and
 -- CREATE USER MAPPING run their option validators. The handler's scan/modify
--- routines are PRD-7; planning against a foreign table raises 0A000 today.
+-- routines landed with PRD-7.
 --
 -- The validator's Rust body is `api::mcp_fdw_validator` (`#[pg_extern]`); its
 -- CREATE FUNCTION is written here because `CREATE FOREIGN DATA WRAPPER` below
@@ -66,6 +78,26 @@ CREATE FOREIGN DATA WRAPPER mcp_fdw
 
 COMMENT ON FOREIGN DATA WRAPPER mcp_fdw IS
   'Model Context Protocol servers as Postgres foreign servers (pg_mcp)';
+
+-- PRD-8 section 4.6: the per-tool generation bookkeeping. Names and
+-- provenance only (AP-P7) -- never a copy of a tool schema; regeneration
+-- always re-reads from the server. Lives in this hand-written block because
+-- it must follow the CREATE SCHEMA mcp above, and extension_sql blocks
+-- cannot depend on each other's ordering. The same DDL is mirrored in the
+-- hand-written pg_mcp--0.2.0--0.3.0.sql upgrade script; the shape's single
+-- source is codegen::registry::CREATE_TABLE_SQL.
+CREATE TABLE mcp.generated (
+  server text NOT NULL,
+  schema text NOT NULL,
+  kind text NOT NULL,
+  name text NOT NULL,
+  tool text NOT NULL,
+  generated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (schema, name)
+);
+
+COMMENT ON TABLE mcp.generated IS
+  'Per-tool generation bookkeeping (PRD-8 section 4.6): names and provenance of the SQL objects pg_mcp created from MCP tool definitions. Never a copy of a tool schema - regeneration always re-reads from the server.';
 "#,
     name = "mcp_fdw",
     requires = [api::mcp_fdw_validator],
@@ -224,15 +256,18 @@ mod tests {
     }
 
     #[pg_test]
-    fn import_is_declared_but_raises_feature_not_supported() {
-        // FR-6.10.
+    fn import_creates_the_catalog_from_sql() {
+        // PRD-7 §4.11: the FR-6.10 stub is gone — mcp.import projects the
+        // registry over SPI and returns the count created. No network I/O is
+        // involved until `all_upstreams 'true'` asks the engine for its tools.
         Spi::run(
             "CREATE SERVER imp_srv FOREIGN DATA WRAPPER mcp_fdw
                OPTIONS (url 'https://x.example/mcp')",
         )
         .unwrap();
-        let err = Spi::run("SELECT mcp.import('imp_srv','s')").unwrap_err();
-        assert!(format!("{err:?}").contains("PRD-7"), "{err:?}");
+        Spi::run("CREATE SCHEMA imp_s").unwrap();
+        let n = Spi::get_one::<i32>("SELECT mcp.import('imp_srv','imp_s')").unwrap();
+        assert_eq!(n, Some(10));
     }
 
     #[pg_test]
@@ -264,7 +299,7 @@ mod tests {
     fn version_functions_report_the_pinned_values() {
         assert_eq!(
             Spi::get_one::<String>("SELECT mcp.version()").unwrap(),
-            Some("0.1.0".to_string())
+            Some("0.3.0".to_string())
         );
         assert_eq!(
             Spi::get_one::<String>("SELECT mcp.protocol_version()").unwrap(),

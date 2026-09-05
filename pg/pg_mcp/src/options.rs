@@ -13,6 +13,10 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 pub const MIN_TIMEOUT_MS: u64 = 1;
 pub const MAX_TIMEOUT_MS: u64 = 600_000;
 
+/// PRD-7 §4.10: catalog cache TTL, overridable per server. `0` disables
+/// caching entirely (every statement re-fetches the lists it needs).
+pub const DEFAULT_CACHE_TTL_MS: u64 = 60_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Auto,
@@ -59,6 +63,8 @@ pub struct ServerOptions {
     pub auth: AuthMode,
     pub max_unqualified_reads: i64,
     pub audit_table: Option<String>,
+    /// §4.10: catalog cache TTL in milliseconds; `0` disables caching.
+    pub cache_ttl_ms: u64,
 }
 
 /// Recognised foreign-server option names. Anything else is rejected so a typo
@@ -70,6 +76,7 @@ const SERVER_OPTION_NAMES: &[&str] = &[
     "auth",
     "max_unqualified_reads",
     "audit_table",
+    "cache_ttl_ms",
 ];
 
 const USER_MAPPING_OPTION_NAMES: &[&str] = &["token", "token_secret"];
@@ -138,6 +145,13 @@ impl ServerOptions {
             None => None,
         };
 
+        // §4.10: `0` is meaningful ("no caching"), so the only validation is
+        // that it parses as a non-negative integer.
+        let cache_ttl_ms = match get("cache_ttl_ms") {
+            Some(v) => parse_non_negative_u64(v, "cache_ttl_ms")?,
+            None => DEFAULT_CACHE_TTL_MS,
+        };
+
         Ok(ServerOptions {
             url: parsed.to_string(),
             mode,
@@ -145,6 +159,7 @@ impl ServerOptions {
             auth,
             max_unqualified_reads,
             audit_table,
+            cache_ttl_ms,
         })
     }
 }
@@ -259,6 +274,17 @@ fn parse_non_negative(raw: &str, option: &str) -> McpResult<i64> {
     Ok(n)
 }
 
+/// Like [`parse_non_negative`] but the option is documented in milliseconds
+/// that may legitimately be large; parses as `u64`.
+fn parse_non_negative_u64(raw: &str, option: &str) -> McpResult<u64> {
+    let n: u64 = raw.trim().parse().map_err(|_| {
+        McpError::InvalidOption(format!(
+            "invalid value for foreign server option \"{option}\": \"{raw}\" is not an integer"
+        ))
+    })?;
+    Ok(n)
+}
+
 /// `audit_table` must be a schema-qualified identifier pair. Existence is
 /// checked lazily at first write (PRD-6 §4.2), not here.
 fn parse_audit_table(raw: &str) -> McpResult<String> {
@@ -343,6 +369,7 @@ mod tests {
             ("auth", "bearer"),
             ("max_unqualified_reads", "0"),
             ("audit_table", "mcp_audit.tool_calls"),
+            ("cache_ttl_ms", "5000"),
         ]))
         .unwrap();
 
@@ -351,6 +378,7 @@ mod tests {
         assert_eq!(parsed.auth, AuthMode::Bearer);
         assert_eq!(parsed.max_unqualified_reads, 0);
         assert_eq!(parsed.audit_table.as_deref(), Some("mcp_audit.tool_calls"));
+        assert_eq!(parsed.cache_ttl_ms, 5_000);
     }
 
     #[pgrx::pg_test]
@@ -361,6 +389,26 @@ mod tests {
         assert_eq!(parsed.auth, AuthMode::Bearer);
         assert_eq!(parsed.max_unqualified_reads, 0);
         assert!(parsed.audit_table.is_none());
+        assert_eq!(parsed.cache_ttl_ms, DEFAULT_CACHE_TTL_MS);
+    }
+
+    #[pgrx::pg_test]
+    fn cache_ttl_zero_disables_and_negatives_are_rejected() {
+        // PRD-7 §4.10: 0 disables caching — valid, distinct from the default.
+        let parsed = ServerOptions::parse(&opts(&[
+            ("url", "https://x.example/mcp"),
+            ("cache_ttl_ms", "0"),
+        ]))
+        .unwrap();
+        assert_eq!(parsed.cache_ttl_ms, 0);
+
+        let err = ServerOptions::parse(&opts(&[
+            ("url", "https://x.example/mcp"),
+            ("cache_ttl_ms", "-1"),
+        ]))
+        .unwrap_err();
+        assert_eq!(err.sqlstate(), "22023");
+        assert!(err.message().contains("cache_ttl_ms"));
     }
 
     #[pgrx::pg_test]

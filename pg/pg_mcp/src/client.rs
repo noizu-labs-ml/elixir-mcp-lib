@@ -9,6 +9,8 @@ use crate::errors::{is_expired_session, McpError, McpResult};
 use crate::sse::{self, Interrupts};
 use serde_json::{json, Value};
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Newest protocol version this extension knows how to speak (PRD-6 §9 Q5: the
@@ -61,8 +63,48 @@ pub struct McpSession {
     /// Count of `initialize` round trips this session object has performed.
     /// FR-6.4 asserts this stays at 1 across N calls.
     pub initialize_count: u32,
+    /// Server-initiated notifications observed in-flight (PRD-7 §4.10). Shared
+    /// with the transport so the SSE reader can set flags mid-request.
+    pub notifications: Arc<Notifications>,
     /// Connection pool + timeouts, created once when the session opens.
     agent: ureq::Agent,
+}
+
+/// Server-initiated notifications seen while draining an SSE stream.
+///
+/// PRD-7 §4.10: the extension only reads the stream during an in-flight
+/// request, so observation is **best-effort** — a notification arriving
+/// between statements is not seen, and TTL is the guarantee while this flag is
+/// the optimization. Consumers (Track A's cache) poll
+/// [`Notifications::take_tools_list_changed`] after request activity.
+#[derive(Debug, Default)]
+pub struct Notifications {
+    tools_list_changed: AtomicBool,
+}
+
+impl Notifications {
+    pub fn new() -> Notifications {
+        Notifications::default()
+    }
+
+    /// Record a server-initiated notification frame. Unknown methods are
+    /// ignored (they are skipped by the SSE reader anyway).
+    pub fn observe(&self, frame: &Value) {
+        if frame.get("method").and_then(Value::as_str) == Some("notifications/tools/list_changed") {
+            self.tools_list_changed.store(true, Ordering::Release);
+        }
+    }
+
+    /// Was `notifications/tools/list_changed` seen since the last take?
+    /// Consuming read: the flag resets so one observation invalidates once.
+    pub fn take_tools_list_changed(&self) -> bool {
+        self.tools_list_changed.swap(false, Ordering::AcqRel)
+    }
+
+    /// Non-consuming peek.
+    pub fn tools_list_changed(&self) -> bool {
+        self.tools_list_changed.load(Ordering::Acquire)
+    }
 }
 
 /// What the transport did with one HTTP exchange.
@@ -83,6 +125,10 @@ pub struct Transport<'a, I: Interrupts> {
     pub timeout: Duration,
     pub bearer: Option<&'a Bearer>,
     pub interrupts: &'a I,
+    /// Shared notification flags, set by the SSE reader while it skips
+    /// server-initiated frames (PRD-7 §4.10). `None` in paths that never read
+    /// a stream (notifications, tests).
+    pub notifications: Option<Arc<Notifications>>,
 }
 
 impl McpSession {
@@ -98,6 +144,7 @@ impl McpSession {
             next_id: 1,
             initialized_at: Instant::now(),
             initialize_count: 0,
+            notifications: Arc::new(Notifications::new()),
             agent: build_agent(transport.timeout),
         };
         session.initialize(transport)?;
@@ -213,8 +260,7 @@ impl McpSession {
             // `initialize` captures a new session id, and it is answered on the
             // JSON fast path in practice.
             Wire::Sse(reader) => {
-                let value =
-                    sse::read_until_id(reader, id, transport.timeout, transport.interrupts)?;
+                let value = self.read_stream(reader, id, transport)?;
                 finish(value, id).map(|result| Some((result, None)))
             }
             Wire::Accepted => Err(McpError::Transport(
@@ -238,8 +284,7 @@ impl McpSession {
         match dispatch(request, body, id, transport) {
             Wire::Json(value, sid) => finish(value, id).map(|result| (result, sid)),
             Wire::Sse(reader) => {
-                let value =
-                    sse::read_until_id(reader, id, transport.timeout, transport.interrupts)?;
+                let value = self.read_stream(reader, id, transport)?;
                 finish(value, id).map(|result| (result, None))
             }
             Wire::Accepted => Err(McpError::Transport(
@@ -284,6 +329,94 @@ impl McpSession {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// Drain an SSE stream until our reply arrives, feeding every
+    /// server-initiated frame to the shared notification flags (PRD-7 §4.10).
+    fn read_stream<I: Interrupts>(
+        &self,
+        reader: Box<dyn Read + Send>,
+        want_id: i64,
+        transport: &Transport<'_, I>,
+    ) -> McpResult<Value> {
+        let notifications = transport.notifications.clone();
+        sse::read_until_id_observed(
+            reader,
+            want_id,
+            transport.timeout,
+            transport.interrupts,
+            &mut |frame| {
+                if let Some(flags) = notifications.as_ref() {
+                    flags.observe(frame);
+                }
+            },
+        )
+    }
+}
+
+// ── PRD-7 §6 step 7.10: cursor-following list helper ─────────────────────────
+
+/// Runaway guard for `list_all`: a well-behaved server exhausts its cursors
+/// in a handful of pages; this only exists so a cycling `nextCursor` fails
+/// with `08006` instead of pinning the backend forever.
+pub const MAX_LIST_PAGES: usize = 1_000;
+
+/// One page's payload: the items array plus the `nextCursor` to follow.
+pub fn page_items(result: &Value, array_key: &str) -> (Vec<Value>, Option<String>) {
+    let items = result
+        .get(array_key)
+        .and_then(Value::as_array)
+        .map(|a| a.clone())
+        .unwrap_or_default();
+    let next = result
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    (items, next)
+}
+
+/// Follow a paginated MCP list method (`tools/list`, `prompts/list`,
+/// `resources/list`, `resources/templates/list`) to exhaustion in one call
+/// (FR-7.3), returning every item across all pages. A missing `array_key`
+/// yields an empty vector (D5: a server that answers `null` yields an empty
+/// table; a `-32601` error raises before this is consulted).
+pub fn list_all<I: Interrupts>(
+    session: &mut McpSession,
+    method: &str,
+    array_key: &str,
+    mut params: Value,
+    transport: &Transport<'_, I>,
+) -> McpResult<Vec<Value>> {
+    let mut items = Vec::new();
+    let mut followed: Vec<String> = Vec::new();
+
+    loop {
+        if followed.len() >= MAX_LIST_PAGES {
+            return Err(McpError::Transport(format!(
+                "MCP list method \"{method}\" did not exhaust its cursor within {MAX_LIST_PAGES} pages"
+            )));
+        }
+
+        let result = session.request(method, params.clone(), transport)?;
+        let (page, next) = page_items(&result, array_key);
+        items.extend(page);
+
+        match next {
+            None => return Ok(items),
+            Some(cursor) => {
+                // A cursor we have already followed means the server is
+                // cycling: fail the scan rather than loop.
+                if followed.contains(&cursor) {
+                    return Err(McpError::Transport(format!(
+                        "MCP list method \"{method}\" repeated pagination cursor"
+                    )));
+                }
+                followed.push(cursor.clone());
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert("cursor".to_string(), Value::String(cursor));
+                }
+            }
+        }
     }
 }
 
@@ -499,6 +632,59 @@ mod tests {
     #[pgrx::pg_test]
     fn client_identity_is_the_crate_version() {
         assert_eq!(CLIENT_NAME, "pg_mcp");
-        assert_eq!(CLIENT_VERSION, "0.1.0");
+        assert_eq!(CLIENT_VERSION, "0.3.0");
+    }
+
+    #[pgrx::pg_test]
+    fn page_items_extracts_the_array_and_the_cursor() {
+        let page = json!({"tools": [{"name": "a"}, {"name": "b"}], "nextCursor": "c2"});
+        let (items, next) = page_items(&page, "tools");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["name"], "a");
+        assert_eq!(next.as_deref(), Some("c2"));
+
+        let last = json!({"tools": [{"name": "c"}]});
+        let (items, next) = page_items(&last, "tools");
+        assert_eq!(items.len(), 1);
+        assert_eq!(next, None);
+
+        // A result without the key (or a null array) is an empty page, not an
+        // error: D5 handles the "surface not implemented" case upstream.
+        let (items, next) = page_items(&json!({"result": {}}), "tools");
+        assert!(items.is_empty());
+        assert_eq!(next, None);
+    }
+
+    #[pgrx::pg_test]
+    fn list_changed_notification_is_observed_and_taken_once() {
+        let flags = Notifications::new();
+        assert!(!flags.tools_list_changed());
+
+        flags.observe(&json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": {}
+        }));
+        assert!(flags.tools_list_changed());
+        assert!(flags.take_tools_list_changed());
+        assert!(!flags.tools_list_changed());
+        assert!(!flags.take_tools_list_changed(), "take consumes");
+    }
+
+    #[pgrx::pg_test]
+    fn other_notifications_are_ignored() {
+        let flags = Notifications::new();
+        for method in [
+            "notifications/progress",
+            "notifications/initialized",
+            "notifications/resources/list_changed",
+            "notifications/prompts/list_changed",
+        ] {
+            flags.observe(&json!({"jsonrpc": "2.0", "method": method}));
+        }
+        assert!(!flags.tools_list_changed());
+        // Non-JSON-RPC shapes are ignored too.
+        flags.observe(&json!({"result": {}}));
+        assert!(!flags.tools_list_changed());
     }
 }

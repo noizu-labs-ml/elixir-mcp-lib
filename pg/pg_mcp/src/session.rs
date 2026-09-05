@@ -65,6 +65,7 @@ impl Interrupts for PgInterrupts {
 
 /// Everything resolved from the catalog for one call (design rule D3: nothing
 /// is captured at build time).
+#[derive(Clone)]
 pub struct Resolved {
     pub server_oid: pg_sys::Oid,
     pub user_oid: pg_sys::Oid,
@@ -152,10 +153,13 @@ pub fn with_session<T>(
 ) -> McpResult<T> {
     let key = (resolved.server_oid, resolved.user_oid);
     let interrupts = PgInterrupts;
-    let transport = Transport {
+    let mut transport = Transport {
         timeout: Duration::from_millis(resolved.options.timeout_ms),
         bearer: resolved.bearer.as_ref(),
         interrupts: &interrupts,
+        // Filled once the session exists; the SSE reader shares the session's
+        // notification flags (PRD-7 §4.10).
+        notifications: None,
     };
 
     // The closure runs with the map borrow released: an MCP call can re-enter
@@ -166,6 +170,9 @@ pub fn with_session<T>(
         // rather than talking to the old endpoint (D3).
         _ => McpSession::open(&resolved.options.url, &transport)?,
     };
+    // PRD-7 §4.10: server-initiated notifications observed while draining an
+    // SSE reply land on the session's shared flag set.
+    transport.notifications = Some(session.notifications.clone());
 
     let outcome = f(&mut session, &transport);
 
@@ -315,8 +322,10 @@ fn user_mapping_exists(server_oid: pg_sys::Oid, user_oid: pg_sys::Oid) -> bool {
 /// Convert a `List *` of `DefElem *` (catalog options) into `(name, value)`.
 ///
 /// SAFETY: caller guarantees `list` is a valid `List *` of `DefElem *` owned by
-/// the current memory context, as produced by `GetForeignServer`/`GetUserMapping`.
-unsafe fn defelem_list(list: *mut pg_sys::List) -> Vec<(String, String)> {
+/// the current memory context, as produced by `GetForeignServer`/`GetUserMapping`/
+/// `GetForeignTable`. Shared with `fdw.rs`, which reads the same shape off
+/// foreign tables (PRD-7.E: the `upstream` / `cache_ttl_ms` table options).
+pub(crate) unsafe fn defelem_list(list: *mut pg_sys::List) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if list.is_null() {
         return out;

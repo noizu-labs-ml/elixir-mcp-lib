@@ -4,14 +4,14 @@
 Speaks just enough JSON-RPC MCP for the engine's supervised sessions:
 
   * initialize / notifications/initialized
-  * tools/list, tools/call (echo, fail, token, emit_change)
+  * tools/list, tools/call (echo, fail, token, emit_change, greet)
   * prompts/list, resources/list, resources/templates/list (empty)
   * ping
   * sql/schema + sql/scan when --advertise-sql
 
 Options:
   --name NAME        serverInfo name (default "fixture")
-  --tools SPEC       comma list from {echo, fail, token, emit_change}
+  --tools SPEC       comma list from {echo, fail, token, emit_change, greet}
   --advertise-sql    advertise capabilities.experimental.sql
   --die-after MS     kill -9 ourselves after MS milliseconds (tests reconnect)
   --change-adds TOOL after emitting a list_changed, add TOOL to tools/list
@@ -76,6 +76,21 @@ def tool_defs():
             "inputSchema": {"type": "object", "properties": {}},
         })
 
+    if "greet" in names:
+        # READ-ONLY with an all-optional input: the per-tool SELECT-invocation
+        # gate (PRD-8 invoke_on_select 'read_only') admits THIS tool's table
+        # and refuses every other one. PRD-10 e2e E5/E6.
+        defs.append({
+            "name": "greet",
+            "description": "A read-only greeting (per-tool SELECT invocation)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": [],
+            },
+            "annotations": {"readOnlyHint": True},
+        })
+
     for extra in EXTRA_TOOLS:
         defs.append({
             "name": extra,
@@ -96,6 +111,8 @@ def text_result(text, is_error=False):
 def call_tool(name, args):
     if name == "echo":
         return text_result(args.get("message", ""))
+    if name == "greet":
+        return text_result("hello " + str(args.get("message") or "world"))
     if name == "fail":
         return text_result("it failed on purpose", is_error=True)
     if name == "token":

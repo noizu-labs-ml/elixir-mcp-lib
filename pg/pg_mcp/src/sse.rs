@@ -44,6 +44,20 @@ pub fn read_until_id<R: Read, I: Interrupts>(
     timeout: Duration,
     interrupts: &I,
 ) -> McpResult<Value> {
+    read_until_id_observed(reader, want_id, timeout, interrupts, &mut |_| {})
+}
+
+/// [`read_until_id`] with an observer: every dispatched frame — including the
+/// skipped ones, i.e. server-initiated notifications — is handed to `observe`
+/// before the match decision. PRD-7 §4.10's `notifications/tools/list_changed`
+/// sniffing hangs off this; the observer must never raise.
+pub fn read_until_id_observed<R: Read, I: Interrupts>(
+    reader: R,
+    want_id: i64,
+    timeout: Duration,
+    interrupts: &I,
+    observe: &mut dyn FnMut(&Value),
+) -> McpResult<Value> {
     let started = Instant::now();
     let mut buffered = BufReader::new(reader);
     let mut pending = Event::default();
@@ -78,8 +92,13 @@ pub fn read_until_id<R: Read, I: Interrupts>(
 
             if !data_lines.is_empty() {
                 pending.data = data_lines.join("\n");
-                if let Some(value) = match_frame(&pending, want_id)? {
-                    return Ok(value);
+                if let Ok(parsed) = serde_json::from_str::<Value>(&pending.data) {
+                    observe(&parsed);
+                    if let Some(id) = parsed.get("id").and_then(json_id) {
+                        if id == want_id {
+                            return Ok(parsed);
+                        }
+                    }
                 }
             }
             pending = Event::default();
@@ -106,21 +125,6 @@ pub fn read_until_id<R: Read, I: Interrupts>(
             // "retry" and anything unknown are ignored per the SSE spec.
             _ => {}
         }
-    }
-}
-
-/// Does this frame carry the JSON-RPC reply we are waiting for?
-fn match_frame(event: &Event, want_id: i64) -> McpResult<Option<Value>> {
-    let parsed: Value = match serde_json::from_str(&event.data) {
-        Ok(v) => v,
-        // A frame that is not JSON is not our reply; a malformed *stream* is
-        // caught by the end-of-stream and deadline branches instead.
-        Err(_) => return Ok(None),
-    };
-
-    match parsed.get("id").and_then(json_id) {
-        Some(id) if id == want_id => Ok(Some(parsed)),
-        _ => Ok(None),
     }
 }
 
@@ -283,5 +287,61 @@ mod tests {
         }
         let stream = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":1}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":2}\n\n";
         assert!(read_until_id(stream.as_bytes(), 2, Duration::from_secs(5), &Cancel).is_err());
+    }
+
+    #[pgrx::pg_test]
+    fn observer_sees_skipped_frames_including_notifications() {
+        // PRD-7 §4.10: the list_changed notification rides the same stream as
+        // the reply; the observer must see it before the reader returns.
+        use std::cell::RefCell;
+        let stream = concat!(
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":\"mine\"}\n",
+            "\n"
+        );
+        let methods = RefCell::new(Vec::new());
+        let out = {
+            let mut observe = |frame: &Value| {
+                methods.borrow_mut().push(
+                    frame
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                )
+            };
+            read_until_id_observed(
+                stream.as_bytes(),
+                7,
+                Duration::from_secs(5),
+                &NoInterrupts,
+                &mut observe,
+            )
+            .unwrap()
+        };
+        assert_eq!(out["result"], serde_json::json!("mine"));
+        assert_eq!(
+            *methods.borrow(),
+            vec![Some("notifications/tools/list_changed".to_string()), None,]
+        );
+    }
+
+    #[pgrx::pg_test]
+    fn observer_panics_do_not_bypass_the_match() {
+        // Contract note made executable: the observer is called *before* the
+        // id comparison, so a flag set during observation is never lost even
+        // when the reply arrives in the same frame batch.
+        let stream = "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":1}\n\n";
+        let hits = std::cell::Cell::new(0);
+        let out = read_until_id_observed(
+            stream.as_bytes(),
+            3,
+            Duration::from_secs(5),
+            &NoInterrupts,
+            &mut |_| hits.set(hits.get() + 1),
+        )
+        .unwrap();
+        assert_eq!(out["id"], serde_json::json!(3));
+        assert_eq!(hits.get(), 1);
     }
 }

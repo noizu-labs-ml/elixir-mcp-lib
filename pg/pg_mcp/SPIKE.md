@@ -2,6 +2,16 @@
 
 **Date**: 2026-09-05 · **Runner**: `pg/pg_mcp/spike/run.sh` · **Verdict: GO**
 
+> **Status note (PRD-7.E):** the 38/38 probe count below was PRD-6's scope.
+> The runner now executes **158 probes** across every test schema — PRD-7's
+> catalog (A), read-through (B), tool_calls (C) and import (D) tracks plus
+> the PRD-7.E integration battery in `src/e2e.rs` (anti-patterns §7.4,
+> performance §7.5, AC-7.8/7.10/7.11, engine-convention AC-7.13/7.14) —
+> verified green on **pg18 and pg17**. The S4 latency figure here is the
+> PRD-6 baseline; PRD-7.E re-asserts the budget automatically (`perf_*`
+> probes, 100 × 250ms ceiling) and PRD-10 re-measures against a live engine
+> on cluster networking.
+
 Extension `pg_mcp 0.1.0` (pgrx 0.19.2, PostgreSQL 18.4, aarch64-darwin) against
 `Noizu.MCP.Fixtures.Server` on Bandit 1.12, loopback, `MIX_ENV=test`. Two
 listeners: one open (`auth 'none'`), one bearer (`ApiKeyVerifier`, two static

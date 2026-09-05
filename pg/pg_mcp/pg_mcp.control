@@ -1,5 +1,5 @@
 comment = 'Call Model Context Protocol servers from SQL'
-default_version = '0.1.0'
+default_version = '0.3.0'
 module_pathname = '$libdir/pg_mcp'
 relocatable = false
 superuser = true

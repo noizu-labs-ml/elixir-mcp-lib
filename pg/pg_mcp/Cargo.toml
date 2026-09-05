@@ -1,6 +1,6 @@
 [package]
 name = "pg_mcp"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "PostgreSQL extension: call Model Context Protocol servers from SQL"
@@ -23,7 +23,11 @@ pg_test = []
 # 0.16.1 predates PostgreSQL 18 support. See pg/README.md "ADR-002 deviation".
 pgrx = "=0.19.2"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# `preserve_order` (IndexMap-backed Map) is load-bearing for PRD-8: the §4.2
+# table column order and §4.3 function parameter order follow the *published*
+# property order of the tool's JSON Schemas, which serde_json's default
+# BTreeMap-backed Map would silently sort away.
+serde_json = { version = "1.0", features = ["preserve_order"] }
 ureq = { version = "2.12", default-features = false, features = ["tls", "json", "gzip"] }
 url = "2.5"
 

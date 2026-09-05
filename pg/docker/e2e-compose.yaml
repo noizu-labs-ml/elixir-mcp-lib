@@ -1,0 +1,51 @@
+# PRD-10 e2e harness: the Postgres container the Elixir suite expects.
+#
+#   docker compose -f pg/docker/e2e-compose.yaml up -d --build
+#   PG_MCP_URL=ecto://postgres:postgres@localhost:15432/pg_mcp_e2e \
+#     mix test --only pg_mcp
+#
+# Builds the LOCAL DEV profile of the layered image (stock postgres:17 —
+# ADR-006: a contributor needs neither the Noizu base nor a registry login).
+# The extension is exercised through the exact same layering logic as the
+# production profile; only the base differs.
+#
+# HOST NETWORKING, deliberately: the extension's security posture refuses
+# plaintext `http` to non-loopback hosts (SEC-4 — a bearer token over http to
+# a routable address is exactly what it exists to prevent), and the suite's
+# Bandit listener is plain http on the host. With `network_mode: host` the
+# container shares the host loopback, so `http://localhost:<port>/mcp` is a
+# legitimate loopback URL from inside Postgres and the real bearer-token path
+# is exercised without weakening anything. (Bridge networking +
+# `host.docker.internal` would be a NON-loopback http URL and is refused at
+# CREATE SERVER — by design, not worked around.)
+
+name: pg-mcp-e2e
+
+services:
+  postgres:
+    build:
+      context: ../..
+      dockerfile: pg/docker/Dockerfile
+      args:
+        BASE_IMAGE: postgres:17
+        PG_MAJOR: "17"
+        FINAL_USER: root
+    image: pg_mcp-e2e:pg17
+    container_name: pg_mcp_e2e_postgres
+    network_mode: host
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: pg_mcp_e2e
+      # The suite creates two LOGIN roles for the multi-USER-MAPPING identity
+      # assertions (E9/E10); trust auth keeps those test-only roles
+      # passwordless.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    # Listen on the host's 15432 directly (kept clear of a host Postgres);
+    # with host networking there is no port-mapping layer.
+    command: ["postgres", "-p", "15432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pg_mcp_e2e -p 15432"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
