@@ -103,6 +103,7 @@ defmodule McpMount.WSConn do
       {:ok,
        %{
          transport: if(uri.scheme == "wss", do: :https, else: :http),
+         ws_scheme: if(uri.scheme == "wss", do: :wss, else: :ws),
          host: uri.host,
          port: uri.port || default_port,
          path: if(uri.path in [nil, ""], do: "/", else: uri.path),
@@ -114,8 +115,15 @@ defmodule McpMount.WSConn do
   defp handshake(parts, timeout) do
     headers = [{"authorization", "Bearer " <> parts.token}]
 
-    with {:ok, conn} <- Mint.HTTP.connect(parts.transport, parts.host, parts.port),
-         {:ok, conn, ref} <- Mint.WebSocket.upgrade(:ws, conn, parts.path, headers),
+    # Pin HTTP/1.1: mint_web_socket upgrades over h1 only, and on TLS
+    # endpoints mint's ALPN otherwise negotiates h2 → the upgrade fails with
+    # {:shutdown, %Mint.HTTP2{}} (plain ws:// was unaffected, so the
+    # local-test suite never saw this).
+    with {:ok, conn} <- Mint.HTTP.connect(parts.transport, parts.host, parts.port, protocols: [:http1]),
+         # :wss vs :ws matters: mint_web_socket keys its h1 send/recv
+         # transport (:ssl vs :gen_tcp) off this scheme — passing :ws on a
+         # TLS socket made every frame send hit gen_tcp.send(sslsocket).
+         {:ok, conn, ref} <- Mint.WebSocket.upgrade(parts.ws_scheme, conn, parts.path, headers),
          {:ok, conn, status, headers} <- await_upgrade(conn, ref, timeout),
          101 <- status,
          {:ok, conn, websocket} <- Mint.WebSocket.new(conn, ref, status, headers) do

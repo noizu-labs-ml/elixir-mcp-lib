@@ -226,6 +226,21 @@ defmodule McpMount.Mounter do
 
         do_walk(conn, rest ++ Enum.map(dirs, &elem(&1, 0)), acc)
 
+      # A queued dir refused listing (enotdir): the server's list/type view
+      # skewed (e.g. a control node advertised as dir by its parent list).
+      # Re-stat and keep walking it as a file instead of failing the whole
+      # sync — a mismatch must never turn into a reconnect loop.
+      {:error, {:list_failed, ^dir, %{errno: :enotdir}}} ->
+        case call(conn, "vfs/stat", %{"path" => dir}, @call_timeout) do
+          {:ok, %{"type" => type} = stat} when type != "dir" ->
+            stat = Map.take(stat, ["type", "version"])
+            do_walk(conn, rest, Map.put(acc, String.trim_leading(dir, "/"), stat))
+
+          _ ->
+            Logger.warning("mcp-mount: skipping unlistable path #{dir}")
+            do_walk(conn, rest, acc)
+        end
+
       error ->
         error
     end

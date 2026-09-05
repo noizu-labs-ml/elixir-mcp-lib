@@ -3,13 +3,18 @@
 ```
 docs/
 ├── arch/
-│   ├── auth.md                     # Authentication strategies
+│   ├── auth.md                     # Authentication strategies + OAuth AS facade
+│   ├── authorization.md            # ACL protocol + policy seam (PRD-2)
 │   ├── client.md                   # Client architecture
 │   ├── peer.md                     # Peer sans-IO state machine
+│   ├── persistence.md              # Persistence providers, Store facade, migrations (PRD-4)
 │   ├── request-lifecycle.md        # Request handling flow
 │   ├── supervision.md              # Supervision tree design
-│   └── transports.md              # Transport layer design
+│   ├── toolsets.md                 # Toolset resolution + weighted merge (PRD-1/3)
+│   ├── transports.md               # Transport layer design
+│   └── vfs.md                      # Virtual filesystem + /etc/dev control tree
 ├── layout/
+│   ├── auth.md                     # lib/noizu/mcp/auth/ breakdown (strategies + OAuth server)
 │   ├── lib.md                      # lib/ source code breakdown
 │   └── docs.md                     # This file
 ├── specs/                          # MCP specification references
