@@ -68,3 +68,18 @@ Negative / risks
 ## References
 - github.com/pgcentralfoundation/pgrx · github.com/supabase/wrappers (`wrappers/src/fdw/*`, `wasm-wrappers/wit/v2/routines.wit`) · github.com/pgsql-io/multicorn2
 - Cluster image: `terraform/kubernetes/modules/timescaledb/variables.tf` (monorepo)
+
+## Amendment (2026-09-05, post-PRD-6 spike)
+
+The `supabase-wrappers` crate **is dropped**. Implementation verification found it pins
+`pgrx =0.16.1` exactly (predating PG18, which AC-7.12 requires) and pulls a tokio runtime,
+both of which contradict this ADR's own pgrx-0.19.x and no-tokio decisions. `pg_mcp`
+implements the FDW routines directly on **plain pgrx 0.19.2** (`pg_sys::FdwRoutine`),
+adopting supabase-wrappers' architecture as our own internal API instead of a dependency:
+a `ForeignDataWrapper`-shaped trait (`begin_scan/iter_scan/re_scan/end_scan`,
+`begin_modify/insert/end_modify`, `import_foreign_schema`), a normalized `Qual` model
+(`=`, `= ANY`, `IN` supported; all else left to Postgres to re-check), and option validation
+in the validator function. Trade-off: more `unsafe` `pg_sys` plumbing owned by this crate,
+mitigated by confining unsafe to the session/FDW boundary modules (per PRD-6's FR-6.1
+pattern). Status: accepted (was part of the ADR-001..007 acceptance; the amendment is
+recorded here for the PRD-7 implementation).
