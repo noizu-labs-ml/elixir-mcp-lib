@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-09-05
+
+### Fixed
+- **VFSWS keepalive killer**: server keepalive now pushes framed `{:ping, ""}` — the
+  previous bare-atom `:ping` had no `do_deflate` clause in bandit 1.12.5, so every
+  `/vfs` WebSocket connection was closed with 1011 exactly 30s after connect.
+- **VFSWS client disconnect**: mid-stream client disconnects no longer raise
+  `MatchError` in the request process — streams end cleanly.
+- **mcp-mount hardening**: wss ALPN (http1), upgrade scheme `:wss`, double-DOWN
+  and unknown-frame catch-alls — mounts survive server keepalive cycles via
+  clean reconnect instead of dying.
+
 ## [0.3.0] — 2026-09-02
 
 The 0.3.0 toolset architecture series (PRD-1..4): toolsets become first-class,
