@@ -26,6 +26,10 @@ Origin validation guards against DNS-rebinding (configurable: `:localhost`, `:an
 
 In-process message passing for tests. No serialization overhead, but messages cross the encode/decode boundary for fidelity.
 
+### VFS transports (`Transport.VFS.Socket` / `VFS.WS`)
+
+Carry `vfs/*` extension ops to local mount clients: length-prefixed JSON-RPC over a unix domain socket (`VFS.Socket`), or WebSocket via `GET /vfs` upgrade (`VFS.WS`).
+
 ## Client transports
 
 Client transports implement `start_link/2`, `send_message/3`, and `close/1`. They deliver inbound messages to the owning `Noizu.MCP.Client` GenServer.
@@ -42,6 +46,10 @@ Req-based HTTP client. POSTs each outbound message; handles both JSON and SSE re
 
 Connects a Client to a Server in the same VM via direct message passing.
 
+### VFS.Client (`Transport.VFS.Client`)
+
+Elixir client for the VFS unix-socket transport.
+
 ## SSE codec (`Transport.SSE`)
 
 Shared encoder/decoder for Server-Sent Events. Used by both the Streamable HTTP Plug (server-side encoding) and the StreamableHTTP.Client (client-side incremental parsing).
@@ -49,3 +57,5 @@ Shared encoder/decoder for Server-Sent Events. Used by both the Streamable HTTP 
 ## EventStore
 
 `Noizu.MCP.Server.EventStore` is a bounded per-session ETS ring buffer (default 1000 events) that backs `Last-Event-ID` resumability for Streamable HTTP. Node-local; multi-node deployments need sticky sessions or a custom store.
+
+**Disconnect survival** — the outbound Sink routes each message: (1) the SSE stream of the causative request (`related_request_id`), else (2) the session's GET stream, else (3) buffered in the EventStore. The message is appended to the EventStore in every case, so chunks emitted while the client is disconnected are never lost — the next GET (or a reconnect with `Last-Event-ID`) replays them. Closing a session closes GET connections and drops the buffer.

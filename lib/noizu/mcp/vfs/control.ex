@@ -364,7 +364,10 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   defp control_list(_backend, @mount <> "/cache", _cursor, _ctx) do
-    {:ok, [dir_entry("flush"), dir_entry("stats")], nil}
+    # flush/stats are control nodes (see control_stat/2) — the LIST view must
+    # agree, or clients that trust list's type (mcp-mount's walker) queue them
+    # as dirs and crash-loop on the enotdir.
+    {:ok, [control_entry("flush"), control_entry("stats")], nil}
   end
 
   defp control_list(backend, @mount <> "/config", cursor, _ctx) do
@@ -780,5 +783,8 @@ defmodule Noizu.MCP.VFS.Control do
     do: %VFS{type: :control, mtime: now_ms(), version: 1, writable: writable}
 
   defp dir_entry(name), do: %{name: name, type: :dir, size: 0, mtime: now_ms(), version: 1}
+
+  defp control_entry(name),
+    do: %{name: name, type: :control, size: 0, mtime: now_ms(), version: 1}
   defp now_ms, do: System.os_time(:millisecond)
 end
