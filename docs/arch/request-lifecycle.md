@@ -12,12 +12,18 @@
    - {:send, message} → encode + write to transport sink
    - {:ready, info} → run user init/2 callback
    - {:cancel_in, id, reason} → kill running task
-6. Task runs Feature module (e.g. Features.Tools.call/3)
-7. Feature module calls user server callback (e.g. handle_call_tool/3)
-8. Task sends result back to Session via {:mcp_task, id, result}
-9. Session calls Peer.respond/3 → {:ok, Response} or :drop
-10. Session encodes and writes Response through transport sink
+6. Task resolves the tool surface through the Toolset protocol
+   (single path): static base → persisted Grant/Negotiation layers
+   (weight 200) → ACL visibility gating (weight 300)
+7. Consent-gated calls resolve to one honest :forbidden;
+   ACL-hidden tools are indistinguishable from absent (identical error)
+8. Feature module calls user server callback (e.g. handle_call_tool/3)
+9. Task sends result back to Session via {:mcp_task, id, result}
+10. Session calls Peer.respond/3 → {:ok, Response} or :drop
+11. Session encodes and writes Response through transport sink
 ```
+
+→ *Authorization details: [authorization.md](authorization.md); toolset resolution: [toolsets.md](toolsets.md)*
 
 ## Cancellation
 
@@ -29,4 +35,4 @@ Tool handlers call `Ctx.report_progress/3` which casts to the session. The sessi
 
 ## Telemetry
 
-Every request emits `[:noizu_mcp, :server, :request, :start]` and `[:noizu_mcp, :server, :request, :stop]` (or `:exception` on crash) with server, method, session_id, and duration metadata.
+Every request emits `[:noizu_mcp, :server, :request, :start]` and `[:noizu_mcp, :server, :request, :stop]` (or `:exception` on crash) with server, method, session_id, and duration metadata. ACL crashes deny with telemetry (fail-closed) rather than leaking a third verdict.
