@@ -32,7 +32,8 @@ not_run =
       do: acc,
       else: [
         "MCP_OAUTH_TEST_DATABASE_URL is unset — the ENTIRE Store.Ecto conformance " <>
-          "battery did not run. The Ecto adapter is UNVERIFIED in this run." | acc
+          "battery did not run. The Ecto adapter is UNVERIFIED in this run."
+        | acc
       ]
   end)
   |> then(fn acc ->
@@ -40,7 +41,8 @@ not_run =
       do: acc,
       else: [
         "`--include e2e` was not passed — the stdio transport E2E suite " <>
-          "(real subprocesses) did not run. The stdio transport is UNVERIFIED in this run." | acc
+          "(real subprocesses) did not run. The stdio transport is UNVERIFIED in this run."
+        | acc
       ]
   end)
 

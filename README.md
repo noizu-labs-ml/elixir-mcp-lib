@@ -490,6 +490,42 @@ in the archive; run from `mix run`/a release for full write-back); Linux
 escripts have full write-back; Windows is planned. The intent is to possibly
 break this out into its own signed-binary repo in the future.
 
+## SQL projection (experimental `sql/*`)
+
+An MCP server can project its surface into PostgreSQL relations for the
+`mcp_fdw` foreign-data wrapper — typed columns, predicate pushdown, cursors.
+Advertise the family with `sql: true` (or by registering a dataset):
+
+```elixir
+use Noizu.MCP.Server, name: "myapp", version: "1.0.0", sql: true
+```
+
+Catalog relations (`tools`, `prompts`, `resources`, read-through
+`prompt_messages`/`resource_contents`/`completions`) and one relation per
+tool are derived automatically from the existing resolvers. For data that is
+not a tool, register an explicit dataset:
+
+```elixir
+defmodule MyApp.MCP.Sessions do
+  use Noizu.MCP.Server.Dataset
+
+  def info, do: %{name: "sessions", primary_key: ["id"], writable: false}
+
+  def columns do
+    [%{name: "id", type: :uuid, nullable: false}, %{name: "started_at", type: :timestamptz, nullable: false}]
+  end
+
+  def scan(_args, ctx, _opts), do: {:ok, MyApp.sessions_for(ctx.auth), nil}
+end
+
+# in the server module:
+dataset MyApp.MCP.Sessions
+```
+
+The capability appears under `capabilities.experimental.sql` only for servers
+that opted in; servers that did not are wire-identical to before. Protocol
+reference: `docs/arch/sql.md`; operator guide: `guides/postgres.md`.
+
 ## Consuming servers (client)
 
 ```elixir

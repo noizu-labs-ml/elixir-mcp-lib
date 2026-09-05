@@ -356,6 +356,90 @@ defmodule Noizu.MCP.Test do
     request(client, "logging/setLevel", %{"level" => to_string(level)})
   end
 
+  # ── sql/* wrappers (PRD-9) ────────────────────────────────────────────────
+
+  @doc """
+  Call `sql/schema`. Returns the raw payload
+  `%{"version" => 1, "relations" => [...]}`.
+
+  Options: `:claims` — per-request auth claims delivered through
+  `Session.deliver/3`, so the schema materializes for that principal
+  (PRD-9 FR-9.12); `:timeout`.
+  """
+  @spec sql_schema(%Client{}, keyword()) :: {:ok, map()} | {:error, map()}
+  # ⟦𓍜𓎏𓋰𓃭⟧ sql_schema :: Call `sql/schema` (PRD-9).
+  def sql_schema(%Client{} = client, opts \\ []) do
+    sql_request(client, "sql/schema", %{}, opts)
+  end
+
+  @doc """
+  Call `sql/scan` for `relation`. Options fold into the wire params: `:quals`
+  (list of wire qual maps), `:columns` (list of strings), `:sort`
+  (`[{column, :asc | :desc}]`), `:limit`, `:cursor`, plus `:claims` and
+  `:timeout`.
+
+  Returns `{:ok, %{"columns" => [...], "rows" => [[...]], "nextCursor" => _}}`
+  — rows are positional against `columns` (PRD-9 §4.5).
+  """
+  @spec sql_scan(%Client{}, String.t(), keyword()) :: {:ok, map()} | {:error, map()}
+  # ⟦𓄿𓆗𓋹𓍝⟧ sql_scan :: Call `sql/scan` for `relation` (PRD-9).
+  def sql_scan(%Client{} = client, relation, opts \\ []) do
+    params =
+      %{"relation" => relation}
+      |> maybe_param(:quals, opts[:quals])
+      |> maybe_param(:columns, opts[:columns])
+      |> maybe_param(:sort, sort_param(opts[:sort]))
+      |> maybe_param(:limit, opts[:limit])
+      |> maybe_param(:cursor, opts[:cursor])
+
+    sql_request(client, "sql/scan", params, opts)
+  end
+
+  @doc """
+  Call `sql/modify` for `relation` with `op` of `:insert`, `:update` or
+  `:delete`. `args` carries `:rows` (insert), `:quals` (update/delete) and
+  `:changes` (update). `:claims` and `:timeout` behave as in `sql_scan/3`.
+  """
+  @spec sql_modify(%Client{}, String.t(), :insert | :update | :delete, keyword(), keyword()) ::
+          {:ok, map()} | {:error, map()}
+  # ⟦𓎼𓍁𓅃𓆓⟧ sql_modify :: Call `sql/modify` for `relation` (PRD-9).
+  def sql_modify(%Client{} = client, relation, op, args \\ [], opts \\ [])
+      when op in [:insert, :update, :delete] do
+    params =
+      %{"relation" => relation, "op" => Atom.to_string(op)}
+      |> maybe_param(:rows, args[:rows])
+      |> maybe_param(:quals, args[:quals])
+      |> maybe_param(:changes, args[:changes])
+
+    sql_request(client, "sql/modify", params, opts)
+  end
+
+  defp sql_request(%Client{} = client, method, params, opts) do
+    :counters.add(client.counter, 1, 1)
+    id = :counters.get(client.counter, 1)
+
+    binary =
+      IO.iodata_to_binary(JsonRpc.encode!(%Request{id: id, method: method, params: params}))
+
+    case Keyword.get(opts, :claims) do
+      nil -> Session.deliver(client.session, binary)
+      claims -> Session.deliver(client.session, binary, claims)
+    end
+
+    await(client, id, timeout: Keyword.get(opts, :timeout, @default_timeout))
+  end
+
+  defp maybe_param(map, _key, nil), do: map
+  defp maybe_param(map, key, value), do: Map.put(map, Atom.to_string(key), value)
+
+  defp sort_param(nil), do: nil
+
+  defp sort_param(sort) when is_list(sort),
+    do:
+      Enum.map(sort, fn {column, direction} ->
+        %{"column" => column, "direction" => to_string(direction)}
+      end)
+
   # ── notification assertions ───────────────────────────────────────────────
 
   @doc """

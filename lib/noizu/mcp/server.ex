@@ -130,6 +130,24 @@ defmodule Noizu.MCP.Server do
             ) ::
               {:ok, [String.t()]} | {:ok, [String.t()], keyword()} | {:error, Error.t()}
 
+  @doc """
+  Answer `sql/schema` (PRD-9). Generated when the server registers a dataset or
+  passes `sql: true`; override to describe a bespoke relation set.
+  """
+  @callback handle_sql_schema(params :: map(), Ctx.t()) :: {:ok, map()} | {:error, Error.t()}
+
+  @doc """
+  Answer `sql/scan`. Returns `{:ok, columns, rows, next_cursor}` — `columns` is
+  the output column order and `rows` are maps keyed by column name; the runtime
+  renders them positionally.
+  """
+  @callback handle_sql_scan(relation :: String.t(), opts :: map(), Ctx.t()) ::
+              {:ok, [String.t()], [map()], String.t() | nil} | {:error, Error.t()}
+
+  @doc "Answer `sql/modify`. `params` carries `op`, `rows`, `quals` and `changes`."
+  @callback handle_sql_modify(relation :: String.t(), params :: map(), Ctx.t()) ::
+              {:ok, map()} | {:error, Error.t()}
+
   @doc false
   @callback server_info() :: Types.Implementation.t()
 
@@ -146,7 +164,10 @@ defmodule Noizu.MCP.Server do
                       handle_unsubscribe: 2,
                       handle_list_prompts: 2,
                       handle_get_prompt: 3,
-                      handle_complete: 3
+                      handle_complete: 3,
+                      handle_sql_schema: 2,
+                      handle_sql_scan: 3,
+                      handle_sql_modify: 3
 
   # ⟦𓍂𓐝𓋠𓍒⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
@@ -167,7 +188,9 @@ defmodule Noizu.MCP.Server do
           prompt: 1,
           prompt: 2,
           vfs: 1,
-          vfs: 2
+          vfs: 2,
+          dataset: 1,
+          dataset: 2
         ]
 
       Module.register_attribute(__MODULE__, :__mcp_tools__, accumulate: true)
@@ -175,6 +198,7 @@ defmodule Noizu.MCP.Server do
       Module.register_attribute(__MODULE__, :__mcp_resource_templates__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_prompts__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_vfs__, accumulate: true)
+      Module.register_attribute(__MODULE__, :__mcp_datasets__, accumulate: true)
       @__mcp_server_opts__ opts
       @before_compile Noizu.MCP.Server
 
@@ -251,6 +275,20 @@ defmodule Noizu.MCP.Server do
   defmacro vfs(module, opts \\ []) do
     quote do
       @__mcp_vfs__ {unquote(module), unquote(opts)}
+    end
+  end
+
+  @doc """
+  Register a dataset module (see `Noizu.MCP.Server.Dataset`).
+
+  Options: `:name` overrides `info().name` on the wire; `:hidden` excludes the
+  relation from `sql/schema` while leaving it scannable by exact name, mirroring
+  the tool `hidden` semantics.
+  """
+  # ⟦𓊛𓅇𓋍𓂑⟧ dataset :: Register a dataset module (see `Noizu.MCP.Server.Dataset`).
+  defmacro dataset(module, opts \\ []) do
+    quote do
+      @__mcp_datasets__ {unquote(module), unquote(opts)}
     end
   end
 
@@ -519,6 +557,10 @@ defmodule Noizu.MCP.Server do
 
     vfs = env.module |> Module.get_attribute(:__mcp_vfs__) |> Enum.reverse()
 
+    datasets = env.module |> Module.get_attribute(:__mcp_datasets__) |> Enum.reverse()
+
+    validate_datasets!(datasets, env)
+
     name = Keyword.get(opts, :name) || raise ArgumentError, "use Noizu.MCP.Server requires :name"
 
     version =
@@ -538,6 +580,13 @@ defmodule Noizu.MCP.Server do
 
     completions? =
       prompts != [] or templates != [] or defines?.({:handle_complete, 3})
+
+    # PRD-9 §4.5: `sql/*` is opt-in and silent otherwise (AP-P11). Registering a
+    # dataset opts in; so does `sql: true` for a server that only wants its
+    # derived tool/prompt/resource surface projected.
+    sql? =
+      datasets != [] or Keyword.get(opts, :sql) == true or
+        defines?.({:handle_sql_schema, 2}) or defines?.({:handle_sql_scan, 3})
 
     default_impls =
       [
@@ -633,6 +682,34 @@ defmodule Noizu.MCP.Server do
             end
           end
         end,
+        # sql/* (PRD-9) — generated only when the server opted in
+        unless defines?.({:handle_sql_schema, 2}) or not sql? do
+          quote do
+            @impl Noizu.MCP.Server
+            # ⟦𓋣𓄨𓎃𓆺⟧ handle_sql_schema :: auto-generated pointer for public function handle_sql_schema
+            def handle_sql_schema(params, ctx) do
+              Noizu.MCP.Server.Features.SQL.default_schema(__MODULE__, params, ctx)
+            end
+          end
+        end,
+        unless defines?.({:handle_sql_scan, 3}) or not sql? do
+          quote do
+            @impl Noizu.MCP.Server
+            # ⟦𓈛𓅋𓌤𓁃⟧ handle_sql_scan :: auto-generated pointer for public function handle_sql_scan
+            def handle_sql_scan(relation, opts, ctx) do
+              Noizu.MCP.Server.Features.SQL.default_scan(__MODULE__, relation, opts, ctx)
+            end
+          end
+        end,
+        unless defines?.({:handle_sql_modify, 3}) or not sql? do
+          quote do
+            @impl Noizu.MCP.Server
+            # ⟦𓍮𓂏𓇢𓎟⟧ handle_sql_modify :: auto-generated pointer for public function handle_sql_modify
+            def handle_sql_modify(relation, params, ctx) do
+              Noizu.MCP.Server.Features.SQL.default_modify(__MODULE__, relation, params, ctx)
+            end
+          end
+        end,
         # completion
         unless defines?.({:handle_complete, 3}) or (prompts == [] and templates == []) do
           quote do
@@ -651,6 +728,20 @@ defmodule Noizu.MCP.Server do
         end
       ]
       |> Enum.reject(&is_nil/1)
+
+    # `handle_sql_*` follow the `handle_call_tool` precedent: a host may replace
+    # the generated defaults wholesale.
+    sql_overridable =
+      if sql? do
+        [
+          {:handle_sql_schema, 2},
+          {:handle_sql_scan, 3},
+          {:handle_sql_modify, 3}
+        ]
+        |> Enum.reject(fn fa -> defines?.(fa) end)
+      else
+        []
+      end
 
     # Toolset behaviour functions (protocol+behaviour duality): the server
     # module itself is a toolset entity. Hosts defining their own `catalog/3`
@@ -728,6 +819,7 @@ defmodule Noizu.MCP.Server do
       def __mcp__(:resource_templates), do: unquote(Macro.escape(templates))
       def __mcp__(:prompts), do: unquote(Macro.escape(prompts))
       def __mcp__(:vfs), do: unquote(Macro.escape(vfs))
+      def __mcp__(:datasets), do: unquote(Macro.escape(datasets))
       def __mcp__(:instructions), do: unquote(opts[:instructions])
       def __mcp__(:opts), do: unquote(Macro.escape(opts))
 
@@ -738,11 +830,18 @@ defmodule Noizu.MCP.Server do
           prompts?: unquote(prompts?),
           completions?: unquote(completions?),
           vfs?: unquote(vfs != []),
+          sql?: unquote(sql?),
           user_subscribe?: unquote(defines?.({:handle_subscribe, 2}))
         })
       end
 
       unquote(default_impls)
+
+      unquote(
+        if sql_overridable == [],
+          do: nil,
+          else: quote(do: defoverridable(unquote(sql_overridable)))
+      )
 
       unquote(toolset_impls)
       defoverridable(unquote(toolset_overridable))
@@ -793,6 +892,85 @@ defmodule Noizu.MCP.Server do
         caps
       end
     end)
+    |> then(fn caps ->
+      if Map.get(flags, :sql?, false) do
+        # Non-destructive merge: `experimental` is a shared namespace, and a
+        # host folding its own keys in must not lose them to `sql`.
+        Map.update(
+          caps,
+          "experimental",
+          %{"sql" => %{"version" => Noizu.MCP.SQL.Schema.version()}},
+          fn experimental ->
+            Map.put(experimental, "sql", %{"version" => Noizu.MCP.SQL.Schema.version()})
+          end
+        )
+      else
+        caps
+      end
+    end)
     |> Map.put("logging", %{})
+  end
+
+  # ── `dataset:` registration validation (PRD-9 FR-9.6) ─────────────────────
+  #
+  # A dataset named for a relation the derived schema already owns would
+  # shadow a catalog table in every SQL client. That is a build failure, not a
+  # runtime surprise (D5).
+  defp validate_datasets!(datasets, env) do
+    names =
+      Enum.map(datasets, fn {module, entry_opts} ->
+        {dataset_registration_name(module, entry_opts, env), module}
+      end)
+
+    reserved = Noizu.MCP.SQL.Schema.reserved_relations()
+
+    for {name, module} <- names, name in reserved do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description:
+          "use Noizu.MCP.Server: dataset #{inspect(module)} is registered as #{inspect(name)}, " <>
+            "which collides with a derived SQL relation (#{Enum.join(reserved, ", ")}) — " <>
+            "pass `dataset #{inspect(module)}, name: \"...\"` to rename it (PRD-9 FR-9.6)."
+    end
+
+    duplicates =
+      names
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(&elem(&1, 0))
+
+    unless duplicates == [] do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description:
+          "use Noizu.MCP.Server: duplicate dataset names #{inspect(duplicates)} — " <>
+            "each relation name must be unique (PRD-9 FR-9.6)."
+    end
+
+    :ok
+  end
+
+  # The registration `:name` when given; else the module's own `info().name`,
+  # which is available because component modules compile before the server
+  # that registers them. A module that is not yet loadable skips the check —
+  # the relation still resolves at runtime, it just cannot be name-checked here.
+  defp dataset_registration_name(module, entry_opts, _env) do
+    case Keyword.get(entry_opts, :name) do
+      name when is_binary(name) ->
+        name
+
+      _other ->
+        with {:module, module} <- Code.ensure_compiled(module),
+             true <- function_exported?(module, :info, 0),
+             %{name: name} when is_binary(name) <- module.info() do
+          name
+        else
+          _other -> nil
+        end
+    end
   end
 end

@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Experimental `sql/*` method family** (PRD-9, ADR-005): `sql/schema`,
+  `sql/scan` and `sql/modify` let a foreign-data wrapper project an MCP
+  server's surface into typed, pushdown-capable PostgreSQL relations.
+  `Noizu.MCP.SQL.Schema` derives catalog relations (`tools`, `prompts`,
+  `resources`, plus the read-through `prompt_messages`, `resource_contents`,
+  `completions` and derived `prompt_arguments`, `resource_templates`) from the
+  series-1 resolvers — the Toolset catalog, `Features.Prompts` and
+  `Features.Resources` — one resolver, no parallel registry (D1). One
+  relation per effective tool is derived from its input/output schemas, and
+  scanning it is authorized exactly like `tools/call`. Rows travel
+  positionally against the scan's `columns` array.
+
+- **`Noizu.MCP.Server.Dataset` behaviour + `dataset/2` macro**: servers
+  register explicit relations for data that is not naturally a tool call
+  (explicit participation, D4). `columns/0` and `info/0` are validated at
+  compile time against `Noizu.MCP.SQL.Types`; `scan/3` is required,
+  `insert/2`, `update/3` and `delete/2` are optional (an unsupported op
+  answers `method_not_found`, naming the relation and op). Datasets
+  authorize under their own `{:dataset, name}` ACL subject and carry the
+  request's `%Principal{}` like every method (ADR-004). A dataset that
+  raises fails only its own relation (D5); reserved derived names and
+  duplicate dataset names are compile errors.
+
+- **`Noizu.MCP.SQL.Types` and `Noizu.MCP.SQL.Quals`**: the closed column
+  type vocabulary shared with the pg_mcp type map (`to_sql/1`,
+  `from_field_type/2`, `from_json_schema/1`) and the wire-qual decoder with
+  a pure reference re-filter (`decode/2`, `apply/2`) implementing the
+  one-directional qual-honesty contract.
+
+- **Capability advertisement**: `capabilities.experimental.sql =
+  %{"version" => 1}` appears when and only when a server registers a
+  dataset, passes `sql: true`, or defines its own `handle_sql_*` callbacks,
+  merged non-destructively into any existing `experimental` map. Servers
+  that do not opt in are wire-identical to before and answer `-32601` for
+  all three methods.
+
+- **Conformance**: `Noizu.MCP.Test.SQLConformanceCase` — the shared
+  `sql/*` battery (schema well-formedness, positional rows, cursor
+  totality, qual honesty, error shape) any dataset host can `use`.
+
 ## [0.3.0] — 2026-09-02
 
 The 0.3.0 toolset architecture series (PRD-1..4): toolsets become first-class,

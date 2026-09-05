@@ -411,7 +411,11 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
             {theirs, _} = refresh_for(ctx, client, subject: subject_b(ctx))
 
             assert :ok =
-                     ctx.adapter.revoke_subject_tokens(subject_a(ctx), client.client_id, ctx.store_opts)
+                     ctx.adapter.revoke_subject_tokens(
+                       subject_a(ctx),
+                       client.client_id,
+                       ctx.store_opts
+                     )
 
             assert {:error, :not_found} = ctx.adapter.get_refresh_token(mine, ctx.store_opts)
             assert {:ok, _} = ctx.adapter.get_refresh_token(also_mine, ctx.store_opts)
@@ -506,8 +510,11 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
               ctx.store_opts
             )
 
-          assert :ok = ctx.adapter.revoke_consent(subject_a(ctx), client.client_id, ctx.store_opts)
-          assert :ok = ctx.adapter.revoke_consent(subject_a(ctx), client.client_id, ctx.store_opts)
+          assert :ok =
+                   ctx.adapter.revoke_consent(subject_a(ctx), client.client_id, ctx.store_opts)
+
+          assert :ok =
+                   ctx.adapter.revoke_consent(subject_a(ctx), client.client_id, ctx.store_opts)
 
           assert {:error, :not_found} =
                    ctx.adapter.get_consent(subject_a(ctx), client.client_id, ctx.store_opts)

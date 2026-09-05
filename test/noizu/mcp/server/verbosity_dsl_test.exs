@@ -68,7 +68,10 @@ defmodule Noizu.MCP.Server.VerbosityDslTest do
     end
 
     test "toolkit field description tracks verbosity", %{definition: definition} do
-      d = fn v -> Tool.to_map(definition, rc(v))["inputSchema"]["properties"]["msg"]["description"] end
+      d = fn v ->
+        Tool.to_map(definition, rc(v))["inputSchema"]["properties"]["msg"]["description"]
+      end
+
       assert d.(0) == "m"
       assert d.(9) == "the message to echo verbatim"
     end
