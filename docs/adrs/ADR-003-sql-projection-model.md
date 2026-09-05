@@ -1,7 +1,7 @@
 ---
 id: ADR-003
 title: "SQL projection model: catalog tables, INSERT-driven tool calls, per-tool tables/functions/views"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 

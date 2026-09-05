@@ -1,7 +1,7 @@
 ---
 id: ADR-004
 title: "Identity: Postgres roles log in natively; USER MAPPING carries the MCP token"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 

@@ -1,7 +1,7 @@
 ---
 id: ADR-002
 title: "Build pg_mcp with pgrx, using the supabase-wrappers crate as a library"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 

@@ -1,7 +1,7 @@
 ---
 id: ADR-007
 title: "One engine, many MCPs: elixir-mcp Engine federates upstream servers behind a single sql/* endpoint"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 

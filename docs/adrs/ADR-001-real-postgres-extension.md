@@ -1,7 +1,7 @@
 ---
 id: ADR-001
 title: "Expose MCP servers inside a real PostgreSQL via an extension, not a Postgres-impersonating Elixir process"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 

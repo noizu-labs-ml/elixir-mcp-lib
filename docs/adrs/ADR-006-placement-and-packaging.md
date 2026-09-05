@@ -1,7 +1,7 @@
 ---
 id: ADR-006
 title: "pg_mcp lives in pg/pg_mcp inside elixir-mcp; hex package stays pure Elixir; shipped by image layering"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 

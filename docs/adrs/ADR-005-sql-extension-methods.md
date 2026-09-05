@@ -1,7 +1,7 @@
 ---
 id: ADR-005
 title: "elixir-mcp gains experimental sql/* methods and a Dataset DSL; pg_mcp uses them when advertised"
-status: proposed
+status: accepted
 date: 2026-09-05
 ---
 
