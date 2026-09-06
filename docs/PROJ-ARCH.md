@@ -4,7 +4,7 @@
 
 Noizu MCP is an Elixir library implementing the [Model Context Protocol](https://modelcontextprotocol.io) (MCP) — a JSON-RPC 2.0-based protocol for exposing tools, resources, and prompts to LLM clients like Claude. The library provides both a **server** DSL (`use Noizu.MCP.Server`) and a **client** GenServer (`Noizu.MCP.Client`) sharing a common sans-IO state machine (`Peer`) that separates protocol logic from transport concerns.
 
-On top of the protocol core sits a frozen extension architecture (0.3.0): **toolsets** (single resolution path for every tool surface), **authorization** (binary-verdict ACL over a host-implemented policy seam), **persistence** (pluggable providers for lib-owned toolset/grant/consent state), plus a **virtual filesystem** with mount clients, per-render-context **descriptions** with an inline `@eval` grading harness, and an OAuth 2.1 **authorization-server facade** for hosts.
+On top of the protocol core sits a frozen extension architecture (0.3.0): **toolsets** (single resolution path for every tool surface), **authorization** (binary-verdict ACL over a host-implemented policy seam), **persistence** (pluggable providers for lib-owned toolset/grant/consent state), plus a **virtual filesystem** with mount clients, per-render-context **descriptions** with an inline `@eval` grading harness, an OAuth 2.1 **authorization-server facade** for hosts, the **Engine** — an MCP server whose content is other MCP servers (ADR-007) — and the experimental **`sql/*`** projection family, consumed Postgres-side by the companion `pg_mcp` extension (ADR-003/005).
 
 ## System Diagram
 
@@ -92,6 +92,8 @@ graph TB
 | Descriptions | `Noizu.MCP.Description` / `RenderCtx` | Per-render-context tool descriptions with verbosity variants |
 | Eval | `Noizu.MCP.Eval` | Inline `@eval` rubric harness grading rendered descriptions |
 | Inspector | `Noizu.MCP.Inspector` | Localhost-only HTML dev client; launched via `mix mcp.client` |
+| Engine | `Noizu.MCP.Engine` | Federation server — an MCP server whose content is other MCP servers (ADR-007) |
+| SQL projection | `Noizu.MCP.SQL` | Experimental `sql/schema|scan|modify` family: typed relations, post-ACL derivation, qual-honesty re-filter (ADR-003/005) |
 
 → *Components ↔ directories: see [PROJ-LAYOUT.md](PROJ-LAYOUT.md); detail docs under [arch/](layout/docs.md)*
 
@@ -113,9 +115,21 @@ All tool-surface consumers (`tools/list`, `tools/call`, catalog) flow through on
 
 → *See [arch/toolsets.md](arch/toolsets.md) for details*
 
+## Engine Federation
+
+`Noizu.MCP.Engine` (ADR-007) is the reference `sql/*` server: an MCP server whose content is other MCP servers. It is a plain `use Noizu.MCP.Server` module registering a `servers` **dataset** (the upstream registry, persisted via the ordinary persistence provider under the `engine_servers` store key), three tools (`engine.attach/detach/refresh`) implemented over the same dataset callbacks, and a toolset implementation that contributes one weight-100 `{:upstream, name}` layer per READY upstream — federated tools enter as runtime-read base specs, so overrides and ACL apply with no federation-specific precedence. One `Engine.Session` per enabled upstream handshakes, lists, and reconnects with exponential backoff (fail-open per server: an unreachable upstream is `:error` data, never a downed engine); registry rows hide under the same ACL as the federated tools themselves. `auth_ref = 'passthrough'` forwards the caller's credential instead of a stored one.
+
+→ *See [arch/engine.md](arch/engine.md) for details*
+
+## SQL Projection (`sql/*`)
+
+The experimental `sql/schema|scan|modify` family (ADR-003/005; version-tagged, opt-in via a registered dataset, `sql: true`, or custom handlers) exposes a server's surface as typed relations: `catalog` relations mirror the live catalogs, `tool` relations derive from the requesting principal's *effective* toolset post-ACL (a denied tool has no relation), `dataset` relations are the only explicitly registered source, and `resource`/`prompt` relations read through. Column types come from the closed `SQL.Types` vocabulary; quals are hints under a one-directional honesty contract — a dataset may ignore a qual but never invert one, and callers re-check via `SQL.Quals.apply/2`. The companion **`pg_mcp`** Postgres extension (`pg/pg_mcp`, Rust/pgrx) consumes the family from the database side.
+
+→ *See [arch/sql.md](arch/sql.md) for details; operator install: [pg-mcp-install.md](pg-mcp-install.md)*
+
 ## Virtual Filesystem
 
-`Noizu.MCP.VFS` exposes backends as a node tree with errno-mapped errors and version-stamped nodes; a `:persistent_term` TTL cache (generation-keyed) sits over stat/list/read, and an `/etc/dev` control tree composes into every backend for introspection and runtime toggles. Transports mount `vfs/*` extension ops over unix sockets and WebSocket; the `daemon/mcp_mount` escript mounts a server as real local files with bidirectional sync.
+`Noizu.MCP.VFS` exposes backends as a node tree with errno-mapped errors and version-stamped nodes; a `:persistent_term` TTL cache (generation-keyed) sits over stat/list/read, and an `/etc/dev` control tree composes into every backend for introspection and runtime toggles. Transports mount `vfs/*` extension ops over unix sockets and WebSocket; two mount paths put a server on the local desktop — the `daemon/mcp_mount` escript (Elixir, WebSocket) and the `fuse/` Go FUSE daemon (unix socket). See the [mounting notes](MCP-VFS-MOUNTING.md) and [group mounts](MCP-VFS-GROUP-MOUNTS.md).
 
 → *See [arch/vfs.md](arch/vfs.md) for details*
 
@@ -185,6 +199,8 @@ Anywhere a description string is expected, a variant list works instead: `{:verb
 - **Single resolution path (D1)**: every tool-surface consumer goes through the Toolset protocol — no side doors, one merge semantics, anti-oracle error identity for hidden tools.
 - **Lazy reads, best-effort writes (D3/D5)**: providers resolve per call; post-write fan-out failures are logged, never raised — a completed write never reports failure.
 - **Fail-to-boot (D4)**: a persistence store that cannot answer its boot ping refuses to start the server rather than silently degrading.
+- **Federation is just another layer (ADR-007)**: upstreams contribute weight-100 provenance layers over runtime-read base specs — overrides, ACL, and existence-hiding apply unchanged; an unreachable upstream is backoff plus `:error`, never a downed engine.
+- **Qual honesty is one-directional (ADR-003/005)**: `sql/*` datasets may ignore quals but never invert one; callers re-check unconditionally via `SQL.Quals.apply/2`. The family is experimental, opt-in, and wire-identical when unused.
 - **Interface freeze**: 0.3.0 froze the toolset/ACL/persistence interfaces; changes require an ADR and a 0.4.0.
 
 ## Technology Stack
@@ -201,5 +217,6 @@ Anywhere a description string is expected, a variant list works instead: `{:verb
 | Concurrency | GenServer + Task.Supervisor + DynamicSupervisor |
 | Transports | Stdio, Streamable HTTP (POST/GET/DELETE + SSE), in-process test, VFS unix-socket/WebSocket |
 | Auth | OAuth 2.1 (PKCE + RFC 9728), static bearer, JWT verifiers, AS facade |
-| Companion tools | `mix mcp.client` (inspector), `mix mcp.eval` (description grading), `daemon/mcp_mount` (VFS mount escript) |
+| Companion tools | `mix mcp.client` (inspector), `mix mcp.eval` (description grading), `mix mcp.engine` (federation), `daemon/mcp_mount` (VFS mount escript), `fuse/` (Go FUSE daemon) |
+| SQL backend | `pg/pg_mcp` — Rust/pgrx Postgres extension (docker-compose e2e + smoke SQL) |
 | Spec versions | 2025-03-26, 2025-06-18, 2025-11-25, draft 2026-07-28-rc |
