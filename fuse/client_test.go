@@ -7,9 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hanwen/go-fuse/v2/fs"
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 // fakeServer is an in-test VFS unix-socket server speaking the same framed
@@ -18,6 +22,7 @@ type fakeServer struct {
 	t      *testing.T
 	ln     net.Listener
 	apiKey string
+	mu     sync.Mutex
 
 	// handler decides the (result, error) for each request. nil falls back
 	// to a tiny built-in tree.
@@ -50,7 +55,10 @@ func startFakeServer(t *testing.T, s *fakeServer) *fakeServer {
 	go s.acceptLoop()
 	t.Cleanup(func() {
 		ln.Close()
-		for _, c := range s.conns {
+		s.mu.Lock()
+		conns := append([]net.Conn(nil), s.conns...)
+		s.mu.Unlock()
+		for _, c := range conns {
 			c.Close()
 		}
 		os.RemoveAll(dir)
@@ -66,7 +74,9 @@ func (s *fakeServer) acceptLoop() {
 		if err != nil {
 			return
 		}
+		s.mu.Lock()
 		s.conns = append(s.conns, conn)
+		s.mu.Unlock()
 		go s.serve(conn)
 	}
 }
@@ -105,8 +115,7 @@ func (s *fakeServer) serve(conn net.Conn) {
 			}
 			authenticated = true
 			s.reply(conn, req.ID, map[string]any{"authenticated": true, "session_id": "test-session"}, nil)
-			if s.dropAfterAuth && !s.dropped {
-				s.dropped = true
+			if s.takeDropAfterAuth() {
 				return
 			}
 			continue
@@ -117,6 +126,24 @@ func (s *fakeServer) serve(conn net.Conn) {
 		}
 		result, rpcErr := s.dispatch(req.Method, req.Params)
 		s.reply(conn, req.ID, result, rpcErr)
+	}
+}
+
+func (s *fakeServer) takeDropAfterAuth() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dropAfterAuth || s.dropped {
+		return false
+	}
+	s.dropped = true
+	return true
+}
+
+func (s *fakeServer) closeFirstConn() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.conns) > 0 {
+		s.conns[0].Close()
 	}
 }
 
@@ -341,8 +368,8 @@ func TestReconnectMidCall(t *testing.T) {
 		apiKey: "k",
 		handler: func(method string, params map[string]any) (any, *rpcError) {
 			calls++
-			if calls == 1 && len(s.conns) > 0 {
-				s.conns[0].Close() // kill the client's live connection
+			if calls == 1 {
+				s.closeFirstConn() // kill the client's live connection
 			}
 			return nodeMap("file", 1, 0, 1, true, false), nil
 		},
@@ -435,7 +462,7 @@ func TestTruncateFlushSkipsRead(t *testing.T) {
 	})
 	c := testClient(t, s)
 	root := newVFSRoot(c, NewCache(time.Second, time.Second), false)
-	h := &fileHandle{root: root, path: "/log.txt", trunc: true}
+	h := &fileHandle{root: root, path: "/log.txt", startTrunc: true}
 	if _, errno := h.Write(nil, []byte("only this"), 0); errno != 0 {
 		t.Fatalf("Write: %v", errno)
 	}
@@ -473,5 +500,285 @@ func TestWriteConflictSurfacesEACCES(t *testing.T) {
 	}
 	if errno := h.Flush(nil); errno != syscall.EACCES {
 		t.Fatalf("want EACCES on conflict, got %v", errno)
+	}
+}
+
+func TestRootExposesAndDelegatesDirectoryOperations(t *testing.T) {
+	s := startFakeServer(t, &fakeServer{apiKey: "k"})
+	root := newVFSRoot(testClient(t, s), NewCache(time.Second, time.Second), false)
+	_ = fs.NewNodeFS(root, &fs.Options{})
+
+	if _, ok := any(root).(fs.NodeLookuper); !ok {
+		t.Fatal("root must expose NodeLookuper")
+	}
+	if _, ok := any(root).(fs.NodeReaddirer); !ok {
+		t.Fatal("root must expose NodeReaddirer")
+	}
+
+	stream, errno := root.Readdir(nil)
+	if errno != 0 {
+		t.Fatalf("root Readdir: %v", errno)
+	}
+	defer stream.Close()
+	if !stream.HasNext() {
+		t.Fatal("root Readdir returned an empty static tree")
+	}
+	entry, errno := stream.Next()
+	if errno != 0 || entry.Name != "hello.txt" {
+		t.Fatalf("root Readdir entry = %+v, %v", entry, errno)
+	}
+
+	var out fuse.EntryOut
+	child, errno := root.Lookup(nil, "hello.txt", &out)
+	if errno != 0 || child == nil || out.Attr.Size != 6 {
+		t.Fatalf("root Lookup child=%v size=%d errno=%v", child, out.Attr.Size, errno)
+	}
+}
+
+func TestWritesAfterFsyncAreNotDropped(t *testing.T) {
+	content := "abcdef"
+	writes := 0
+	s := startFakeServer(t, &fakeServer{
+		apiKey: "k",
+		handler: func(method string, params map[string]any) (any, *rpcError) {
+			switch method {
+			case "vfs/stat":
+				return nodeMap("file", int64(len(content)), 0, int64(writes+1), true, false), nil
+			case "vfs/read":
+				return map[string]any{"content": content, "version": writes + 1}, nil
+			case "vfs/write":
+				content, _ = params["data"].(string)
+				writes++
+				return nodeMap("file", int64(len(content)), 0, int64(writes+1), true, false), nil
+			}
+			return nil, &rpcError{Code: -32601, Message: "nope"}
+		},
+	})
+	h := &fileHandle{root: newVFSRoot(testClient(t, s), NewCache(time.Second, time.Second), false), path: "/f"}
+
+	h.Write(nil, []byte("X"), 0)
+	if errno := h.Fsync(nil, 0); errno != 0 {
+		t.Fatalf("first fsync: %v", errno)
+	}
+	h.Write(nil, []byte("Y"), 1)
+	if errno := h.Release(nil); errno != 0 {
+		t.Fatalf("release after second write: %v", errno)
+	}
+	if content != "XYcdef" || writes != 2 {
+		t.Fatalf("content=%q writes=%d; second write was lost", content, writes)
+	}
+}
+
+func TestConcurrentWritesOnOneHandleAreSerialized(t *testing.T) {
+	var written string
+	s := startFakeServer(t, &fakeServer{
+		apiKey: "k",
+		handler: func(method string, params map[string]any) (any, *rpcError) {
+			if method == "vfs/write" {
+				written, _ = params["data"].(string)
+				return nodeMap("file", int64(len(written)), 0, 1, true, false), nil
+			}
+			return nil, &rpcError{Code: -32601, Message: "nope"}
+		},
+	})
+	h := &fileHandle{
+		root:       newVFSRoot(testClient(t, s), NewCache(time.Second, time.Second), false),
+		path:       "/f",
+		startTrunc: true,
+	}
+
+	const count = 32
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(offset int) {
+			defer wg.Done()
+			if _, errno := h.Write(nil, []byte{byte(offset)}, int64(offset)); errno != 0 {
+				t.Errorf("write %d: %v", offset, errno)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if errno := h.Flush(nil); errno != 0 {
+		t.Fatalf("flush: %v", errno)
+	}
+	if len(written) != count {
+		t.Fatalf("written length = %d", len(written))
+	}
+	for i := 0; i < count; i++ {
+		if written[i] != byte(i) {
+			t.Fatalf("written[%d] = %d", i, written[i])
+		}
+	}
+}
+
+func TestOverlappingWritesPreserveCallOrder(t *testing.T) {
+	got, errno := applyFileOps([]byte("0000"), []fileOp{
+		{kind: opWrite, off: 1, data: []byte("abc")},
+		{kind: opWrite, off: 2, data: []byte("Z")},
+	}, defaultMaxFileSize)
+	if errno != 0 || string(got) != "0aZc" {
+		t.Fatalf("got %q errno=%v", got, errno)
+	}
+}
+
+func TestOpenTruncateWithoutWriteFlushesEmptyContent(t *testing.T) {
+	content := "not empty"
+	s := startFakeServer(t, &fakeServer{
+		apiKey: "k",
+		handler: func(method string, params map[string]any) (any, *rpcError) {
+			switch method {
+			case "vfs/stat":
+				return nodeMap("file", int64(len(content)), 0, 1, true, false), nil
+			case "vfs/write":
+				content, _ = params["data"].(string)
+				return nodeMap("file", int64(len(content)), 0, 2, true, false), nil
+			}
+			return nil, &rpcError{Code: -32601, Message: "nope"}
+		},
+	})
+	node := &vfsNode{root: newVFSRoot(testClient(t, s), NewCache(time.Second, time.Second), false), path: "/f"}
+	fh, _, errno := node.Open(nil, uint32(syscall.O_WRONLY|syscall.O_TRUNC))
+	if errno != 0 {
+		t.Fatalf("open truncate: %v", errno)
+	}
+	if errno := fh.(*fileHandle).Release(nil); errno != 0 {
+		t.Fatalf("release truncate: %v", errno)
+	}
+	if content != "" {
+		t.Fatalf("O_TRUNC without writes left %q", content)
+	}
+}
+
+func TestOpenTruncateStillEnforcesMountAndNodePermissions(t *testing.T) {
+	writes := 0
+	s := startFakeServer(t, &fakeServer{
+		apiKey: "k",
+		handler: func(method string, params map[string]any) (any, *rpcError) {
+			switch method {
+			case "vfs/stat":
+				writable := params["path"] != "/locked"
+				return nodeMap("file", 1, 0, 1, writable, false), nil
+			case "vfs/write":
+				writes++
+				return nodeMap("file", 0, 0, 2, true, false), nil
+			}
+			return nil, &rpcError{Code: -32601, Message: "nope"}
+		},
+	})
+	client := testClient(t, s)
+	flags := uint32(syscall.O_RDONLY | syscall.O_TRUNC)
+
+	roNode := &vfsNode{root: newVFSRoot(client, NewCache(time.Second, time.Second), true), path: "/f"}
+	if _, _, errno := roNode.Open(nil, flags); errno != syscall.EROFS {
+		t.Fatalf("read-only O_TRUNC returned %v", errno)
+	}
+	locked := &vfsNode{root: newVFSRoot(client, NewCache(time.Second, time.Second), false), path: "/locked"}
+	if _, _, errno := locked.Open(nil, flags); errno != syscall.EACCES {
+		t.Fatalf("non-writable O_TRUNC returned %v", errno)
+	}
+	if writes != 0 {
+		t.Fatalf("permission failures issued %d write RPCs", writes)
+	}
+	direct := &fileHandle{root: roNode.root, path: "/f", startTrunc: true, dirty: true}
+	if errno := direct.Flush(nil); errno != syscall.EROFS {
+		t.Fatalf("defensive read-only Flush returned %v", errno)
+	}
+}
+
+func TestOversizedWriteAndTruncateFailWithoutAllocation(t *testing.T) {
+	root := &vfsRoot{maxFileSize: 4}
+	h := &fileHandle{root: root, path: "/f"}
+	if _, errno := h.Write(nil, []byte("x"), 4); errno != syscall.EFBIG {
+		t.Fatalf("oversized offset write returned %v", errno)
+	}
+	if _, errno := resizeContent(nil, 5, root.maxFileSize); errno != syscall.EFBIG {
+		t.Fatalf("oversized truncate returned %v", errno)
+	}
+	if _, errno := applyFileOps([]byte("oversized"), []fileOp{{kind: opWrite, off: 0, data: []byte("x")}}, 4); errno != syscall.EFBIG {
+		t.Fatalf("write against oversized base returned %v", errno)
+	}
+	got, errno := applyFileOps([]byte("oversized"), []fileOp{
+		{kind: opTruncate, size: 4},
+		{kind: opWrite, off: 0, data: []byte("x")},
+	}, 4)
+	if errno != 0 || string(got) != "xver" {
+		t.Fatalf("truncate-then-write got %q errno=%v", got, errno)
+	}
+}
+
+func TestPathSetattrTruncatesAndRejectsUnsupportedMetadata(t *testing.T) {
+	content := "hello"
+	s := startFakeServer(t, &fakeServer{
+		apiKey: "k",
+		handler: func(method string, params map[string]any) (any, *rpcError) {
+			switch method {
+			case "vfs/stat":
+				return nodeMap("file", int64(len(content)), 0, 1, true, false), nil
+			case "vfs/read":
+				return map[string]any{"content": content, "version": 1}, nil
+			case "vfs/write":
+				content, _ = params["data"].(string)
+				return nodeMap("file", int64(len(content)), 0, 2, true, false), nil
+			}
+			return nil, &rpcError{Code: -32601, Message: "nope"}
+		},
+	})
+	node := &vfsNode{root: newVFSRoot(testClient(t, s), NewCache(time.Second, time.Second), false), path: "/f"}
+	var out fuse.AttrOut
+	truncate := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 2}}
+	if errno := node.Setattr(nil, nil, truncate, &out); errno != 0 {
+		t.Fatalf("path truncate: %v", errno)
+	}
+	if content != "he" || out.Attr.Size != 2 {
+		t.Fatalf("content=%q attr.size=%d", content, out.Attr.Size)
+	}
+	h := &fileHandle{root: node.root, path: node.path}
+	grow := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 4}}
+	if errno := node.Setattr(nil, h, grow, &out); errno != 0 {
+		t.Fatalf("handle truncate: %v", errno)
+	}
+	if content != "he\x00\x00" || out.Attr.Size != 4 {
+		t.Fatalf("grown content=%q attr.size=%d", content, out.Attr.Size)
+	}
+	node.root.maxFileSize = 4
+	tooLarge := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 5}}
+	if errno := node.Setattr(nil, h, tooLarge, &out); errno != syscall.EFBIG {
+		t.Fatalf("oversized handle truncate returned %v", errno)
+	}
+	valid := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 1}}
+	if errno := node.Setattr(nil, h, valid, &out); errno != 0 {
+		t.Fatalf("valid truncate after rejected oversize: %v", errno)
+	}
+	if content != "h" {
+		t.Fatalf("rejected truncate poisoned handle; content=%q", content)
+	}
+	chmod := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_MODE}}
+	if errno := node.Setattr(nil, nil, chmod, &out); errno != syscall.EOPNOTSUPP {
+		t.Fatalf("unsupported setattr returned %v", errno)
+	}
+}
+
+func TestCreateInvalidatesContainingDirectoryListing(t *testing.T) {
+	s := startFakeServer(t, &fakeServer{
+		apiKey: "k",
+		handler: func(method string, params map[string]any) (any, *rpcError) {
+			if method == "vfs/create" {
+				return nodeMap("file", 0, 0, 1, true, false), nil
+			}
+			return nil, &rpcError{Code: -32601, Message: "nope"}
+		},
+	})
+	cache := NewCache(time.Second, time.Minute)
+	cache.PutDentries("/dir", []Entry{{Name: "old", Type: "file"}})
+	root := newVFSRoot(testClient(t, s), cache, false)
+	_ = fs.NewNodeFS(root, &fs.Options{})
+	node := &vfsNode{root: root, path: "/dir"}
+	var out fuse.EntryOut
+	if _, _, _, errno := node.Create(nil, "new", uint32(syscall.O_WRONLY), 0o644, &out); errno != 0 {
+		t.Fatalf("create: %v", errno)
+	}
+	if _, ok := cache.GetDentries("/dir"); ok {
+		t.Fatal("create retained stale containing-directory listing")
 	}
 }

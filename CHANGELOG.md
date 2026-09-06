@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Standalone Go `mcp-fuse` companion daemon for mounting the unix-socket VFS,
+  with explicit read/write/truncate semantics, reconnecting JSON-RPC client,
+  cache coverage, race-tested unit tests, and an opt-in Linux kernel-mount
+  smoke. The executable is source-built and remains outside the Hex archive.
+
 ## [0.4.0]
 
 Release covering the pg_mcp series-2 library surface: PRD-9 (`sql/*` +

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"syscall"
 
@@ -22,13 +21,47 @@ from the same TTLs as the daemon-side cache).
 
 type vfsRoot struct {
 	fs.Inode
-	client *Client
-	cache  *Cache
-	ro     bool
+	client      *Client
+	cache       *Cache
+	ro          bool
+	maxFileSize uint64
 }
 
+const defaultMaxFileSize = 8 << 20
+
 func newVFSRoot(client *Client, cache *Cache, ro bool) *vfsRoot {
-	return &vfsRoot{client: client, cache: cache, ro: ro}
+	return &vfsRoot{client: client, cache: cache, ro: ro, maxFileSize: defaultMaxFileSize}
+}
+
+// go-fuse dispatches root operations against the exact InodeEmbedder passed to
+// fs.NewNodeFS. Keep the root as the owner of shared state, but explicitly
+// expose the directory operations that ordinary vfsNode values implement.
+func (r *vfsRoot) rootNode() *vfsNode {
+	return &vfsNode{root: r, path: "/"}
+}
+
+func (r *vfsRoot) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	return r.rootNode().Getattr(ctx, fh, out)
+}
+
+func (r *vfsRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	return r.rootNode().Lookup(ctx, name, out)
+}
+
+func (r *vfsRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return r.rootNode().Readdir(ctx)
+}
+
+func (r *vfsRoot) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	return r.rootNode().Create(ctx, name, flags, mode, out)
+}
+
+func (r *vfsRoot) Unlink(ctx context.Context, name string) syscall.Errno {
+	return r.rootNode().Unlink(ctx, name)
+}
+
+func (r *vfsRoot) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	return r.rootNode().Setattr(ctx, fh, in, out)
 }
 
 // childPath joins a directory path with a child name.
@@ -105,6 +138,13 @@ type vfsNode struct {
 }
 
 var (
+	_ fs.NodeGetattrer = (*vfsRoot)(nil)
+	_ fs.NodeLookuper  = (*vfsRoot)(nil)
+	_ fs.NodeReaddirer = (*vfsRoot)(nil)
+	_ fs.NodeCreater   = (*vfsRoot)(nil)
+	_ fs.NodeUnlinker  = (*vfsRoot)(nil)
+	_ fs.NodeSetattrer = (*vfsRoot)(nil)
+
 	_ fs.NodeGetattrer = (*vfsNode)(nil)
 	_ fs.NodeLookuper  = (*vfsNode)(nil)
 	_ fs.NodeOpener    = (*vfsNode)(nil)
@@ -142,7 +182,8 @@ func (n *vfsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 // fails with EACCES rather than at flush time.
 func (n *vfsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	accmode := flags & uint32(syscall.O_ACCMODE)
-	if accmode == syscall.O_WRONLY || accmode == syscall.O_RDWR {
+	truncate := flags&uint32(syscall.O_TRUNC) != 0
+	if accmode == syscall.O_WRONLY || accmode == syscall.O_RDWR || truncate {
 		if n.root.ro {
 			return nil, 0, syscall.EROFS
 		}
@@ -155,9 +196,10 @@ func (n *vfsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32
 		}
 	}
 	h := &fileHandle{
-		root:  n.root,
-		path:  n.path,
-		trunc: flags&uint32(syscall.O_TRUNC) != 0,
+		root:       n.root,
+		path:       n.path,
+		startTrunc: truncate,
+		dirty:      truncate,
 	}
 	return h, 0, 0
 }
@@ -212,18 +254,18 @@ func (n *vfsNode) Create(ctx context.Context, name string, flags uint32, mode ui
 	if errno != 0 {
 		return nil, nil, 0, errno
 	}
+	// Drop the containing directory's listing, then retain the fresh child
+	// attributes returned by create.
+	n.root.cache.Invalidate(child)
 	n.root.cache.PutAttr(child, node)
-	n.root.cache.Invalidate(n.path)
 	attrFromNode(node, &out.Attr)
 	out.SetEntryTimeout(n.root.cache.dentryTTL)
 	out.SetAttrTimeout(n.root.cache.attrTTL)
 	inode := n.root.newNode(child, node)
 	h := &fileHandle{
-		root:    n.root,
-		path:    child,
-		created: true,
-		trunc:   true,
-		dirty:   false,
+		root:       n.root,
+		path:       child,
+		startTrunc: true,
 	}
 	return inode, h, 0, 0
 }
@@ -238,21 +280,50 @@ func (n *vfsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return errno
 	}
 	n.root.cache.Invalidate(child)
-	n.root.cache.Invalidate(n.path)
 	return 0
 }
 
-// Setattr supports the O_TRUNC / truncate-to-zero path (the kernel sends
-// ATTR_SIZE before or after open). Other attribute writes are ignored.
+// Setattr supports file-size changes. Metadata mutations that the VFS wire
+// protocol cannot represent fail explicitly instead of reporting false
+// success. FATTR_FH and FATTR_LOCKOWNER are request metadata, not mutations.
 func (n *vfsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	if in.Valid&fuse.FATTR_SIZE != 0 && fh != nil {
-		if h, ok := fh.(*fileHandle); ok && in.Size == 0 {
-			h.mu.Lock()
-			h.trunc = true
-			h.dirty = true
-			h.mu.Unlock()
-		}
+	allowed := uint32(fuse.FATTR_SIZE | fuse.FATTR_FH | fuse.FATTR_LOCKOWNER | fuse.FATTR_KILL_SUIDGID)
+	if in.Valid & ^allowed != 0 {
+		return syscall.EOPNOTSUPP
 	}
+	if in.Valid&fuse.FATTR_SIZE == 0 {
+		return n.Getattr(ctx, fh, out)
+	}
+	if n.root.ro {
+		return syscall.EROFS
+	}
+
+	node, errno := n.root.statCached(n.path)
+	if errno != 0 {
+		return errno
+	}
+	if node.Type == "dir" {
+		return syscall.EISDIR
+	}
+	if !node.Writable {
+		return syscall.EACCES
+	}
+
+	if fh != nil {
+		h, ok := fh.(*fileHandle)
+		if !ok {
+			return syscall.EBADF
+		}
+		if errno := h.Truncate(in.Size); errno != 0 {
+			return errno
+		}
+		if errno := h.Flush(ctx); errno != 0 {
+			return errno
+		}
+	} else if errno := n.root.truncatePath(n.path, in.Size); errno != 0 {
+		return errno
+	}
+
 	return n.Getattr(ctx, fh, out)
 }
 
@@ -265,18 +336,24 @@ type fileHandle struct {
 	root *vfsRoot
 	path string
 
-	mu      sync.Mutex
-	chunks  []chunk
-	trunc   bool // start from empty content (O_TRUNC / fresh create)
-	created bool // node was created by this handle
-	dirty   bool // unflushed writes exist
-	flushed bool // flush already ran (Flush precedes Release)
+	mu         sync.Mutex
+	ops        []fileOp
+	startTrunc bool // apply this batch to empty content (O_TRUNC / fresh create)
+	dirty      bool // unflushed writes or truncation exist
+	flushed    bool // latest dirty batch was flushed
 }
 
-type chunk struct {
+type fileOp struct {
+	kind uint8
 	off  int64
 	data []byte
+	size uint64
 }
+
+const (
+	opWrite uint8 = iota
+	opTruncate
+)
 
 var (
 	_ fs.FileReader   = (*fileHandle)(nil)
@@ -288,7 +365,14 @@ var (
 
 // Read serves file content from the versioned content cache / server.
 func (h *fileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	data, errno := h.root.contentReader(h.path)
+	if off < 0 {
+		return nil, syscall.EINVAL
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	data, errno := h.materializeLocked()
 	if errno != 0 {
 		return nil, errno
 	}
@@ -323,43 +407,50 @@ func (h *fileHandle) Write(ctx context.Context, data []byte, off int64) (uint32,
 	if h.root.ro {
 		return 0, syscall.EROFS
 	}
+	if off < 0 {
+		return 0, syscall.EINVAL
+	}
+	if uint64(off) > h.root.maxFileSize || uint64(len(data)) > h.root.maxFileSize-uint64(off) {
+		return 0, syscall.EFBIG
+	}
 	buf := make([]byte, len(data))
 	copy(buf, data)
 	h.mu.Lock()
-	h.chunks = append(h.chunks, chunk{off: off, data: buf})
+	h.ops = append(h.ops, fileOp{kind: opWrite, off: off, data: buf})
 	h.dirty = true
+	h.flushed = false
 	h.mu.Unlock()
 	return uint32(len(data)), 0
 }
 
+// Truncate queues a size change in call order with writes on this handle.
+func (h *fileHandle) Truncate(size uint64) syscall.Errno {
+	if size > h.root.maxFileSize {
+		return syscall.EFBIG
+	}
+	h.mu.Lock()
+	h.ops = append(h.ops, fileOp{kind: opTruncate, size: size})
+	h.dirty = true
+	h.flushed = false
+	h.mu.Unlock()
+	return 0
+}
+
 // Flush pushes buffered writes to the server: read current content (unless
-// truncating), splice chunks, vfs/write the full body.
+// truncating), apply operations in call order, then vfs/write the full body.
 func (h *fileHandle) Flush(ctx context.Context) syscall.Errno {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.dirty || h.flushed {
 		return 0
 	}
-
-	var base []byte
-	if !h.trunc {
-		data, errno := h.root.contentReader(h.path)
-		if errno != 0 && !(errno == syscall.ENOENT && h.created) {
-			return errno
-		}
-		base = data
+	if h.root.ro {
+		return syscall.EROFS
 	}
 
-	sort.Slice(h.chunks, func(i, j int) bool { return h.chunks[i].off < h.chunks[j].off })
-	buf := base
-	for _, ch := range h.chunks {
-		end := ch.off + int64(len(ch.data))
-		if end > int64(len(buf)) {
-			grown := make([]byte, end)
-			copy(grown, buf)
-			buf = grown
-		}
-		copy(buf[ch.off:end], ch.data)
+	buf, errno := h.materializeLocked()
+	if errno != 0 {
+		return errno
 	}
 
 	node, errno := h.root.client.Write(h.path, buf)
@@ -375,8 +466,100 @@ func (h *fileHandle) Flush(ctx context.Context) syscall.Errno {
 
 	h.root.cache.PutAttr(h.path, node)
 	h.root.cache.PutContent(h.path, node.Version, buf)
+	h.ops = nil
+	h.startTrunc = false
 	h.dirty = false
 	h.flushed = true
+	return 0
+}
+
+func (h *fileHandle) materializeLocked() ([]byte, syscall.Errno) {
+	if !h.dirty {
+		return h.root.contentReader(h.path)
+	}
+	var base []byte
+	if !h.startTrunc {
+		data, errno := h.root.contentReader(h.path)
+		if errno != 0 {
+			return nil, errno
+		}
+		base = data
+	}
+	return applyFileOps(base, h.ops, h.root.maxFileSize)
+}
+
+func applyFileOps(base []byte, ops []fileOp, maxFileSize uint64) ([]byte, syscall.Errno) {
+	var buf []byte
+	start := 0
+	if uint64(len(base)) > maxFileSize {
+		// A pre-existing oversized file may only enter a write batch if its
+		// first operation brings it under the configured ceiling. Do that
+		// before copying the oversized base.
+		if len(ops) == 0 || ops[0].kind != opTruncate {
+			return nil, syscall.EFBIG
+		}
+		resized, errno := resizeContent(base, ops[0].size, maxFileSize)
+		if errno != 0 {
+			return nil, errno
+		}
+		buf = resized
+		start = 1
+	} else {
+		buf = append([]byte(nil), base...)
+	}
+
+	for _, op := range ops[start:] {
+		switch op.kind {
+		case opTruncate:
+			resized, errno := resizeContent(buf, op.size, maxFileSize)
+			if errno != 0 {
+				return nil, errno
+			}
+			buf = resized
+		case opWrite:
+			if uint64(len(buf)) > maxFileSize || op.off < 0 || uint64(op.off) > maxFileSize || uint64(len(op.data)) > maxFileSize-uint64(op.off) {
+				return nil, syscall.EFBIG
+			}
+			end := int(op.off) + len(op.data)
+			if end > len(buf) {
+				grown := make([]byte, end)
+				copy(grown, buf)
+				buf = grown
+			}
+			copy(buf[int(op.off):end], op.data)
+		default:
+			return nil, syscall.EINVAL
+		}
+	}
+	return buf, 0
+}
+
+const maxInt = int(^uint(0) >> 1)
+
+func resizeContent(data []byte, size, maxFileSize uint64) ([]byte, syscall.Errno) {
+	if size > maxFileSize || size > uint64(maxInt) {
+		return nil, syscall.EFBIG
+	}
+	resized := make([]byte, int(size))
+	copy(resized, data)
+	return resized, 0
+}
+
+func (r *vfsRoot) truncatePath(path string, size uint64) syscall.Errno {
+	data, errno := r.contentReader(path)
+	if errno != 0 {
+		return errno
+	}
+	resized, errno := resizeContent(data, size, r.maxFileSize)
+	if errno != 0 {
+		return errno
+	}
+	node, errno := r.client.Write(path, resized)
+	if errno != 0 {
+		return errno
+	}
+	r.cache.PutAttr(path, node)
+	r.cache.PutContent(path, node.Version, resized)
 	return 0
 }
 

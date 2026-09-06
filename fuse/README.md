@@ -9,13 +9,18 @@ contract (framing, handshake, methods, errno codes).
 
 ## Build
 
-Requirements: Go 1.22+.
+Requirements: Go 1.22+. Repository development and CI pin Go 1.25.8 in
+`.tool-versions` and `.github/workflows/fuse.yml`.
 
 ```bash
 make fuse-build        # from repo root; binary at bin/mcp-fuse
 # or directly:
 cd fuse && go build -o ../bin/mcp-fuse .
 ```
+
+`mcp-fuse` is a standalone source-built companion executable. It is
+deliberately not included in the `noizu_mcp` Hex archive, which remains an
+Elixir-only package; build or distribute the Go binary separately.
 
 ## Mount prerequisites
 
@@ -49,6 +54,7 @@ fusermount -u /Volumes/mcp        # macOS: diskutil unmount /Volumes/mcp
 | `--cache-ttl-attr` | `1s` | attribute cache TTL |
 | `--cache-ttl-entry` | `2s` | directory-entry cache TTL |
 | `--rpc-timeout` | `5s` | per-request timeout (→ `ESTALE`) |
+| `--max-file-size` | `8388608` | maximum buffered file size (→ `EFBIG`) |
 | `--debug` | off | verbose FUSE + RPC logging |
 
 ## Behaviour
@@ -61,11 +67,14 @@ fusermount -u /Volumes/mcp        # macOS: diskutil unmount /Volumes/mcp
   `vfs/list` cursor until the directory is exhausted, `Read` → `vfs/read`.
 * **Writes** — buffered per open handle and flushed on close/`fsync` as a
   full-content `vfs/write` (read-modify-write, last-writer-wins). Version
-  conflicts surface as `EACCES`/`ESTALE` to the caller. `echo x > file`
+  and authorization failures surface through the server's errno mapping.
+  `echo x > file`
   and appends work; `O_TRUNC` skips the read-back.
-* **Not supported** — `Mkdir`/`Rmdir`/`Rename`/symlinks return
+* **Not supported** — `Mkdir`/`Rmdir`/`Rename`/symlinks and metadata changes
+  (`chmod`, `chown`, timestamps) return
   `ENOSYS`/`EROFS` (the VFS protocol has no rename); `vfs/create` only
-  makes files (directories need server-side support); `vfs/search` and
+  backs file creation in this mount (directory creation is not implemented);
+  `vfs/search` and
   `vfs/xattr` are not exposed through the mount.
 * **Errno mapping** — server `data.errno_atom` wins, then the JSON-RPC
   code (`-32002`→`ENOENT`, `-32040`→`EACCES`, `-32041`→`EEXIST`,
@@ -85,5 +94,11 @@ fuse/fusetest.sh /path/to/vfs.sock /Volumes/mcp <key>
 
 ```bash
 cd fuse && go test .     # fake in-process unix-socket VFS server
-go vet . && gofmt -l .
+go test -race . && go vet . && gofmt -l .
+```
+
+On Linux with FUSE available, the opt-in kernel mount smoke is:
+
+```bash
+MCP_FUSE_MOUNT_TEST=1 go test -run TestMountedRootIntegration -v .
 ```

@@ -27,6 +27,7 @@ func main() {
 		attrTTL    = flag.Duration("cache-ttl-attr", time.Second, "attribute cache TTL")
 		entryTTL   = flag.Duration("cache-ttl-entry", 2*time.Second, "directory-entry cache TTL")
 		rpcTimeout = flag.Duration("rpc-timeout", defaultRPCTimeout, "per-request timeout")
+		maxFile    = flag.Uint64("max-file-size", defaultMaxFileSize, "maximum buffered file size in bytes")
 		debug      = flag.Bool("debug", false, "verbose FUSE + RPC logging")
 	)
 	flag.Parse()
@@ -53,6 +54,7 @@ func main() {
 
 	cache := NewCache(*attrTTL, *entryTTL)
 	root := newVFSRoot(client, cache, *ro)
+	root.maxFileSize = *maxFile
 	rawFS := fs.NewNodeFS(root, &fs.Options{
 		EntryTimeout: entryTTL,
 		AttrTimeout:  attrTTL,
@@ -82,7 +84,11 @@ func main() {
 		srv.Unmount()
 	}()
 
-	srv.WaitMount()
+	go srv.Serve()
+	if err := srv.WaitMount(); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-fuse: mount %s did not become ready: %v\n", *mount, err)
+		os.Exit(1)
+	}
 	if *debug {
 		fmt.Fprintf(os.Stderr, "mcp-fuse: mounted %s (%s)\n", *mount, sockPath)
 	}

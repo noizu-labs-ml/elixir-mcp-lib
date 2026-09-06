@@ -26,7 +26,10 @@ const (
 	codeNoSys      = -32046
 )
 
-const maxFrameSize = 64 << 20
+// The Elixir VFSSocket defaults to 16 MiB frames. Enforce the same ceiling on
+// both request and response bodies; JSON escaping means the usable raw-content
+// limit is lower and is separately bounded by the filesystem.
+const maxFrameSize = 16 << 20
 
 // Node mirrors the wire map returned by vfs/stat, vfs/write, vfs/create.
 type Node struct {
@@ -131,8 +134,8 @@ func (c *Client) Call(method string, params map[string]any, out any) syscall.Err
 				}
 			}
 			return 0
-		case errno == syscall.ESTALE:
-			// Timeout: surface immediately so callers see the stall.
+		case errno == syscall.ESTALE || errno == syscall.EFBIG:
+			// Local limits and timeouts are not transport failures; surface them.
 			return errno
 		default:
 			// Transport-level failure: drop the connection and retry
@@ -205,6 +208,9 @@ func (c *Client) roundTrip(method string, params map[string]any) (*rpcResponse, 
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, syscall.EIO
+	}
+	if len(body) > maxFrameSize {
+		return nil, syscall.EFBIG
 	}
 
 	frame := make([]byte, 4+len(body))
