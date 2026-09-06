@@ -12,6 +12,19 @@ lib/noizu/
 │   ├── client/
 │   │   ├── handler.ex                 # Callbacks for server-initiated MCP traffic (client side)
 │   │   └── telemetry.ex               # Telemetry events emitted by Noizu.MCP.Client
+│   ├── engine/
+│   │   ├── tools/
+│   │   │   ├── attach.ex              # Engine tool: mount an upstream MCP server
+│   │   │   ├── detach.ex              # Engine tool: unmount an upstream server
+│   │   │   └── refresh.ex             # Engine tool: re-read an upstream's tool surface
+│   │   ├── acl.ex                     # ACL evaluation for federated calls
+│   │   ├── config.ex                  # Engine configuration
+│   │   ├── credentials.ex             # Per-upstream credentials
+│   │   ├── federated.ex               # Federated MCP surface exposed to callers
+│   │   ├── servers.ex                 # Mounted upstream server registry/dataset
+│   │   ├── session.ex                 # Engine-side session state
+│   │   ├── supervisor.ex              # Engine supervision tree
+│   │   └── toolset.ex                 # Toolset composition across mounted upstreams
 │   ├── eval/
 │   │   ├── harness.ex                 # Core of the description-tuning eval harness
 │   │   ├── judge.ex                   # Behaviour: grade one rubric criterion against a transcript
@@ -42,6 +55,7 @@ lib/noizu/
 │   │   │   ├── pagination.ex          # Opaque offset cursors for list endpoints
 │   │   │   ├── prompts.ex             # Prompts feature plumbing behind generated macros
 │   │   │   ├── resources.ex           # Resources feature plumbing behind generated macros
+│   │   │   ├── sql.ex                 # SQL feature plumbing behind `sql/*` extension ops
 │   │   │   ├── tools.ex               # Tools feature plumbing behind generated macros
 │   │   │   └── vfs.ex                 # VFS feature plumbing behind `vfs/*` extension ops
 │   │   ├── tool/
@@ -50,6 +64,7 @@ lib/noizu/
 │   │   ├── tools/
 │   │   │   ├── catalog.ex             # Built-in catalog discovery tool
 │   │   │   └── mcp_fs_search.ex       # Virtual grep over registered VFS backends
+│   │   ├── dataset.ex                 # Shared dataset descriptor (Engine federation + SQL feature)
 │   │   ├── event_store.ex             # Buffer for Streamable HTTP messages with no live stream
 │   │   ├── prompt.ex                  # Define an MCP prompt as a module
 │   │   ├── resource.ex                # Define an MCP resource as a module
@@ -60,6 +75,10 @@ lib/noizu/
 │   │   ├── toolkit.ex                 # Define several tools in one module via `@mcp` annotations
 │   │   ├── vfs.ex                     # Derives vfs/vfs_write capability flags from backends
 │   │   └── vfs_pubsub.ex              # Per-path change pubsub for VFS backends, subtree watches
+│   ├── sql/
+│   │   ├── quals.ex                   # Query qualifiers (filter pushdown to the pg_mcp extension)
+│   │   ├── schema.ex                  # SQL schema descriptors for exposed datasets
+│   │   └── types.ex                   # Value type mapping (Elixir ↔ Postgres)
 │   ├── toolset/
 │   │   ├── behaviour.ex               # Protocol + behaviour duality for toolsets
 │   │   ├── cache.ex                   # Optional ETS memoization of composed custom-toolset catalogs
@@ -99,6 +118,7 @@ lib/noizu/
 │   ├── client.ex                      # Client behaviour and macros
 │   ├── ctx.ex                         # Request context (metadata, progress)
 │   ├── description.ex                 # Tailored description: one string per render context
+│   ├── engine.ex                      # Federation engine: mount upstream MCPs behind one surface
 │   ├── error.ex                       # Structured error types
 │   ├── eval.ex                        # Inline `@eval` annotations for description tuning
 │   ├── inspector.ex                   # Noizu.MCP.Inspector supervisor
@@ -117,4 +137,11 @@ lib/noizu/
 │   ├── uri_template.ex                # RFC 6570 URI template expansion
 │   └── vfs.ex                         # Virtual filesystem behaviour for MCP servers
 └── mcp.ex                             # Top-level Noizu.MCP module
+```
+
+```
+lib/mix/tasks/
+├── mcp.client.ex                      # `mix mcp.client` — drive an MCP server interactively
+├── mcp.engine.ex                      # `mix mcp.engine` — Engine federation management
+└── mcp.eval.ex                        # `mix mcp.eval` — run description-tuning evals
 ```
