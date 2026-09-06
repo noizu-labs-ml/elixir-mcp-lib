@@ -990,11 +990,11 @@ mod host_tests {
         assert_eq!(InvokeOnSelect::default(), InvokeOnSelect::ReadOnly);
     }
 
-    /// The planner property: over generated tool batches, planning is total
-    /// and its output obeys the contract — every named input appears exactly
-    /// once as a tool or a skip; SQL names are valid identifiers ≤63 bytes,
-    /// unique per schema; every required input is a parameter; the gate
-    /// table holds.
+    // The planner property: over generated tool batches, planning is total
+    // and its output obeys the contract — every named input appears exactly
+    // once as a tool or a skip; SQL names are valid identifiers ≤63 bytes,
+    // unique per schema; every required input is a parameter; the gate
+    // table holds.
     proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(256))]
 
