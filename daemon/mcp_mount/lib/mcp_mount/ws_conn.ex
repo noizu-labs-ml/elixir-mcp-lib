@@ -121,7 +121,8 @@ defmodule McpMount.WSConn do
     # endpoints mint's ALPN otherwise negotiates h2 → the upgrade fails with
     # {:shutdown, %Mint.HTTP2{}} (plain ws:// was unaffected, so the
     # local-test suite never saw this).
-    with {:ok, conn} <- Mint.HTTP.connect(parts.transport, parts.host, parts.port, protocols: [:http1]),
+    with {:ok, conn} <-
+           Mint.HTTP.connect(parts.transport, parts.host, parts.port, protocols: [:http1]),
          # :wss vs :ws matters: mint_web_socket keys its h1 send/recv
          # transport (:ssl vs :gen_tcp) off this scheme — passing :ws on a
          # TLS socket made every frame send hit gen_tcp.send(sslsocket).
@@ -277,14 +278,18 @@ defmodule McpMount.WSConn do
 
         other ->
           Logger.warning(
-            "mcp-mount: unexpected stream return #{inspect(other)} (msg #{inspect(msg)})"
+            "mcp-mount: unexpected stream return=#{term_metadata(other)} " <>
+              "msg=#{term_metadata(msg)}"
           )
 
           {:noreply, state}
       end
     rescue
       e ->
-        Logger.warning("mcp-mount: stream error #{Exception.message(e)} (msg #{inspect(msg)})")
+        Logger.warning(
+          "mcp-mount: stream error exception=#{term_metadata(e)} msg=#{term_metadata(msg)}"
+        )
+
         {:noreply, state}
     end
   end
@@ -361,6 +366,30 @@ defmodule McpMount.WSConn do
     Logger.debug("mcp-mount: ignoring frame #{inspect(frame)}")
     state
   end
+
+  # Keep transport diagnostics useful without copying raw WebSocket payloads,
+  # socket structs, or exception messages into application logs.
+  defp term_metadata(%{__struct__: module}) when is_atom(module),
+    do: "struct=#{inspect(module)}"
+
+  defp term_metadata(term) when is_tuple(term) do
+    tag =
+      case elem(term, 0) do
+        value when is_atom(value) -> Atom.to_string(value)
+        _value -> "non_atom"
+      end
+
+    "tuple(tag=#{tag},arity=#{tuple_size(term)})"
+  end
+
+  defp term_metadata(term) when is_binary(term), do: "binary(bytes=#{byte_size(term)})"
+  defp term_metadata(term) when is_map(term), do: "map(size=#{map_size(term)})"
+  defp term_metadata(term) when is_list(term), do: "list"
+  defp term_metadata(term) when is_atom(term), do: "atom=#{term}"
+  defp term_metadata(term) when is_pid(term), do: "pid"
+  defp term_metadata(term) when is_reference(term), do: "reference"
+  defp term_metadata(term) when is_number(term), do: "number"
+  defp term_metadata(_term), do: "other"
 
   defp reply_awaiting(state, id, reply) do
     case Map.pop(state.awaiting, id) do

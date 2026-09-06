@@ -135,6 +135,15 @@ defmodule McpMount.Mounter do
     reconnect(%{s | conn: nil, mon_ref: nil}, reason)
   end
 
+  @impl GenServer
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %__MODULE__{watcher_mon: ref} = s) do
+    Logger.warning(
+      "mcp-mount[#{s.name}]: watcher died (#{inspect(reason)}); mount continues pull-only"
+    )
+
+    {:noreply, %{s | watcher: nil, watcher_mon: nil}}
+  end
+
   # Stray monitors: the double-down race (ws_close then transport error, then
   # the conn's :normal exit) leaves us with monitors we already demonitored —
   # a DOWN that matches no tracked ref must be ignored, not crash the Mounter
@@ -147,15 +156,6 @@ defmodule McpMount.Mounter do
   # A tick scheduled before a newer reconnect cycle must not fire a redundant
   # full sync out of :live/:syncing (seen live as "connected (was live)").
   def handle_info({:reconnect_tick, nil}, s), do: {:noreply, s}
-
-  @impl GenServer
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %__MODULE__{watcher_mon: ref} = s) do
-    Logger.warning(
-      "mcp-mount[#{s.name}]: watcher died (#{inspect(reason)}); mount continues pull-only"
-    )
-
-    {:noreply, %{s | watcher: nil, watcher_mon: nil}}
-  end
 
   # ── watcher (write-back) ──────────────────────────────────────────────────
 
