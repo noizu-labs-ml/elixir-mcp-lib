@@ -353,7 +353,12 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
           Logger.warning("MCP VFS websocket dropped after missed pongs")
           {:stop, :normal, state}
         else
-          {:push, :ping, %{state | missed_pongs: state.missed_pongs + 1}}
+          # Tuple shape, not the bare :ping atom: bandit's WebSocket
+          # connection has no do_deflate clause for a bare :ping push
+          # (FunctionClauseError at exactly keepalive_ms, killing every
+          # conn with close 1011 — seen live on stage with bandit 1.12.5).
+          # {:ping, ""} is the same wire frame and clauses cleanly.
+          {:push, {:ping, ""}, %{state | missed_pongs: state.missed_pongs + 1}}
         end
       end
 
