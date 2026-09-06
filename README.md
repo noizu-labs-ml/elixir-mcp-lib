@@ -212,6 +212,12 @@ transports (unix socket + WebSocket with live change events), a `/etc/dev`
 control-tree composer, and an `mcp_fs_search` grep tool. It is the substrate
 of the MCP-FUSE mounter stack.
 
+Two standalone mounters live outside the Hex archive: `daemon/mcp_mount/`
+materializes and synchronizes a tree over WebSocket, while [`fuse/`](fuse/)
+builds the Go `mcp-fuse` kernel mount client for the unix-socket transport.
+The latter requires a local FUSE runtime and is built separately with
+`make fuse-build`.
+
 ### Backends (behaviour + DSL)
 
 A backend implements `Noizu.MCP.VFS` — `use Noizu.MCP.VFS` and write the

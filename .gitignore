@@ -38,3 +38,8 @@ noizu_mcp-*.tar
 pg/pg_mcp/target/
 # Claude Code worktrees (local-only, never committed)
 /.claude/worktrees/
+
+# Go FUSE daemon build output
+/bin/
+fuse/bin/
+fuse/mcp-fuse
