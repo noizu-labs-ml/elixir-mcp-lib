@@ -8,6 +8,8 @@ defmodule McpMount.WSConn do
 
   use GenServer
 
+  require Logger
+
   @behaviour McpMount.Conn
 
   @default_timeout 5_000
@@ -257,17 +259,33 @@ defmodule McpMount.WSConn do
   end
 
   def handle_info(msg, state) do
-    case Mint.WebSocket.stream(state.conn, msg) do
-      {:ok, conn, responses} ->
-        {conn, websocket, frames} = extract(conn, state.ref, state.websocket, responses)
-        state = %{state | conn: conn, websocket: websocket, last_recv: now()}
-        state = Enum.reduce(frames, state, &handle_frame/2)
-        {:noreply, state}
+    # A malformed/unexpected transport or stream result must never kill the
+    # connection — observed live as case_clause crashes that drop the mount
+    # into reconnect churn. Log and ride through instead.
+    try do
+      case Mint.WebSocket.stream(state.conn, msg) do
+        {:ok, conn, responses} ->
+          {conn, websocket, frames} = extract(conn, state.ref, state.websocket, responses)
+          state = %{state | conn: conn, websocket: websocket, last_recv: now()}
+          state = Enum.reduce(frames, state, &handle_frame/2)
+          {:noreply, state}
 
-      {:error, conn, reason, _responses} ->
-        Mint.HTTP.close(conn)
-        notify_down(state.owner, reason)
-        {:stop, :normal, state}
+        {:error, conn, reason, _responses} ->
+          Mint.HTTP.close(conn)
+          notify_down(state.owner, reason)
+          {:stop, :normal, state}
+
+        other ->
+          Logger.warning(
+            "mcp-mount: unexpected stream return #{inspect(other)} (msg #{inspect(msg)})"
+          )
+
+          {:noreply, state}
+      end
+    rescue
+      e ->
+        Logger.warning("mcp-mount: stream error #{Exception.message(e)} (msg #{inspect(msg)})")
+        {:noreply, state}
     end
   end
 
@@ -333,6 +351,14 @@ defmodule McpMount.WSConn do
   defp handle_frame({:close, code, reason}, state) do
     notify_down(state.owner, {:ws_close, code, reason})
     send(self(), :ws_closed)
+    state
+  end
+
+  # Reserved/unknown opcodes decode to the bare atom :unknown; binary frames
+  # arrive as {:binary, _}. Neither is part of the v2 protocol — ignore rather
+  # than crash the conn (seen live against the stage server).
+  defp handle_frame(frame, state) do
+    Logger.debug("mcp-mount: ignoring frame #{inspect(frame)}")
     state
   end
 

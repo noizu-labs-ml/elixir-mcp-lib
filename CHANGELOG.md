@@ -101,6 +101,17 @@ datasets), PRD-11 (the Engine) and the PRD-6 groundwork. Consumers should pin
 - **Conformance**: `Noizu.MCP.Test.SQLConformanceCase` — the shared
   `sql/*` battery (schema well-formedness, positional rows, cursor
   totality, qual honesty, error shape) any dataset host can `use`.
+## [0.3.1] — 2026-09-05
+
+### Fixed
+- **VFSWS keepalive killer**: server keepalive now pushes framed `{:ping, ""}` — the
+  previous bare-atom `:ping` had no `do_deflate` clause in bandit 1.12.5, so every
+  `/vfs` WebSocket connection was closed with 1011 exactly 30s after connect.
+- **VFSWS client disconnect**: mid-stream client disconnects no longer raise
+  `MatchError` in the request process — streams end cleanly.
+- **mcp-mount hardening**: wss ALPN (http1), upgrade scheme `:wss`, double-DOWN
+  and unknown-frame catch-alls — mounts survive server keepalive cycles via
+  clean reconnect instead of dying.
 
 ## [0.3.0] — 2026-09-02
 
