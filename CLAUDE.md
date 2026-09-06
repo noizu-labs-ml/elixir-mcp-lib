@@ -12,7 +12,7 @@ Elixir. `mix deps.get && mix compile`; `mix test`; `mix format`, `mix credo`, `m
 
 ## Publishing
 
-Hex-published as `noizu_mcp` (consumers pin `~> 0.1.x`) — bump `version` + CHANGELOG on release; hex publish discipline (2FA).
+Hex-published as `noizu_mcp` (0.4.0 latest as of 2026-09 — verify on hex.pm; consumers pin `~> 0.4`) — bump `version` + CHANGELOG on release; hex publish discipline (2FA).
 
 ## Universal Rules (compressed)
 
