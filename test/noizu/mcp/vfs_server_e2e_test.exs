@@ -67,6 +67,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     use Noizu.MCP.VFS
 
     alias Noizu.MCP.VFS
+    alias Noizu.MCP.VFSServerE2ETest.Tree
 
     @impl true
     def stat(path, _ctx) do
@@ -141,23 +142,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
           {:error, :eexist}
 
         :error ->
-          case lookup(Path.dirname(path)) do
-            {:ok, %{type: :dir}} ->
-              node =
-                case data do
-                  :dir -> %{type: :dir, content: nil, version: 1, mtime: now(), locked: false}
-                  content when is_binary(content) -> new_node(content)
-                end
-
-              :ets.insert(table(), {path, node})
-              {:ok, to_node(node)}
-
-            {:ok, %{type: :file}} ->
-              {:error, :enotdir}
-
-            :error ->
-              {:error, :enoent}
-          end
+          create_missing(path, data)
       end
     end
 
@@ -203,13 +188,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
               node.type == :file and not node.locked and under?(path, root)
             end)
             |> Enum.sort()
-            |> Enum.flat_map(fn {path, node} ->
-              node.content
-              |> String.split("\n")
-              |> Enum.with_index(1)
-              |> Enum.filter(fn {line, _no} -> String.contains?(line, query) end)
-              |> Enum.map(fn {line, no} -> %{path: path, line: no, text: line} end)
-            end)
+            |> Enum.flat_map(&matching_lines(&1, query))
 
           {:ok, matches, nil}
       end
@@ -217,8 +196,36 @@ defmodule Noizu.MCP.VFSServerE2ETest do
 
     # ── internals ───────────────────────────────────────────────────────────
 
-    defp table, do: Noizu.MCP.VFSServerE2ETest.Tree.table()
+    defp table, do: Tree.table()
     defp now, do: System.system_time(:millisecond)
+
+    defp create_missing(path, data) do
+      case lookup(Path.dirname(path)) do
+        {:ok, %{type: :dir}} ->
+          node = node_for(data)
+          :ets.insert(table(), {path, node})
+          {:ok, to_node(node)}
+
+        {:ok, %{type: :file}} ->
+          {:error, :enotdir}
+
+        :error ->
+          {:error, :enoent}
+      end
+    end
+
+    defp node_for(:dir),
+      do: %{type: :dir, content: nil, version: 1, mtime: now(), locked: false}
+
+    defp node_for(content) when is_binary(content), do: new_node(content)
+
+    defp matching_lines({path, node}, query) do
+      node.content
+      |> String.split("\n")
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {line, _no} -> String.contains?(line, query) end)
+      |> Enum.map(fn {line, no} -> %{path: path, line: no, text: line} end)
+    end
 
     defp new_node(content),
       do: %{type: :file, content: content, version: 1, mtime: now(), locked: false}
@@ -261,6 +268,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     use Noizu.MCP.VFS
 
     alias Noizu.MCP.VFS
+    alias Noizu.MCP.VFSServerE2ETest.Tree
 
     @impl true
     def stat(path, _ctx) do
@@ -303,7 +311,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
       end
     end
 
-    defp table, do: Noizu.MCP.VFSServerE2ETest.Tree.table()
+    defp table, do: Tree.table()
 
     defp lookup(path) do
       case :ets.lookup(table(), path) do
@@ -389,12 +397,12 @@ defmodule Noizu.MCP.VFSServerE2ETest do
 
     def recv(client, timeout \\ 2000)
 
-    def recv(%__MODULE__{close: close} = client, _timeout) when close != nil do
-      {:closed, client, close}
-    end
-
     def recv(%__MODULE__{queue: [text | rest]} = client, _timeout) do
       {:ok, %{client | queue: rest}, Jason.decode!(text)}
+    end
+
+    def recv(%__MODULE__{close: close} = client, _timeout) when close != nil do
+      {:closed, client, close}
     end
 
     def recv(%__MODULE__{} = client, timeout) do
@@ -405,22 +413,22 @@ defmodule Noizu.MCP.VFSServerE2ETest do
 
         {:error, conn, reason, responses} ->
           datas = for {:data, _, data} <- responses, do: data
-
-          if datas == [] do
-            closed? = reason == :closed or match?(%Mint.TransportError{reason: :closed}, reason)
-
-            if closed? do
-              {:closed, %{client | conn: conn}, :closed}
-            else
-              {:error, %{client | conn: conn}, reason}
-            end
-          else
-            # The server's WS close frame can land in the same TCP read as the
-            # FIN — Mint hands those bytes back in the error tuple's responses.
-            # Decode them before reporting, or the close frame is lost.
-            decode(client, conn, IO.iodata_to_binary(datas), timeout)
-          end
+          recv_error(client, conn, reason, datas, timeout)
       end
+    end
+
+    defp recv_error(client, conn, reason, [], _timeout) do
+      if reason == :closed or match?(%Mint.TransportError{reason: :closed}, reason) do
+        {:closed, %{client | conn: conn}, :closed}
+      else
+        {:error, %{client | conn: conn}, reason}
+      end
+    end
+
+    defp recv_error(client, conn, _reason, datas, timeout) do
+      # The server's WS close frame can land in the same TCP read as the FIN.
+      # Mint returns those bytes in the error tuple, so decode them first.
+      decode(client, conn, IO.iodata_to_binary(datas), timeout)
     end
 
     defp decode(client, conn, data, timeout) do
@@ -474,15 +482,39 @@ defmodule Noizu.MCP.VFSServerE2ETest do
 
     def request(client, method, params, id, timeout \\ 2000) do
       client = send_text(client, %{"v" => 2, "id" => id, "method" => method, "params" => params})
-      wait_response(client, id, timeout)
+      deadline = System.monotonic_time(:millisecond) + timeout
+      wait_response(client, id, deadline, [])
     end
 
-    defp wait_response(client, id, timeout) do
-      case recv(client, timeout) do
-        {:ok, client, %{"id" => ^id} = frame} -> {:ok, client, frame}
-        {:ok, client, _other} -> wait_response(client, id, timeout)
-        error -> error
+    defp wait_response(client, id, deadline, deferred) do
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        {:error, restore_deferred(client, deferred), :timeout}
+      else
+        receive_response(client, id, deadline, deferred, remaining)
       end
+    end
+
+    defp receive_response(client, id, deadline, deferred, remaining) do
+      case recv(client, remaining) do
+        {:ok, client, %{"id" => ^id} = frame} ->
+          {:ok, restore_deferred(client, deferred), frame}
+
+        {:ok, client, other} ->
+          wait_response(client, id, deadline, [other | deferred])
+
+        {:closed, client, reason} ->
+          {:closed, restore_deferred(client, deferred), reason}
+
+        {:error, client, reason} ->
+          {:error, restore_deferred(client, deferred), reason}
+      end
+    end
+
+    defp restore_deferred(client, deferred) do
+      queued = deferred |> Enum.reverse() |> Enum.map(&Jason.encode!/1)
+      %{client | queue: queued ++ client.queue}
     end
 
     def close(client) do
@@ -584,6 +616,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     on_exit(fn ->
       Cache.purge(Backend)
       Cache.purge(ReadOnlyBackend)
+      :persistent_term.erase({Tree, :table})
       File.rm(socket_path("main"))
       File.rm(socket_path("ro"))
     end)
@@ -630,13 +663,24 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     end
   end
 
-  # True when the connection went quiet for `ms` (no events) or was closed.
-  defp ws_quiet?(client, ms) do
+  # A quiet connection must remain live. Closure, decode failures, and frames
+  # are all failures rather than alternate definitions of "quiet".
+  defp assert_ws_quiet!(client, ms) do
     case WSClient.recv(client, ms) do
-      {:closed, _, _} -> true
-      {:error, _, :timeout} -> true
-      {:error, _, _} -> true
-      {:ok, _, _} -> false
+      {:error, _, :timeout} ->
+        :ok
+
+      {:error, _, %Mint.TransportError{reason: :timeout}} ->
+        :ok
+
+      {:closed, _, reason} ->
+        flunk("expected websocket silence, but the connection closed: #{inspect(reason)}")
+
+      {:error, _, reason} ->
+        flunk("expected websocket silence, but receive failed: #{inspect(reason)}")
+
+      {:ok, _, frame} ->
+        flunk("expected websocket silence, but received: #{inspect(frame)}")
     end
   end
 
@@ -650,7 +694,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     test "vfs/auth: bad key is -32001 and the connection closes", %{socket: path} do
       client = connect!(path)
 
-      assert {:error, %{"code" => -32001, "message" => message}} =
+      assert {:error, %{"code" => -32_001, "message" => message}} =
                VFSClient.auth(client, @bad_key)
 
       assert message =~ "auth"
@@ -742,10 +786,10 @@ defmodule Noizu.MCP.VFSServerE2ETest do
       assert {:ok, %{"entries" => docs}} = VFSClient.list(client, "/docs")
       assert %{"name" => "new.txt", "type" => "file"} = entry(docs, "new.txt")
 
-      assert {:error, %{"code" => -32041, "data" => %{"errno_atom" => "eexist"}}} =
+      assert {:error, %{"code" => -32_041, "data" => %{"errno_atom" => "eexist"}}} =
                VFSClient.create(client, "/docs/new.txt", "again")
 
-      assert {:error, %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}} =
+      assert {:error, %{"code" => -32_002, "data" => %{"errno_atom" => "enoent"}}} =
                VFSClient.create(client, "/nope/child.txt", "orphan")
 
       assert {:ok, %{"type" => "dir"}} = VFSClient.create(client, "/docs/newdir")
@@ -761,16 +805,16 @@ defmodule Noizu.MCP.VFSServerE2ETest do
       assert {:ok, %{"removed" => "/docs/doomed.txt"}} =
                VFSClient.remove(client, "/docs/doomed.txt")
 
-      assert {:error, %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}} =
+      assert {:error, %{"code" => -32_002, "data" => %{"errno_atom" => "enoent"}}} =
                VFSClient.stat(client, "/docs/doomed.txt")
 
-      assert {:error, %{"code" => -32045, "data" => %{"errno_atom" => "enotempty"}}} =
+      assert {:error, %{"code" => -32_045, "data" => %{"errno_atom" => "enotempty"}}} =
                VFSClient.remove(client, "/docs")
 
-      assert {:error, %{"code" => -32040, "data" => %{"errno_atom" => "eacces"}}} =
+      assert {:error, %{"code" => -32_040, "data" => %{"errno_atom" => "eacces"}}} =
                VFSClient.remove(client, "/etc/locked.conf")
 
-      assert {:error, %{"code" => -32040, "data" => %{"errno_atom" => "eacces"}}} =
+      assert {:error, %{"code" => -32_040, "data" => %{"errno_atom" => "eacces"}}} =
                VFSClient.remove(client, "/")
     end
 
@@ -797,16 +841,16 @@ defmodule Noizu.MCP.VFSServerE2ETest do
          } do
       client = authed!(path)
 
-      assert {:error, %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}} =
+      assert {:error, %{"code" => -32_002, "data" => %{"errno_atom" => "enoent"}}} =
                VFSClient.read(client, "/nope")
 
-      assert {:error, %{"code" => -32040, "data" => %{"errno_atom" => "eacces"}}} =
+      assert {:error, %{"code" => -32_040, "data" => %{"errno_atom" => "eacces"}}} =
                VFSClient.read(client, "/etc/locked.conf")
 
-      assert {:error, %{"code" => -32040, "data" => %{"errno_atom" => "eacces"}}} =
+      assert {:error, %{"code" => -32_040, "data" => %{"errno_atom" => "eacces"}}} =
                VFSClient.write(client, "/etc/locked.conf", "tamper")
 
-      assert {:error, %{"code" => -32043, "data" => %{"errno_atom" => "eisdir"}}} =
+      assert {:error, %{"code" => -32_043, "data" => %{"errno_atom" => "eisdir"}}} =
                VFSClient.write(client, "/docs", "into a dir")
     end
 
@@ -820,13 +864,13 @@ defmodule Noizu.MCP.VFSServerE2ETest do
       assert {:ok, %{"content" => "alpha contents\nsecond line\n"}} =
                VFSClient.read(client, "/docs/a.txt")
 
-      assert {:error, %{"code" => -32046, "data" => %{"errno_atom" => "enosys"}}} =
+      assert {:error, %{"code" => -32_046, "data" => %{"errno_atom" => "enosys"}}} =
                VFSClient.write(client, "/docs/a.txt", "nope")
 
-      assert {:error, %{"code" => -32046, "data" => %{"errno_atom" => "enosys"}}} =
+      assert {:error, %{"code" => -32_046, "data" => %{"errno_atom" => "enosys"}}} =
                VFSClient.create(client, "/docs/new.txt", "nope")
 
-      assert {:error, %{"code" => -32046, "data" => %{"errno_atom" => "enosys"}}} =
+      assert {:error, %{"code" => -32_046, "data" => %{"errno_atom" => "enosys"}}} =
                VFSClient.remove(client, "/docs/a.txt")
     end
 
@@ -878,7 +922,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     test "vfs/auth: bad key is -32001 and the connection closes", %{ws: port} do
       client = ws_connect!(port)
 
-      assert {:ok, _client, %{"error" => %{"code" => -32001, "message" => message}}} =
+      assert {:ok, _client, %{"error" => %{"code" => -32_001, "message" => message}}} =
                WSClient.request(client, "vfs/auth", %{"api_key" => @bad_key}, 1)
 
       assert message =~ "auth"
@@ -903,6 +947,26 @@ defmodule Noizu.MCP.VFSServerE2ETest do
                WSClient.request(client, "vfs/read", %{"path" => "/data/list/one.txt"}, 4)
 
       assert is_integer(version) and version >= 1
+    end
+
+    test "a request preserves an already-queued event while awaiting its response", %{ws: port} do
+      event = %{"type" => "vfs/event", "op" => "write", "path" => "/docs/a.txt"}
+      client = ws_authed!(port)
+      client = %{client | queue: [Jason.encode!(event)]}
+
+      assert {:ok, client, %{"result" => %{"type" => "file"}}} =
+               WSClient.request(client, "vfs/stat", %{"path" => "/docs/a.txt"}, 2)
+
+      assert {:ok, _client, ^event} = WSClient.recv(client, 0)
+    end
+
+    test "queued text is delivered before a close recorded in the same read" do
+      event = %{"type" => "vfs/event", "op" => "remove", "path" => "/docs/old.txt"}
+      close = {:close, 1000, "done"}
+      client = %WSClient{close: close, queue: [Jason.encode!(event)]}
+
+      assert {:ok, client, ^event} = WSClient.recv(client, 0)
+      assert {:closed, _client, ^close} = WSClient.recv(client, 0)
     end
 
     test "vfs_write round-trips with a bumped version", %{ws: port} do
@@ -941,7 +1005,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
 
       assert %{"name" => "three.txt", "type" => "file"} = entry(entries, "three.txt")
 
-      assert {:ok, _, %{"error" => %{"code" => -32041, "data" => %{"errno_atom" => "eexist"}}}} =
+      assert {:ok, _, %{"error" => %{"code" => -32_041, "data" => %{"errno_atom" => "eexist"}}}} =
                WSClient.request(
                  client,
                  "vfs/create",
@@ -956,10 +1020,11 @@ defmodule Noizu.MCP.VFSServerE2ETest do
       assert {:ok, _, %{"result" => %{"removed" => "/data/list/one.txt"}}} =
                WSClient.request(client, "vfs/remove", %{"path" => "/data/list/one.txt"}, 1)
 
-      assert {:ok, _, %{"error" => %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}}} =
+      assert {:ok, _, %{"error" => %{"code" => -32_002, "data" => %{"errno_atom" => "enoent"}}}} =
                WSClient.request(client, "vfs/stat", %{"path" => "/data/list/one.txt"}, 2)
 
-      assert {:ok, _, %{"error" => %{"code" => -32045, "data" => %{"errno_atom" => "enotempty"}}}} =
+      assert {:ok, _,
+              %{"error" => %{"code" => -32_045, "data" => %{"errno_atom" => "enotempty"}}}} =
                WSClient.request(client, "vfs/remove", %{"path" => "/data/list"}, 3)
     end
 
@@ -975,10 +1040,10 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     test "error paths: unknown read is -32002, locked write is -32040", %{ws: port} do
       client = ws_authed!(port)
 
-      assert {:ok, _, %{"error" => %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}}} =
+      assert {:ok, _, %{"error" => %{"code" => -32_002, "data" => %{"errno_atom" => "enoent"}}}} =
                WSClient.request(client, "vfs/read", %{"path" => "/nope"}, 1)
 
-      assert {:ok, _, %{"error" => %{"code" => -32040, "data" => %{"errno_atom" => "eacces"}}}} =
+      assert {:ok, _, %{"error" => %{"code" => -32_040, "data" => %{"errno_atom" => "eacces"}}}} =
                WSClient.request(
                  client,
                  "vfs/write",
@@ -993,7 +1058,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
       assert {:ok, _, %{"result" => %{"writable" => false}}} =
                WSClient.request(client, "vfs/stat", %{"path" => "/docs/a.txt"}, 1)
 
-      assert {:ok, _, %{"error" => %{"code" => -32046, "data" => %{"errno_atom" => "enosys"}}}} =
+      assert {:ok, _, %{"error" => %{"code" => -32_046, "data" => %{"errno_atom" => "enosys"}}}} =
                WSClient.request(client, "vfs/write", %{"path" => "/docs/a.txt", "data" => "y"}, 2)
     end
 
@@ -1058,7 +1123,7 @@ defmodule Noizu.MCP.VFSServerE2ETest do
                )
 
       assert {:ok, _subscriber, %{"op" => "write"}} = ws_event(subscriber)
-      assert ws_quiet?(bystander, 150)
+      assert_ws_quiet!(bystander, 150)
     end
 
     test "unsubscribe stops event delivery", %{ws: port} do
@@ -1088,7 +1153,15 @@ defmodule Noizu.MCP.VFSServerE2ETest do
                  4
                )
 
-      assert ws_quiet?(client, 150)
+      assert_ws_quiet!(client, 150)
+    end
+
+    test "quiet checks reject a closed websocket instead of masking it" do
+      client = %WSClient{close: {:close, 1006, "transport lost"}, queue: []}
+
+      assert_raise ExUnit.AssertionError, ~r/connection closed/, fn ->
+        assert_ws_quiet!(client, 0)
+      end
     end
   end
 
