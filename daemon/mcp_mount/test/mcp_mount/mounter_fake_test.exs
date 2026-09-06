@@ -183,4 +183,21 @@ defmodule McpMount.MounterFakeTest do
 
     assert File.read!(Path.join(dir, "docs/hello.txt")) == "hello world\n"
   end
+
+  test "watcher death clears the tracked watcher state", %{mounter: mounter} do
+    %{watcher: watcher, watcher_mon: watcher_mon} = :sys.get_state(mounter)
+    assert is_pid(watcher)
+    assert is_reference(watcher_mon)
+
+    Process.exit(watcher, :kill)
+
+    wait_until(fn ->
+      case :sys.get_state(mounter) do
+        %{watcher: nil, watcher_mon: nil} -> :ok
+        _state -> nil
+      end
+    end)
+
+    assert Process.alive?(mounter)
+  end
 end

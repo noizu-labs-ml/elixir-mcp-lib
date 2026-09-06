@@ -17,3 +17,11 @@ Alternatives considered → References. Status flow: `proposed` → `accepted` (
 | [ADR-007](ADR-007-engine-federation.md) | The Engine: install once, federate upstream MCPs behind one `sql/*` endpoint | accepted |
 
 PRDs for this series: `project-management/PRDs/` (PRD-6 … PRD-11, Series 2 in `INDEX.md`).
+
+## Series: mcp-fuse companion daemon (2026-09-06)
+
+| ADR | Title | Status |
+|---|---|---|
+| [ADR-008](ADR-008-mcp-fuse-companion.md) | Standalone Go FUSE companion and bounded write semantics | accepted |
+
+Implementation plan: `project-management/PRDs/PRD-12-mcp-fuse-companion.md`.

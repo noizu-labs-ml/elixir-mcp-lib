@@ -256,3 +256,14 @@ One hard gate remains at PRD-6. **S1** (handshake) or **S3** (auth → `%Princip
 **Anchor notes.** Every `file:line` in series 2 was verified against this worktree on 2026-09-05. `Noizu.MCP.Toolset.catalog/3` is at `lib/noizu/mcp/toolset.ex:41` — a brief circulated `:42`, and no PRD carries that. The stdio client naming flagged earlier has since been corrected in ADR-007 itself, which now reads `Noizu.MCP.Transport.Stdio.Client`; PRD-11 §9 Q7 is marked resolved rather than deleted, so the trail stays legible.
 
 **ADR conformance pass (2026-09-05).** All seven ADRs were re-read against the finished PRDs. Five gaps were closed rather than left as deviations: `mcp.import/3` was missing from the function surface (ADR-003) and is now declared in PRD-6 §4.6 and implemented in PRD-7 §4.11; function-level `isError` handling now defaults to raising with an `on_error => 'return'` opt-out (ADR-003) while tables still always return a row, and PRD-6 §4.6 states why the two differ; `idx` replaces `position` as the ordinal column name (ADR-003); `sql/schema` now declares invoke kind, `qual_columns`, `required_quals`, `sort` and `limit` per relation (ADR-005), which is what lets `mode 'sql'` build tables without inferring anything; and datasets take an ACL subject of their own while tool-derived relations borrow the tool's verdict (ADR-005). ADR-006's stock `postgres:17` local-development base is now a `BASE_IMAGE` build arg in PRD-10 §4.1.
+
+---
+
+# Series 3 — mcp-fuse companion
+
+| PRD | File | Title | Repo | Status |
+|---|---|---|---|---|
+| 12 | [PRD-12-mcp-fuse-companion.md](./PRD-12-mcp-fuse-companion.md) | Kernel FUSE companion readiness | `fuse/` | Ready for review |
+
+Architecture source: accepted ADR-008. The maintainer approved the scoped
+docs-with-implementation sequencing exception for the pre-existing feature branch.
