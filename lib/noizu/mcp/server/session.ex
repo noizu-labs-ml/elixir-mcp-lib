@@ -518,6 +518,27 @@ defmodule Noizu.MCP.Server.Session do
     )
   end
 
+  # sql/* (PRD-9) — experimental extension family. dispatch_feature/6 answers
+  # method_not_found when the server generated no handle_sql_* callbacks, which
+  # is exactly the servers that did not opt in: fail-closed by construction.
+  defp dispatch(state, "sql/schema", id, params) do
+    dispatch_feature(state, "sql/schema", id, params, {:handle_sql_schema, 2},
+      run: &Features.SQL.schema/3
+    )
+  end
+
+  defp dispatch(state, "sql/scan", id, params) do
+    dispatch_feature(state, "sql/scan", id, params, {:handle_sql_scan, 3},
+      run: &Features.SQL.scan/3
+    )
+  end
+
+  defp dispatch(state, "sql/modify", id, params) do
+    dispatch_feature(state, "sql/modify", id, params, {:handle_sql_modify, 3},
+      run: &Features.SQL.modify/3
+    )
+  end
+
   defp dispatch(state, method, id, _params) do
     reply_result(state, id, {:error, Error.method_not_found(method)})
   end

@@ -33,3 +33,8 @@ noizu_mcp-*.tar
 
 # escript build artifact
 /daemon/mcp_mount/mcp-mount
+
+# pg_mcp Rust build artifacts (PRD-6 step 6.11)
+pg/pg_mcp/target/
+# Claude Code worktrees (local-only, never committed)
+/.claude/worktrees/

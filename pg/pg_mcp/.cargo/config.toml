@@ -1,0 +1,5 @@
+# Generated per cargo-pgrx 0.19.2's own template: the extension links against
+# Postgres backend symbols that are only resolved when the .so/dylib is loaded
+# into a backend, so the linker must leave them undefined here.
+[target.aarch64-apple-darwin]
+rustflags = ["-Clink-arg=-Wl,-undefined,dynamic_lookup"]

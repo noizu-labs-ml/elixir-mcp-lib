@@ -1,7 +1,7 @@
 defmodule Noizu.MCP.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.4.0"
   @source_url "https://github.com/noizu-labs/noizu-mcp"
 
   def project do
@@ -100,6 +100,7 @@ defmodule Noizu.MCP.MixProject do
         "guides/mcp_client_compatibility.md",
         "guides/testing.md",
         "guides/inspector.md",
+        "guides/engine.md",
         "cheatsheets/mcp.cheatmd"
       ],
       groups_for_extras: [
@@ -108,6 +109,7 @@ defmodule Noizu.MCP.MixProject do
       ],
       groups_for_modules: [
         Server: ~r/Noizu\.MCP\.Server($|\.)/,
+        Engine: ~r/Noizu\.MCP\.Engine($|\.)/,
         Client: ~r/Noizu\.MCP\.Client($|\.)/,
         "Handler Context": [Noizu.MCP.Ctx],
         Types: ~r/Noizu\.MCP\.Types\./,

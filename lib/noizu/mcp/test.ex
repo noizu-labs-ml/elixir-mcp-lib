@@ -129,17 +129,17 @@ defmodule Noizu.MCP.Test do
           {:ok, map()} | {:error, map()}
   # ⟦𓂕𓀂𓈬𓌰⟧ request :: auto-generated pointer for public function request
   def request(%Client{} = client, method, params \\ nil, opts \\ []) do
-    id = send_request(client, method, params)
+    id = send_request(client, method, params, opts)
     await(client, id, opts)
   end
 
   @doc "Send a request and return its id without awaiting the response."
-  @spec send_request(%Client{}, String.t(), map() | nil) :: integer()
+  @spec send_request(%Client{}, String.t(), map() | nil, keyword()) :: integer()
   # ⟦𓁎𓎼𓌮𓊚⟧ send_request :: Send a request and return its id without awaiting the response.
-  def send_request(%Client{} = client, method, params \\ nil) do
+  def send_request(%Client{} = client, method, params \\ nil, opts \\ []) do
     :counters.add(client.counter, 1, 1)
     id = :counters.get(client.counter, 1)
-    deliver(client, %Request{id: id, method: method, params: params})
+    deliver(client, %Request{id: id, method: method, params: params}, opts)
     id
   end
 
@@ -173,8 +173,16 @@ defmodule Noizu.MCP.Test do
   # ⟦𓉖𓆢𓇶𓏂⟧ deliver_raw :: Send a raw wire binary (escape hatch for malformed-input tests).
   def deliver_raw(%Client{} = client, binary), do: Session.deliver(client.session, binary)
 
-  defp deliver(client, message) do
-    Session.deliver(client.session, IO.iodata_to_binary(JsonRpc.encode!(message)))
+  # `opts[:claims]` scopes the request's principal (PRD-2 per-request identity):
+  # every wrapper that forwards opts (call_tool, list_tools, sql_*, ...) can
+  # therefore carry auth like the wire transports do.
+  defp deliver(client, message, opts \\ []) do
+    binary = IO.iodata_to_binary(JsonRpc.encode!(message))
+
+    case Keyword.get(opts, :claims) do
+      nil -> Session.deliver(client.session, binary)
+      claims -> Session.deliver(client.session, binary, claims)
+    end
   end
 
   # ── feature wrappers ──────────────────────────────────────────────────────
@@ -354,6 +362,136 @@ defmodule Noizu.MCP.Test do
   # ⟦𓂸𓐞𓆑𓈎⟧ set_log_level :: Set the MCP log level for this session.
   def set_log_level(%Client{} = client, level) do
     request(client, "logging/setLevel", %{"level" => to_string(level)})
+  end
+
+  # ── sql/* wrappers (PRD-9) ────────────────────────────────────────────────
+
+  @doc """
+  Call `sql/schema`. Returns the raw payload
+  `%{"version" => 1, "relations" => [...]}`.
+
+  Options: `:claims` — per-request auth claims delivered through
+  `Session.deliver/3`, so the schema materializes for that principal
+  (PRD-9 FR-9.12); `:timeout`.
+  """
+  @spec sql_schema(%Client{}, keyword()) :: {:ok, map()} | {:error, map()}
+  # ⟦𓍜𓎏𓋰𓃭⟧ sql_schema :: Call `sql/schema` (PRD-9).
+  def sql_schema(%Client{} = client, opts \\ []) do
+    sql_request(client, "sql/schema", %{}, opts)
+  end
+
+  @doc """
+  Call `sql/scan` for `relation`. Options fold into the wire params: `:quals`
+  (list of wire qual maps), `:columns` (list of strings), `:sort`
+  (`[{column, :asc | :desc}]`), `:limit`, `:cursor`, plus `:claims` and
+  `:timeout`.
+
+  Returns `{:ok, %{"columns" => [...], "rows" => [[...]], "nextCursor" => _}}`
+  — rows are positional against `columns` (PRD-9 §4.5).
+  """
+  @spec sql_scan(%Client{}, String.t(), keyword()) :: {:ok, map()} | {:error, map()}
+  # ⟦𓄿𓆗𓋹𓍝⟧ sql_scan :: Call `sql/scan` for `relation` (PRD-9).
+  def sql_scan(%Client{} = client, relation, opts \\ []) do
+    params =
+      %{"relation" => relation}
+      |> maybe_param(:quals, opts[:quals])
+      |> maybe_param(:columns, opts[:columns])
+      |> maybe_param(:sort, sort_param(opts[:sort]))
+      |> maybe_param(:limit, opts[:limit])
+      |> maybe_param(:cursor, opts[:cursor])
+
+    sql_request(client, "sql/scan", params, opts)
+  end
+
+  @doc """
+  Call `sql/modify` for `relation` with `op` of `:insert`, `:update` or
+  `:delete`. `args` carries `:rows` (insert), `:quals` (update/delete) and
+  `:changes` (update). `:claims` and `:timeout` behave as in `sql_scan/3`.
+  """
+  @spec sql_modify(%Client{}, String.t(), :insert | :update | :delete, keyword(), keyword()) ::
+          {:ok, map()} | {:error, map()}
+  # ⟦𓎼𓍁𓅃𓆓⟧ sql_modify :: Call `sql/modify` for `relation` (PRD-9).
+  def sql_modify(%Client{} = client, relation, op, args \\ [], opts \\ [])
+      when op in [:insert, :update, :delete] do
+    params =
+      %{"relation" => relation, "op" => Atom.to_string(op)}
+      |> maybe_param(:rows, args[:rows])
+      |> maybe_param(:quals, args[:quals])
+      |> maybe_param(:changes, args[:changes])
+
+    sql_request(client, "sql/modify", params, opts)
+  end
+
+  defp sql_request(%Client{} = client, method, params, opts) do
+    id = send_request(client, method, params, opts)
+    await(client, id, timeout: Keyword.get(opts, :timeout, @default_timeout))
+  end
+
+  defp maybe_param(map, _key, nil), do: map
+  defp maybe_param(map, key, value), do: Map.put(map, Atom.to_string(key), value)
+
+  defp sort_param(nil), do: nil
+
+  defp sort_param(sort) when is_list(sort),
+    do:
+      Enum.map(sort, fn {column, direction} ->
+        %{"column" => column, "direction" => to_string(direction)}
+      end)
+
+  @doc """
+  Attach an upstream by inserting a `servers` row through `sql/modify` (PRD-11):
+  the same dataset path the FDW's `INSERT INTO engine.servers` takes.
+
+      attach_upstream(client, %{"name" => "github", "transport" => "stdio",
+                                "command" => "...", "auth_ref" => "env:GITHUB_TOKEN"})
+
+  Options: `:claims`, `:timeout` as in `sql_modify/5`.
+  """
+  @spec attach_upstream(%Client{}, map(), keyword()) :: {:ok, map()} | {:error, map()}
+  def attach_upstream(%Client{} = client, row, opts \\ []) when is_map(row) do
+    sql_modify(client, "servers", :insert, [rows: [row]], opts)
+  end
+
+  @doc """
+  Poll `sql/scan` on `servers` until upstream `name` reads `ready` (or the
+  given status), returning its row map. Raises on timeout (default 5s).
+  """
+  @spec await_upstream_status(%Client{}, String.t(), String.t(), keyword()) :: map()
+  def await_upstream_status(%Client{} = client, name, status \\ "ready", opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 5_000)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_status(client, name, status, deadline)
+  end
+
+  defp do_await_status(client, name, status, deadline) do
+    row = upstream_row(client, name)
+
+    if row && row["status"] == status do
+      row
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        raise ExUnit.AssertionError,
+          message: "Timed out awaiting upstream #{inspect(name)} status #{inspect(status)}"
+      end
+
+      Process.sleep(50)
+      do_await_status(client, name, status, deadline)
+    end
+  end
+
+  @doc "One `servers` scan row for `name`, as a column-keyed map, or nil."
+  @spec upstream_row(%Client{}, String.t(), keyword()) :: map() | nil
+  def upstream_row(%Client{} = client, name, opts \\ []) do
+    scan_opts =
+      Keyword.merge([quals: [%{"column" => "name", "op" => "eq", "value" => name}]], opts)
+
+    case sql_scan(client, "servers", scan_opts) do
+      {:ok, %{"columns" => columns, "rows" => [row | _rest]}} ->
+        columns |> Enum.zip(row) |> Map.new()
+
+      _other ->
+        nil
+    end
   end
 
   # ── notification assertions ───────────────────────────────────────────────

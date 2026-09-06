@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c3bef34f8a4d3cd8adf70b4630db8ca4f0ed940746c8a5153c08983fa8a37249 # shrinks to tools = [Object {"name": String(""), "inputSchema": String("not an object schema")}], prefix = None, gate = ReadOnly

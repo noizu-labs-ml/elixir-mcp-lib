@@ -1,0 +1,226 @@
+# pg_mcp CI (PRD-10 §4.2) — runs independently of the Elixir pipeline: a Rust
+# failure never blocks a pure-Elixir PR and vice versa.
+#
+# Triggers: pull_request / push touching pg/** or this file.
+#
+# Jobs:
+#   test    pg16/17/18 — fmt, clippy -D warnings, the trusted run-tests.sh
+#           (pgrx-managed toolchains; `cargo pgrx test`'s framework runner is
+#           unreliable — see pg/pg_mcp/run-tests.sh header)
+#   package pg16/17/18 — cargo pgrx package + out-dir artifacts
+#   image   pg17 — docker build (postgres:17 profile) + smoke.sql; pushes
+#           only on tag builds. A nightly job builds the PRODUCTION base
+#           (docker.io/noizu/…) and runs smoke-production.sql — the layering
+#           against the real base is verified there, since the base is not
+#           pullable everywhere (PRD-10 §1, out-of-scope: rebuilding the base).
+#   e2e     pg17 — image + container + the Elixir suite with PG_MCP_URL set
+#           (E1–E19). Slowest job; runs on PRs touching pg/** per §9 Q3's
+#           recommendation, cheap to extend to nightly.
+
+name: pg_mcp
+
+on:
+  pull_request:
+    paths:
+      - "pg/**"
+      - ".github/workflows/pg_mcp.yml"
+  push:
+    paths:
+      - "pg/**"
+      - ".github/workflows/pg_mcp.yml"
+    tags:
+      - "pg_mcp-v*"
+  schedule:
+    # Nightly: production-base image verification (manual re-run also works
+    # via workflow_dispatch on any branch).
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PGRX_VERSION: "0.19.2"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (pg${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [16, 17, 18]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: cargo install --locked cargo-pgrx@${PGRX_VERSION}
+
+      # pgrx-managed toolchains for every major (the run-tests.sh convention;
+      # no reliance on runner-local postgres installs).
+      - name: pgrx init (pg${{ matrix.pg }})
+        run: cargo pgrx init --pg${{ matrix.pg }} download
+
+      - name: Format check
+        run: cargo fmt --check
+        working-directory: pg/pg_mcp
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: pg/pg_mcp
+
+      - name: Test suite (pg${{ matrix.pg }})
+        working-directory: pg/pg_mcp
+        env:
+          PG_MAJOR: ${{ matrix.pg }}
+          PGBIN: ${{ home }}/.pgrx/*/pgrx-install/bin
+        run: |
+          PGBIN="$(ls -d ~/.pgrx/*/pgrx-install/bin | head -1)"
+          ./run-tests.sh
+
+  package:
+    name: package (pg${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [16, 17, 18]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: cargo install --locked cargo-pgrx@${PGRX_VERSION}
+
+      - name: pgrx init (pg${{ matrix.pg }})
+        run: cargo pgrx init --pg${{ matrix.pg }} download
+
+      - name: Package (pg${{ matrix.pg }})
+        working-directory: pg/pg_mcp
+        run: |
+          PG_CONFIG="$(ls -d ~/.pgrx/*/pgrx-install/bin/pg_config | head -1)"
+          cargo pgrx package --no-default-features \
+            --features pg${{ matrix.pg }} --pg-config "$PG_CONFIG" \
+            --out-dir "${{ github.workspace }}/out"
+
+      - name: Upload artifact (pg_mcp-pg${{ matrix.pg }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg_mcp-pg${{ matrix.pg }}
+          path: out/
+
+  image:
+    name: image (pg17, postgres:17 profile)
+    runs-on: ubuntu-latest
+    needs: [test, package]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (postgres:17 profile)
+        run: |
+          docker build -f pg/docker/Dockerfile \
+            --build-arg BASE_IMAGE=postgres:17 --build-arg FINAL_USER=root \
+            -t pg_mcp:smoke .
+
+      - name: Smoke test (smoke.sql)
+        run: |
+          docker run -d --rm --name pg_mcp_smoke \
+            -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
+            pg_mcp:smoke
+          for i in $(seq 1 30); do
+            docker exec pg_mcp_smoke pg_isready -U postgres && break
+            sleep 1
+          done
+          docker exec -i pg_mcp_smoke psql -U postgres -v ON_ERROR_STOP=1 \
+            < pg/docker/smoke.sql
+          docker rm -f pg_mcp_smoke
+
+      # Push only on tag builds; PRs build and discard (FR-10.5).
+      - name: Push (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/pg_mcp-v')
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+        run: |
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+          BASE_TAG="pg17.9-ts2.25.2-all-age1.7.0"
+          EXT_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' pg/pg_mcp/Cargo.toml | head -1)"
+          docker build -f pg/docker/Dockerfile \
+            -t "noizu/timescaledb-ha-with-age-mcp:${BASE_TAG}-mcp${EXT_VER}-r1" .
+          docker push "noizu/timescaledb-ha-with-age-mcp:${BASE_TAG}-mcp${EXT_VER}-r1"
+
+  # The §7.5 battery against the PRODUCTION base — nightly + manual, because
+  # the base image is large and not the thing a PR should wait on. This is
+  # also the tripwire for builder-libc drift (see pg/docker/README.md).
+  image-production:
+    name: image (production base, nightly)
+    runs-on: ubuntu-latest
+    needs: [test, package]
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (production base)
+        run: |
+          docker build -f pg/docker/Dockerfile -t pg_mcp:production-smoke .
+
+      - name: Smoke test (smoke-production.sql)
+        run: |
+          docker run -d --rm --name pg_mcp_smoke \
+            -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
+            pg_mcp:production-smoke
+          PSQL=/usr/lib/postgresql/17/bin/psql
+          for i in $(seq 1 120); do
+            # The base's entrypoint restarts the server mid-init; require a
+            # stable "accepting connections" before trusting it.
+            if docker exec pg_mcp_smoke /usr/lib/postgresql/17/bin/pg_isready -U postgres 2>/dev/null |
+                 grep -q accepting; then SEEN=$((SEEN+1)); else SEEN=0; fi
+            [ "${SEEN:-0}" -ge 5 ] && break
+            sleep 1
+          done
+          # Fresh database: the base's default DB ships with timescaledb etc.
+          # already created; FR-10.3 is proven by creating them in a clean one.
+          docker exec pg_mcp_smoke $PSQL -X -U postgres -c "CREATE DATABASE pg_mcp_smoke;"
+          # timescaledb must be the first statement of its session (see
+          # smoke-production.sql header).
+          docker exec pg_mcp_smoke $PSQL -X -U postgres -d pg_mcp_smoke \
+            -c "CREATE EXTENSION timescaledb;"
+          docker exec -i pg_mcp_smoke $PSQL -X -U postgres -d pg_mcp_smoke \
+            -v ON_ERROR_STOP=1 < pg/docker/smoke-production.sql
+          docker rm -f pg_mcp_smoke
+
+  e2e:
+    name: e2e (pg17, E1–E19)
+    runs-on: ubuntu-latest
+    needs: [image]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+
+      - name: Mix deps
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      # Compose builds the postgres:17 profile (host-gateway wired for the
+      # container → Bandit listener leg) and the suite boots the Engine plus
+      # stdio fixture upstreams host-side.
+      - name: Start the layered Postgres
+        run: docker compose -f pg/docker/e2e-compose.yaml up -d --build
+
+      - name: Run the e2e suite
+        env:
+          PG_MCP_URL: "ecto://postgres:postgres@localhost:15432/pg_mcp_e2e"
+          MIX_ENV: test
+        run: |
+          mix compile
+          mix test --only pg_mcp

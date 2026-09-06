@@ -30,6 +30,12 @@ defmodule Noizu.MCP.Protocol.Methods do
     "notifications/prompts/list_changed" => {:notification, :server_to_client},
     # completion
     "completion/complete" => {:request, :client_to_server},
+    # sql/* — experimental extension family (PRD-9, ADR-005). Receivable by
+    # servers like the core families; served only by servers that opt in and
+    # advertised under `capabilities.experimental.sql`.
+    "sql/schema" => {:request, :client_to_server},
+    "sql/scan" => {:request, :client_to_server},
+    "sql/modify" => {:request, :client_to_server},
     # logging
     "logging/setLevel" => {:request, :client_to_server},
     "notifications/message" => {:notification, :server_to_client},

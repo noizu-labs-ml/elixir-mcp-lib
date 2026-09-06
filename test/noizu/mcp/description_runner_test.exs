@@ -18,7 +18,9 @@ defmodule Noizu.MCP.DescriptionRunnerTest do
       assert Description.from_opts([], "t") == nil
 
       variant = [description: [{{:verbosity, 0}, "terse"}, default: "def"]]
-      assert Description.from_opts(variant, "t") == Description.compile(variant[:description], "t")
+
+      assert Description.from_opts(variant, "t") ==
+               Description.compile(variant[:description], "t")
     end
 
     test "named variants + verbosity_map + runners compile into the struct" do
@@ -36,7 +38,15 @@ defmodule Noizu.MCP.DescriptionRunnerTest do
       assert %Description{} = desc
       assert desc.default == "definitive"
       assert desc.variants == %{"base" => "B", "codex" => "C", "hippo-5" => "H"}
-      assert desc.verbosity_map == %{0 => "base", 1 => "base", 2 => "base", 3 => "base", 4 => "base", 5 => "base"}
+
+      assert desc.verbosity_map == %{
+               0 => "base",
+               1 => "base",
+               2 => "base",
+               3 => "base",
+               4 => "base",
+               5 => "base"
+             }
 
       assert [grok_rule, codex_rule] = desc.runners
       assert grok_rule.provider == :grok
