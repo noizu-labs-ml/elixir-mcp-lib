@@ -736,4 +736,212 @@ mod e2e_test {
             1
         );
     }
+
+    // ── the mcp.* API surface (PRD-6 §4.6 coverage) ──────────────────────────
+
+    /// `mcp.get_prompt` and `mcp.complete` round-trip their methods' params
+    /// and results through the shared session, STRICT, args defaulting to
+    /// `{}`.
+    #[pgrx::pg_test]
+    fn get_prompt_and_complete_round_trip_their_shapes() {
+        cache::clear_all();
+        let replies = map(vec![
+            ("initialize", init_reply("api-prompt")),
+            (
+                "prompts/get",
+                Reply::Result(json!({
+                    "description": "greet someone",
+                    "messages": [
+                        {"role": "user", "content": {"type": "text", "text": "hi"}}
+                    ]
+                })),
+            ),
+            (
+                "completion/complete",
+                Reply::Result(json!({"completion": {"values": ["rust", "ruby"], "total": 2}})),
+            ),
+        ]);
+        let stub = StubServer::start(replies, false);
+        Spi::run(&format!(
+            "CREATE SERVER e2_api1 FOREIGN DATA WRAPPER mcp_fdw
+               OPTIONS (url '{}', auth 'none', timeout_ms '8000')",
+            stub.url()
+        ))
+        .unwrap();
+
+        let prompt: Option<String> = Spi::get_one(
+            "SELECT mcp.get_prompt('e2_api1', 'greet', '{\"name\": \"noizu\"}')::text",
+        )
+        .unwrap();
+        let prompt = prompt.expect("prompt result");
+        assert!(prompt.contains("greet someone"), "{prompt}");
+        assert!(prompt.contains("\"user\""), "{prompt}");
+
+        let completion: Option<String> = Spi::get_one(
+            "SELECT mcp.complete('e2_api1', '{\"type\": \"ref/prompt\", \"name\": \"greet\"}',
+                                 'lang', 'ru')::text",
+        )
+        .unwrap();
+        let completion = completion.expect("completion result");
+        assert!(completion.contains("rust"), "{completion}");
+        assert!(completion.contains("\"total\": 2"), "{completion}");
+
+        assert!(stub.hits("prompts/get") >= 1);
+        assert!(stub.hits("completion/complete") >= 1);
+    }
+
+    /// `mcp.session_info`: NULL before the backend has a session for the
+    /// server, the negotiated handshake after — protocol version, server
+    /// identity, and the single initialize.
+    #[pgrx::pg_test]
+    fn session_info_lifecycle_null_then_populated() {
+        cache::clear_all();
+        let replies = map(vec![
+            ("initialize", init_reply("api-info")),
+            (
+                TOOLS_LIST,
+                Reply::Result(json!({"tools": [{"name": "echo"}]})),
+            ),
+            ("tools/call", Reply::Result(json!({"content": []}))),
+        ]);
+        let stub = StubServer::start(replies, false);
+        Spi::run(&format!(
+            "CREATE SERVER e2_api2 FOREIGN DATA WRAPPER mcp_fdw
+               OPTIONS (url '{}', auth 'none', timeout_ms '8000')",
+            stub.url()
+        ))
+        .unwrap();
+
+        // No call yet: no cached session, NULL — but the server must exist.
+        let before: Option<String> =
+            Spi::get_one("SELECT mcp.session_info('e2_api2')::text").unwrap();
+        assert_eq!(before, None, "cold backend has no session");
+
+        // One invocation opens the session; info reports the handshake.
+        Spi::run("SELECT mcp.call_tool('e2_api2', 'echo')").unwrap();
+        let after: Option<String> =
+            Spi::get_one("SELECT mcp.session_info('e2_api2')::text").unwrap();
+        let after = after.expect("session cached after a call");
+        assert!(after.contains("2025-11-25"), "{after}");
+        assert!(after.contains("api-info"), "{after}");
+        assert!(after.contains("\"initializeCount\": 1"), "{after}");
+        assert!(after.contains("\"hasSessionId\": false"), "{after}");
+
+        // An unknown server name is 42704 from every entry point.
+        expect_sqlstate("SELECT mcp.session_info('no_such_server')", "42704", None);
+    }
+
+    /// `on_error`: default `raise` turns an `isError: true` result into
+    /// P0001 carrying the tool's own text; `return` hands the full result
+    /// to the caller as data.
+    #[pgrx::pg_test]
+    fn call_tool_raises_p0001_by_default_and_returns_under_return() {
+        cache::clear_all();
+        let replies = map(vec![
+            ("initialize", init_reply("api-err")),
+            (
+                TOOLS_LIST,
+                Reply::Result(json!({"tools": [{"name": "kaboom"}]})),
+            ),
+            (
+                "tools/call",
+                Reply::Result(json!({
+                    "content": [{"type": "text", "text": "the fuse is blown"}],
+                    "isError": true
+                })),
+            ),
+        ]);
+        let stub = StubServer::start(replies, false);
+        Spi::run(&format!(
+            "CREATE SERVER e2_api3 FOREIGN DATA WRAPPER mcp_fdw
+               OPTIONS (url '{}', auth 'none', timeout_ms '8000')",
+            stub.url()
+        ))
+        .unwrap();
+
+        expect_sqlstate(
+            "SELECT mcp.call_tool('e2_api3', 'kaboom')",
+            "P0001",
+            Some("the fuse is blown"),
+        );
+        // `return`: the same result as data, never an error.
+        let returned: Option<String> = Spi::get_one(
+            "SELECT mcp.call_tool('e2_api3', 'kaboom', '{}', 'return')::jsonb->>'isError'",
+        )
+        .unwrap();
+        assert_eq!(returned.as_deref(), Some("true"));
+        // call_tool_text under `return`: the text content, still not an error.
+        let text: Option<String> = Spi::get_one(
+            "SELECT mcp.call_tool_text('e2_api3', 'kaboom', '{}', 'return')",
+        )
+        .unwrap();
+        assert_eq!(text.as_deref(), Some("the fuse is blown"));
+        assert!(stub.hits("tools/call") >= 3);
+    }
+
+    /// D5's session-hygiene half: a transport failure (server dies
+    /// mid-request) drops the cached session — it is unusable — while a
+    /// JSON-RPC error reply leaves it in place for the next call.
+    #[pgrx::pg_test]
+    fn a_transport_failure_drops_the_session_but_rpc_errors_keep_it() {
+        cache::clear_all();
+        // tools/call closes the connection: initialize succeeds, the call
+        // dies in flight.
+        let replies = map(vec![
+            ("initialize", init_reply("api-drop")),
+            (TOOLS_LIST, Reply::Result(json!({"tools": [{"name": "echo"}]}))),
+            ("tools/call", Reply::Disconnect),
+        ]);
+        let stub = StubServer::start(replies, false);
+        Spi::run(&format!(
+            "CREATE SERVER e2_api4 FOREIGN DATA WRAPPER mcp_fdw
+               OPTIONS (url '{}', auth 'none', timeout_ms '8000')",
+            stub.url()
+        ))
+        .unwrap();
+
+        expect_sqlstate("SELECT mcp.call_tool('e2_api4', 'echo')", "08006", None);
+        // The poisoned session is gone: the initialize count reads NULL.
+        let dropped: Option<i32> =
+            Spi::get_one("SELECT mcp.session_initialize_count('e2_api4')").unwrap();
+        assert_eq!(dropped, None, "a transport-failed session is not re-cached");
+
+        // The next call opens a fresh session (one initialize again) and
+        // fails exactly the same way.
+        expect_sqlstate("SELECT mcp.call_tool('e2_api4', 'echo')", "08006", None);
+        let fresh: Option<i32> =
+            Spi::get_one("SELECT mcp.session_initialize_count('e2_api4')").unwrap();
+        assert_eq!(fresh, None, "the retried session failed too and was dropped");
+        assert!(stub.hits("initialize") >= 2, "re-opened: {}", stub.hits("initialize"));
+
+        // Contrast: a JSON-RPC error is a *successful* exchange at the
+        // transport level — `on_error` covers only `isError` results, so a
+        // protocol-level error raises 22023 — but the session must survive
+        // it: one initialize serves N failed calls (FR-6.4).
+        let error_replies = map(vec![
+            ("initialize", init_reply("api-keep")),
+            (TOOLS_LIST, Reply::Result(json!({"tools": [{"name": "echo"}]}))),
+            ("tools/call", Reply::Error(-32000, "tool exploded".to_string())),
+        ]);
+        let keep = StubServer::start(error_replies, false);
+        Spi::run(&format!(
+            "CREATE SERVER e2_api5 FOREIGN DATA WRAPPER mcp_fdw
+               OPTIONS (url '{}', auth 'none', timeout_ms '8000')",
+            keep.url()
+        ))
+        .unwrap();
+        expect_sqlstate(
+            "SELECT mcp.call_tool('e2_api5', 'echo')",
+            "22023",
+            Some("tool exploded"),
+        );
+        expect_sqlstate(
+            "SELECT mcp.call_tool('e2_api5', 'echo')",
+            "22023",
+            Some("tool exploded"),
+        );
+        let inits: Option<i32> =
+            Spi::get_one("SELECT mcp.session_initialize_count('e2_api5')").unwrap();
+        assert_eq!(inits, Some(1), "error replies never poison the session");
+    }
 }

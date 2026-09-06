@@ -320,8 +320,20 @@ fn post_filter(tool: &ResolvedTool, row: &Row) -> bool {
     let outputs: Vec<&codegen::Column> = tool.planned.output_columns().iter().collect();
 
     for qual in &tool.ctx.quals {
-        // An input column's qual was already consumed as an argument.
-        if tool.planned.inputs.iter().any(|c| c.sql_name == qual.field) {
+        // An input column's Equal qual was already consumed as an argument:
+        // the echo repeats the bound value by construction, and re-checking
+        // it through [`Cell::as_json`] would wrongly reject types that
+        // project to null there (uuid, timestamps).
+        //
+        // A SET qual (= ANY / IN) on an input column was *never* bound —
+        // sets do not bind (see `arguments_from_quals`) — so it is applied
+        // here as a filter. The unbound input's echo is NULL, which no set
+        // contains: the row drops. Keeping it would return rows that
+        // violate a qual the plan marked as pushed (§4.8's correctness
+        // rule); BUG FIX: previously these quals fell through both arms.
+        let consumed_as_argument = tool.planned.inputs.iter().any(|c| c.sql_name == qual.field)
+            && qual.operator == crate::quals::Operator::Equal;
+        if consumed_as_argument {
             continue;
         }
         let value = if let Some(pos) = outputs.iter().position(|c| c.sql_name == qual.field) {
@@ -1374,4 +1386,234 @@ mod live_tests {
     /// Quiet the unused warnings for scaffolding shared with future probes.
     #[allow(dead_code)]
     fn silence(_: &StdMap<String, String>, _: session::Resolved) {}
+
+    // ── param-bound quals, qual shapes, wire normalization (§4.8 coverage) ──
+
+    /// Parameter-bound equalities. With `plan_cache_mode =
+    /// force_generic_plan` the generated function's body keeps `$n` Param
+    /// nodes on EVERY supported major (pg16/17 plan SQL-function bodies
+    /// generically anyway; pg18 folds custom plans — the GUC pins the
+    /// generic path here), so the planner's Param arms (`extract_qual`'s
+    /// `column = $n`, `extract_optional_param_qual`'s
+    /// `($n IS NULL OR column = $n)`) and the executor-start resolution
+    /// (`resolve_param_quals`) run wherever this probe runs. The bound
+    /// timestamptz param exercises `datum_to_json`'s RFC 3339 rendering
+    /// from a Param datum.
+    #[pgrx::pg_test]
+    fn parameter_bound_quals_resolve_through_generic_plans() {
+        let stub = FixtureStub::start();
+        make_fixture_server("pt_param", &stub);
+        import_and_generate("pt_param", "pt_param_s");
+
+        Spi::run("SET plan_cache_mode = force_generic_plan").unwrap();
+
+        // Required argument bound, every optional omitted: the
+        // `($n IS NULL OR column = $n)` arms resolve NULL and drop out;
+        // the required `column = $n` resolves at executor start. The
+        // fan-out answers both docs.
+        let rows: Option<String> = Spi::get_one(
+            "SELECT string_agg(id, ',' ORDER BY id) FROM pt_param_s.search_docs('hello')",
+        )
+        .unwrap();
+        assert_eq!(rows.as_deref(), Some("doc-1,doc-2"));
+
+        // Every typed arm bound: the timestamptz param rides the wire as
+        // RFC 3339 (`datum_to_json`'s Param arm), comes back through the
+        // typed echo, and answers the fan-out.
+        Spi::run("SET TimeZone = 'UTC'").unwrap();
+        let bound: Option<i64> = Spi::get_one(
+            "SELECT count(*) FROM pt_param_s.search_docs(
+                'hello', 5, '2026-09-05T10:00:00Z', '2026-09-05',
+                '00000000-0000-0000-0000-000000000001', 1.5, true)
+              WHERE score IS NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(bound, Some(2));
+        // The bound params really reached the tool: the table's rows echo
+        // them (this is the §4.2 input-echo discipline, through params).
+        let since_echo: Option<i64> = Spi::get_one(
+            "SELECT count(*) FROM pt_param_s.tool_search_docs
+              WHERE query = 'hello' AND since = '2026-09-05T10:00:00Z'"
+        )
+        .unwrap();
+        assert_eq!(since_echo, Some(2));
+
+        // The invocations really crossed the wire — one tools/call each.
+        assert!(stub.call_count() >= 3, "calls: {}", stub.call_count());
+    }
+
+    /// Pushed-shape matrix over a per-tool table: every shape the planner
+    /// recognizes (`flag`-as-bare-var, `NOT flag`, `IS TRUE`/`IS FALSE`,
+    /// flipped const orientation, relabel coercion, JSON-b equality) binds
+    /// or filters with identical results, while NULL constants and
+    /// non-equality operators stay local — and Postgres re-checks those.
+    #[pgrx::pg_test]
+    fn qual_shapes_push_or_stay_local_with_identical_results() {
+        let stub = FixtureStub::start();
+        make_fixture_server("pt_shape", &stub);
+        import_and_generate("pt_shape", "pt_shape_s");
+
+        let count = |stmt: &str| -> i64 {
+            Spi::get_one::<i64>(stmt).unwrap().expect("a count")
+        };
+
+        // `flag = true` is rewritten by the planner into a bare Var; the
+        // extractor reads it back as an equality and it binds.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND flag"
+            ),
+            2
+        );
+        // `NOT flag` binds flag = false; the echoed rows satisfy it.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND NOT flag"
+            ),
+            2
+        );
+        // IS TRUE / IS FALSE bind too.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND flag IS TRUE"
+            ),
+            2
+        );
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND flag IS FALSE"
+            ),
+            2
+        );
+        // Flipped const orientation (`CONST = column`) binds the same way.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE 1.5 = weight AND query = 'hello'"
+            ),
+            2
+        );
+        // A relabel coercion (text→varchar is binary-coercible) is
+        // stripped before the Var is read.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query::varchar = 'hello'"
+            ),
+            2
+        );
+        // A JSON-b equality on an object input column pushes and echoes.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND meta = '{\"k\": 1}'::jsonb"
+            ),
+            2
+        );
+        // A NULL constant is never pushed (NULL = NULL is not equality);
+        // on an *optional* column the statement still answers — the
+        // remaining qual binds — and Postgres re-checks the local NULL
+        // test against every echoed row: NULL = NULL is never true, so
+        // zero rows.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND day = NULL"
+            ),
+            0
+        );
+        // A non-equality operator stays local the same way: the qual is
+        // not bindable, the optional weight echoes NULL, and Postgres
+        // re-checks `weight > 0.0` against NULL — excluding every row.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM pt_shape_s.tool_search_docs
+                  WHERE query = 'hello' AND weight > 0.0"
+            ),
+            0
+        );
+        // Every SELECT but the last invoked: `day = NULL` may prune the
+        // scan entirely (a one-time NULL filter), the other seven really
+        // crossed the wire.
+        assert!(stub.call_count() >= 7, "invocations: {}", stub.call_count());
+    }
+
+    /// §4.8's correctness rule, per-tool half: a set qual (`IN` / `= ANY`)
+    /// on an input column is never an argument (sets do not bind), so it
+    /// must filter — and an unbound input echoes NULL, which no set
+    /// contains. BUG FIX: these quals used to fall through both arms of
+    /// `post_filter`, returning rows that violate the WHERE.
+    #[pgrx::pg_test]
+    fn a_set_qual_on_an_input_column_is_applied_never_silently_dropped() {
+        let stub = FixtureStub::start();
+        make_fixture_server("pt_set", &stub);
+        import_and_generate("pt_set", "pt_set_s");
+
+        // The server never filters by `day` (it is not bound), so no row
+        // can demonstrate membership in the set: the honest answer is zero
+        // rows, not the unfiltered two.
+        let day_in = Spi::get_one::<i64>(
+            "SELECT count(*) FROM pt_set_s.tool_search_docs
+              WHERE query = 'hello' AND day IN ('2026-09-05', '2000-01-01')",
+        )
+        .unwrap();
+        assert_eq!(day_in, Some(0));
+
+        let any = Spi::get_one::<i64>(
+            "SELECT count(*) FROM pt_set_s.tool_search_docs
+              WHERE query = 'hello'
+                AND day = ANY(ARRAY['2026-09-05'::date, '2000-01-01'::date])",
+        )
+        .unwrap();
+        assert_eq!(any, Some(0));
+
+        // A set over a *required* input cannot bind either: 22023 naming
+        // the argument, exactly like a missing equality.
+        expect_sqlstate(
+            "SELECT count(*) FROM pt_set_s.tool_search_docs
+              WHERE query IN ('a', 'b')",
+            "22023",
+            Some("query"),
+        );
+        assert!(stub.call_count() >= 2, "the zero-row answers were real scans");
+    }
+
+    /// Timestamps cross the wire as RFC 3339 (`fdw.rs`'s
+    /// `pg_timestamptz_to_json`), both from a supplied INSERT value and
+    /// from a pushed equality constant — and read back through the typed
+    /// column.
+    #[pgrx::pg_test]
+    fn timestamptz_arguments_normalize_to_rfc3339_on_the_wire() {
+        let stub = FixtureStub::start();
+        make_fixture_server("pt_ts", &stub);
+        import_and_generate("pt_ts", "pt_ts_s");
+        // Pin the text rendering of timestamptz for the assertions below.
+        Spi::run("SET TimeZone = 'UTC'").unwrap();
+
+        // INSERT path: the supplied timestamptz is rendered RFC 3339 for
+        // the wire; the input echo reads back through the typed column.
+        let echoed: Option<String> = Spi::get_one(
+            "INSERT INTO pt_ts_s.tool_search_docs (query, since)
+             VALUES ('hello', '2026-09-05 10:00:00+00'::timestamptz)
+             RETURNING since::text",
+        )
+        .unwrap();
+        assert_eq!(echoed.as_deref(), Some("2026-09-05 10:00:00+00"));
+
+        // Scan path: a pushed equality constant normalizes (+02 → +02:00,
+        // +00 → Z) on the wire; the echo round-trips through the typed
+        // column and Postgres compares equal.
+        let rows: Option<i64> = Spi::get_one(
+            "SELECT count(*) FROM pt_ts_s.tool_search_docs
+              WHERE query = 'hello'
+                AND since = '2026-09-05 12:30:00+02'::timestamptz",
+        )
+        .unwrap();
+        assert_eq!(rows, Some(2));
+        assert!(stub.call_count() >= 2);
+    }
 }
