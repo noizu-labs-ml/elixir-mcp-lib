@@ -42,3 +42,7 @@ All work happens on git worktrees, created from **this repo's own `.git`** — n
 - Submodules sit on **`develop`** — keep your checkout on `develop`.
 - All PRs target **`develop`** (feature/bug/task branches fork from `develop`).
 - **`main` is CI/CD-only**: CI/CD automation performs all merges into `main` (release path). Never merge to or push `main` by hand.
+
+## Decision records
+
+ADRs: `docs/adrs/` (`INDEX.md` lists them; status `proposed` → `accepted` gates implementation). PRDs: `project-management/PRDs/` (`INDEX.md`, numbered series). Substantial changes land ADRs + PRDs as a docs-only PR before code.

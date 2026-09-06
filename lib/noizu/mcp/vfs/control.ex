@@ -786,5 +786,6 @@ defmodule Noizu.MCP.VFS.Control do
 
   defp control_entry(name),
     do: %{name: name, type: :control, size: 0, mtime: now_ms(), version: 1}
+
   defp now_ms, do: System.os_time(:millisecond)
 end

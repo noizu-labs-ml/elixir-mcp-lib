@@ -58,7 +58,11 @@ defmodule Noizu.MCP.Server.RunnerDslTest do
     end
 
     test "field structure is stable across runner/model/verbosity", %{definition: d} do
-      for fields <- [[verbosity: 0], [runner: :codex, model: :spark], [runner: :grok, verbosity: 9]] do
+      for fields <- [
+            [verbosity: 0],
+            [runner: :codex, model: :spark],
+            [runner: :grok, verbosity: 9]
+          ] do
         schema = Tool.to_map(d, rc(fields))["inputSchema"]
         assert schema["required"] == ["query"]
         assert schema["properties"]["query"]["type"] == "string"

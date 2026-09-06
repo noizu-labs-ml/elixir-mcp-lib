@@ -93,6 +93,11 @@ defmodule Noizu.MCP.Client do
   # ⟦𓂞𓌘𓁊𓌩⟧ server_capabilities :: The server's negotiated capabilities (wire-format map).
   def server_capabilities(client), do: GenServer.call(client, :server_capabilities)
 
+  @doc "The negotiated protocol version (after ready)."
+  @spec protocol_version(GenServer.server()) :: String.t() | nil
+  # ⟦𓆑𓂋𓍯𓏏𓍯𓎝⟧ protocol_version :: The negotiated protocol version (after ready).
+  def protocol_version(client), do: GenServer.call(client, :protocol_version)
+
   @doc "The server's `instructions` string, if any."
   @spec instructions(GenServer.server()) :: String.t() | nil
   # ⟦𓅾𓊤𓁝𓌕⟧ instructions :: The server's `instructions` string, if any.
@@ -434,6 +439,9 @@ defmodule Noizu.MCP.Client do
 
   def handle_call(:server_capabilities, _from, state),
     do: {:reply, state.peer.remote_capabilities, state}
+
+  def handle_call(:protocol_version, _from, state),
+    do: {:reply, state.peer.protocol_version, state}
 
   def handle_call(:instructions, _from, state), do: {:reply, state.instructions, state}
 

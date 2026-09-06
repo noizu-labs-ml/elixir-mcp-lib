@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.4.0]
+
+Release covering the pg_mcp series-2 library surface: PRD-9 (`sql/*` +
+datasets), PRD-11 (the Engine) and the PRD-6 groundwork. Consumers should pin
+`~> 0.4`. Publish is user-run (`mix hex.publish` with 2FA); tag `v0.4.0`.
+
+### Added
+
+- **`Noizu.MCP.Engine` — upstream federation** (PRD-11, ADR-007): an MCP
+  server whose content is other MCP servers. Attach an upstream with a
+  `servers` row (via `sql/modify`, the `engine.attach` tool, or static
+  config — one implementation, D1): namespaced `<server>.<tool>` tools,
+  prompts and resources (resource URIs prefixed `mcp+engine://<server>/`),
+  one Toolset layer per ready upstream at weight 100 folded by the existing
+  merge engine, so operator overrides (200) and ACL (300) apply to federated
+  tools with no federation-specific precedence code. Supervised per-upstream
+  sessions with exponential backoff and jitter (reset on success): a down
+  upstream sets `status = 'error'` and contributes an empty layer — every
+  healthy upstream keeps serving, `tools/list` never fails. Upstream
+  `list_changed` notifications, a periodic backstop and `engine.refresh`
+  re-list; a changed layer emits the engine's own downstream notification.
+  Credentials are stored BY REFERENCE ONLY (`env:`, `secret:`, `infisical:`,
+  `passthrough`); anything credential-shaped is rejected at insert and
+  resolved values never reach a row, log, telemetry payload or error.
+  Pass-through (opt-in per upstream) forwards the caller's credential through
+  per-principal, idle-evicted sessions and refuses a tokenless caller.
+  `engine.attach` / `engine.detach` / `engine.refresh` wrap the dataset
+  callbacks. Upstreams advertising `experimental.sql` have their relations
+  re-exported as `<server>.<relation>` with `sql/scan` proxying. Run embedded
+  behind the Streamable HTTP plug or standalone with `mix mcp.engine`
+  (`--no-auth` binds loopback-only). Guides: `guides/engine.md`;
+  design: `docs/arch/engine.md`.
+
+- **`engine_servers` persistence**: a fourth record kind in the shared
+  persistence codec (PRD-4 providers), with the Ecto adapter and the v1
+  migration gaining the `noizu_mcp_engine_servers` table. Existing
+  deployments re-run `Migration.Runner.up/3` (idempotent) once; the ping
+  boot gate is unchanged.
+
+- **`Noizu.MCP.Client.protocol_version/1`**: accessor for the negotiated
+  protocol version.
+
+- **`Noizu.MCP.Test` engine helpers**: `attach_upstream/3` (attach through
+  the `servers` SQL path), `await_upstream_status/4`, `upstream_row/3`;
+  per-request `:claims` are now honored by every request wrapper (previously
+  only the `sql/*` wrappers).
+
+### Fixed
+
+- `Noizu.MCP.Persistence.Memory`: the record table is created with an heir
+  owner process. A put arriving from an ephemeral process (a session handler
+  task) used to leave the table owned by that process; when it exited the
+  table — and every stored record — silently disappeared.
+
+
+- **Experimental `sql/*` method family** (PRD-9, ADR-005): `sql/schema`,
+  `sql/scan` and `sql/modify` let a foreign-data wrapper project an MCP
+  server's surface into typed, pushdown-capable PostgreSQL relations.
+  `Noizu.MCP.SQL.Schema` derives catalog relations (`tools`, `prompts`,
+  `resources`, plus the read-through `prompt_messages`, `resource_contents`,
+  `completions` and derived `prompt_arguments`, `resource_templates`) from the
+  series-1 resolvers — the Toolset catalog, `Features.Prompts` and
+  `Features.Resources` — one resolver, no parallel registry (D1). One
+  relation per effective tool is derived from its input/output schemas, and
+  scanning it is authorized exactly like `tools/call`. Rows travel
+  positionally against the scan's `columns` array.
+
+- **`Noizu.MCP.Server.Dataset` behaviour + `dataset/2` macro**: servers
+  register explicit relations for data that is not naturally a tool call
+  (explicit participation, D4). `columns/0` and `info/0` are validated at
+  compile time against `Noizu.MCP.SQL.Types`; `scan/3` is required,
+  `insert/2`, `update/3` and `delete/2` are optional (an unsupported op
+  answers `method_not_found`, naming the relation and op). Datasets
+  authorize under their own `{:dataset, name}` ACL subject and carry the
+  request's `%Principal{}` like every method (ADR-004). A dataset that
+  raises fails only its own relation (D5); reserved derived names and
+  duplicate dataset names are compile errors.
+
+- **`Noizu.MCP.SQL.Types` and `Noizu.MCP.SQL.Quals`**: the closed column
+  type vocabulary shared with the pg_mcp type map (`to_sql/1`,
+  `from_field_type/2`, `from_json_schema/1`) and the wire-qual decoder with
+  a pure reference re-filter (`decode/2`, `apply/2`) implementing the
+  one-directional qual-honesty contract.
+
+- **Capability advertisement**: `capabilities.experimental.sql =
+  %{"version" => 1}` appears when and only when a server registers a
+  dataset, passes `sql: true`, or defines its own `handle_sql_*` callbacks,
+  merged non-destructively into any existing `experimental` map. Servers
+  that do not opt in are wire-identical to before and answer `-32601` for
+  all three methods.
+
+- **Conformance**: `Noizu.MCP.Test.SQLConformanceCase` — the shared
+  `sql/*` battery (schema well-formedness, positional rows, cursor
+  totality, qual honesty, error shape) any dataset host can `use`.
 ## [0.3.1] — 2026-09-05
 
 ### Fixed

@@ -281,7 +281,8 @@ defmodule Noizu.MCP.Description do
 
   # ── verbosity_map / inline levels ───────────────────────────────────────────
 
-  defp resolve_verbosity_map(%__MODULE__{verbosity_map: vm} = desc, level) when map_size(vm) > 0 do
+  defp resolve_verbosity_map(%__MODULE__{verbosity_map: vm} = desc, level)
+       when map_size(vm) > 0 do
     Map.get(desc.variants, lookup_level(vm, level))
   end
 
