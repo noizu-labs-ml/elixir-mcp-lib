@@ -345,3 +345,162 @@ mod tests {
         assert_eq!(hits.get(), 1);
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// Wire shapes the plug never emits but a malformed server might, plus the
+/// FR-6.11 redaction contract on transport errors.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    fn read(bytes: &[u8], id: i64) -> McpResult<Value> {
+        read_until_id(bytes, id, Duration::from_secs(5), &NoInterrupts)
+    }
+
+    fn reply(id: i64, body: &str) -> String {
+        format!(
+            "data: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{body}}}\n\n"
+        )
+    }
+
+    /// CRLF line endings dispatch identically to LF (§4.5; some proxies
+    /// normalize the stream).
+    #[test]
+    fn crlf_line_endings_dispatch() {
+        let stream = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\"crlf\"}\r\n\r\n";
+        let out = read(stream.as_bytes(), 9).unwrap();
+        assert_eq!(out["result"], serde_json::json!("crlf"));
+        // Mixed CRLF / LF / bare-CR line endings within one frame.
+        let mixed = "data: {\"jsonrpc\":\"2.0\",\r\ndata: \"id\":10,\ndata: \"result\":\"mixed\"}\r\n\r\n";
+        let out = read(mixed.as_bytes(), 10).unwrap();
+        assert_eq!(out["result"], serde_json::json!("mixed"));
+    }
+
+    /// A UTF-8 BOM on its own line before the first frame must not wedge the
+    /// parser: the BOM line is not `data`, so the frame after it still
+    /// dispatches. (A BOM *glued* to the first field line corrupts that
+    /// field's name — the SSE spec does not permit BOMs, so that broken
+    /// server simply misses its first frame; not pinned here.)
+    #[test]
+    fn byte_order_mark_is_tolerated() {
+        let mut stream = b"\xef\xbb\xbf\n".to_vec();
+        stream.extend_from_slice(reply(11, "\"bom\"").as_bytes());
+        let out = read(&stream, 11).unwrap();
+        assert_eq!(out["result"], serde_json::json!("bom"));
+    }
+
+    /// A frame split across arbitrarily small reads — including mid-line and
+    /// inside a multi-byte UTF-8 character — assembles correctly.
+    #[test]
+    fn frames_split_across_buffer_boundaries_reassemble() {
+        let body = serde_json::json!({"k": "räksmörgås🚀"});
+        let stream = format!(
+            "data: {{\"jsonrpc\":\"2.0\",\"id\":12,\"result\":{}}}\n\n",
+            body
+        )
+        .into_bytes();
+
+        /// Hands out at most 3 bytes per read.
+        struct Dribble {
+            data: std::sync::Arc<Vec<u8>>,
+            pos: usize,
+        }
+        impl Read for Dribble {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.pos >= self.data.len() {
+                    return Ok(0);
+                }
+                let n = buf.len().min(3).min(self.data.len() - self.pos);
+                buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+        let reader = Dribble {
+            data: std::sync::Arc::new(stream),
+            pos: 0,
+        };
+        let out = read_until_id(reader, 12, Duration::from_secs(5), &NoInterrupts).unwrap();
+        assert_eq!(out["result"], body);
+    }
+
+    /// `retry:` and unknown fields are ignored per the SSE spec; `data` with
+    /// no colon-space still captures its value; a bare field name is empty.
+    #[test]
+    fn field_matrix_matches_the_sse_spec() {
+        let stream = concat!(
+            "retry: 5000\n",
+            "x-custom: whatever\n",
+            "event: message\n",
+            "id: 13\n",
+            "data:{\"no\":\"space\"}\n",
+            "data\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":13,\"result\":\"fields\"}\n",
+            "\n"
+        );
+        let out = read(stream.as_bytes(), 13).unwrap();
+        assert_eq!(out["result"], serde_json::json!("fields"));
+    }
+
+    /// A data frame that is valid JSON but carries no usable `id` (or an id
+    /// beyond i64) is skipped, never fatal.
+    #[test]
+    fn unusable_ids_are_skipped_not_fatal() {
+        let stream = concat!(
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"n\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":\"float\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":99999999999999999999,\"result\":\"huge\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":null,\"result\":\"null id\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":14,\"result\":\"reached\"}\n",
+            "\n"
+        );
+        let out = read(stream.as_bytes(), 14).unwrap();
+        assert_eq!(out["result"], serde_json::json!("reached"));
+    }
+
+    /// FR-6.11: an I/O failure's message carries only the `io::ErrorKind`
+    /// Debug — never the OS string, which could reflect arbitrary wire
+    /// material.
+    #[test]
+    fn io_error_messages_never_carry_the_os_string() {
+        struct Poisoned;
+        impl Read for Poisoned {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "SPIKE_CANARY_OS_STRING",
+                ))
+            }
+        }
+        let err = read_until_id(Poisoned, 1, Duration::from_secs(5), &NoInterrupts)
+            .unwrap_err();
+        assert_eq!(err.sqlstate(), "08006");
+        assert!(err.message().contains("BrokenPipe"), "{:?}", err.message());
+        assert!(
+            !err.message().contains("SPIKE_CANARY_OS_STRING"),
+            "the OS message leaked: {:?}",
+            err.message()
+        );
+    }
+
+    /// Keepalive comments between and inside frames never dispatch or reset
+    /// accumulated data lines.
+    #[test]
+    fn comments_never_disturb_frame_accumulation() {
+        let stream = concat!(
+            ": keepalive\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":15,\n",
+            ": mid-frame keepalive\n",
+            "data: \"result\":\"ok\"}\n",
+            "\n"
+        );
+        let out = read(stream.as_bytes(), 15).unwrap();
+        assert_eq!(out["result"], serde_json::json!("ok"));
+    }
+}

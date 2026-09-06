@@ -303,3 +303,150 @@ mod tests {
         assert!(!is_expired_session("timeout"));
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// The complete §4.9 SQLSTATE table as a data table, plus the wording
+/// contracts the client relies on.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    /// Every variant carries the PRD's five-character SQLSTATE. New variants
+    /// fail here until their row is added — the compiler cannot force this.
+    #[test]
+    fn every_variant_has_its_sqlstate_row() {
+        use McpError as E;
+        let table: &[(E, &str)] = &[
+            (E::InvalidParams("m".into()), "22023"),
+            (E::InvalidOption("m".into()), "22023"),
+            (E::Rpc(-1, "m".into()), "22023"),
+            (E::MethodNotFound("m".into()), "0A000"),
+            (E::NotImplemented("m".into()), "0A000"),
+            (E::FeatureNotSupported("m".into()), "0A000"),
+            (E::Internal("m".into()), "XX000"),
+            (E::TooManyArguments("m".into()), "54023"),
+            (E::NotNullViolation("m".into()), "23502"),
+            (E::DatatypeMismatch("m".into()), "42804"),
+            (E::InvalidSchemaName("m".into()), "3F000"),
+            (E::Forbidden("m".into()), "42501"),
+            (E::Transport("m".into()), "08006"),
+            (E::UndefinedObject("m".into()), "42704"),
+            (E::NoAuthMapping("m".into()), "28000"),
+            (E::ToolError("m".into()), "P0001"),
+        ];
+        for (error, sqlstate) in table {
+            assert_eq!(&error.sqlstate(), sqlstate, "{error:?}");
+            // The message round-trips verbatim through every variant.
+            assert_eq!(error.message(), "m", "{error:?}");
+        }
+    }
+
+    /// §4.9's JSON-RPC code → SQLSTATE rows, including the authz-message
+    /// heuristic and the pass-through class.
+    #[test]
+    fn from_rpc_covers_the_full_prd_table() {
+        let code_of = |code: i64, msg: &str| McpError::from_rpc(code, msg);
+        assert_eq!(code_of(-32602, "x").sqlstate(), "22023");
+        assert_eq!(code_of(-32601, "x").sqlstate(), "0A000");
+        for protocol_garbage in [-32600, -32700, -32603] {
+            let e = code_of(protocol_garbage, "x");
+            assert_eq!(e.sqlstate(), "XX000", "{protocol_garbage}");
+            // The code number rides along in the message for diagnosis.
+            assert!(e.message().contains(&protocol_garbage.to_string()));
+        }
+        // Authz-shaped messages on unknown codes → 42501.
+        for msg in [
+            "Unauthorized",
+            "FORBIDDEN",
+            "access denied",
+            "Insufficient scope",
+            "invalid_token",
+        ] {
+            assert_eq!(code_of(-32001, msg).sqlstate(), "42501", "{msg}");
+        }
+        // …and the same codes with an innocuous message keep the 22023 class.
+        assert_eq!(code_of(-32001, "disk full").sqlstate(), "22023");
+        assert_eq!(code_of(-32003, "disk full").sqlstate(), "22023");
+        // Anything else is Rpc, carrying the server's message verbatim.
+        let e = code_of(-31415, "custom failure");
+        assert!(matches!(e, McpError::Rpc(-31415, _)));
+        assert_eq!(e.message(), "custom failure");
+    }
+
+    /// HTTP status mapping. 404 is intercepted upstream (session re-init);
+    /// `from_http_status` still maps it as plain transport if it ever
+    /// reaches here — pinned so a change is deliberate.
+    #[test]
+    fn from_http_status_table() {
+        assert_eq!(McpError::from_http_status(401).sqlstate(), "42501");
+        assert_eq!(McpError::from_http_status(403).sqlstate(), "42501");
+        assert_eq!(McpError::from_http_status(400).sqlstate(), "22023");
+        assert_eq!(McpError::from_http_status(405).sqlstate(), "0A000");
+        assert_eq!(McpError::from_http_status(404).sqlstate(), "08006");
+        for other in [402, 409, 429, 500, 502, 503] {
+            assert_eq!(McpError::from_http_status(other).sqlstate(), "08006", "{other}");
+        }
+    }
+
+    /// FR-6.11: an HTTP-level rejection message is *composed here* — exactly
+    /// the status number and nothing from the response. A canary planted in
+    /// the (hypothetical) body can never appear because the body is never
+    /// read; the exact-message pins enforce that structurally.
+    #[test]
+    fn http_error_messages_are_composed_not_reflected() {
+        assert_eq!(
+            McpError::from_http_status(401).message(),
+            "MCP server rejected the request (HTTP 401)"
+        );
+        assert_eq!(
+            McpError::from_http_status(400).message(),
+            "MCP server rejected the request (HTTP 400)"
+        );
+        assert_eq!(
+            McpError::from_http_status(405).message(),
+            "MCP server does not accept POST (HTTP 405)"
+        );
+        assert_eq!(
+            McpError::from_http_status(502).message(),
+            "MCP server returned HTTP 502"
+        );
+    }
+
+    /// Expired-session detection matrix (pairs with HTTP 404, PRD-6 §4.4
+    /// step 3).
+    #[test]
+    fn expired_session_matrix() {
+        for yes in [
+            "Session expired",
+            "MCP session has EXPIRED",
+            "unknown session",
+            "session not found",
+            "Unknown Session",
+            "Invalid session id",
+            "invalid session id: abc123",
+            "the session was not found on this server",
+        ] {
+            assert!(is_expired_session(yes), "{yes:?}");
+        }
+        for no in [
+            "tool not found",
+            "timeout",
+            "invalid arguments",
+            "expired token",
+            "unknown method",
+            "",
+        ] {
+            assert!(!is_expired_session(no), "{no:?}");
+        }
+    }
+
+    /// The reserved-code constants are the wire values, not nice numbers.
+    #[test]
+    fn jsonrpc_reserved_codes() {
+        assert_eq!(JSONRPC_INVALID_PARAMS, -32602);
+        assert_eq!(JSONRPC_METHOD_NOT_FOUND, -32601);
+        assert_eq!(JSONRPC_INVALID_REQUEST, -32600);
+        assert_eq!(JSONRPC_PARSE_ERROR, -32700);
+        assert_eq!(JSONRPC_INTERNAL_ERROR, -32603);
+    }
+}

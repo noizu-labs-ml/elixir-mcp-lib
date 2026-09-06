@@ -396,6 +396,194 @@ mod cache_test {
     }
 }
 
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// The same TTL / isolation / invalidation contracts the `cache_test` module
+/// proves against a live backend, proven here against plain closures — each
+/// `#[test]` gets its own thread, so the thread-local map starts empty and
+/// the tests run hermetically in parallel.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use crate::errors::McpError;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn oid(n: u32) -> pg_sys::Oid {
+        pg_sys::Oid::from(n)
+    }
+
+    fn items(n: usize) -> McpResult<Vec<Value>> {
+        Ok((0..n).map(|i| serde_json::json!({"i": i})).collect())
+    }
+
+    /// The §4.10 guarantee: within the TTL one fetch serves N calls; past it
+    /// the next call refetches.
+    #[test]
+    fn hit_within_ttl_then_refetch_after_expiry() {
+        let (server, user) = (oid(1), oid(2));
+        let fetches = AtomicUsize::new(0);
+        let fetch = || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            items(3)
+        };
+
+        let first = get_or_fetch(server, user, 40, Slice::Tools, fetch).unwrap();
+        assert_eq!(first.len(), 3);
+        for _ in 0..4 {
+            let hit = get_or_fetch(server, user, 40, Slice::Tools, fetch).unwrap();
+            assert_eq!(hit.len(), 3);
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 1, "one fetch inside the TTL");
+
+        std::thread::sleep(Duration::from_millis(60));
+        let fresh = get_or_fetch(server, user, 40, Slice::Tools, fetch).unwrap();
+        assert_eq!(fresh.len(), 3);
+        assert_eq!(fetches.load(Ordering::SeqCst), 2, "expired → refetch");
+    }
+
+    /// `ttl_ms == 0` disables the cache: every call fetches, nothing stored.
+    #[test]
+    fn ttl_zero_disables_caching() {
+        let (server, user) = (oid(3), oid(4));
+        let fetches = AtomicUsize::new(0);
+        let fetch = || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            items(1)
+        };
+        for _ in 0..5 {
+            get_or_fetch(server, user, 0, Slice::Prompts, fetch).unwrap();
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 5);
+        assert_eq!(slice_count(server, user), 0, "nothing is stored");
+    }
+
+    /// Errors propagate and are never cached — the next call retries.
+    #[test]
+    fn fetch_errors_are_never_cached() {
+        let (server, user) = (oid(5), oid(6));
+        let err = get_or_fetch(server, user, 60_000, Slice::Resources, || {
+            Err(McpError::Transport("server unreachable".into()))
+        })
+        .unwrap_err();
+        assert_eq!(err.sqlstate(), "08006");
+        assert_eq!(slice_count(server, user), 0);
+
+        let fetches = AtomicUsize::new(0);
+        let fetch = || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            items(2)
+        };
+        get_or_fetch(server, user, 60_000, Slice::Resources, fetch).unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 1, "the retry really fetches");
+    }
+
+    /// `drop_tools` removes only the tools slice; other slices survive.
+    #[test]
+    fn drop_tools_is_slice_scoped() {
+        let (server, user) = (oid(7), oid(8));
+        get_or_fetch(server, user, 60_000, Slice::Tools, || items(1)).unwrap();
+        get_or_fetch(server, user, 60_000, Slice::Prompts, || items(2)).unwrap();
+        get_or_fetch(server, user, 60_000, Slice::Initialize, || items(1)).unwrap();
+        assert_eq!(slice_count(server, user), 3);
+
+        assert!(drop_tools(server, user), "a tools slice existed");
+        assert_eq!(slice_count(server, user), 2);
+        // Second drop: nothing left to drop.
+        assert!(!drop_tools(server, user));
+        // The surviving slices are still TTL-fresh (no refetch on hit).
+        let fetches = AtomicUsize::new(0);
+        let fetch = || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            items(1)
+        };
+        get_or_fetch(server, user, 60_000, Slice::Prompts, fetch).unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 0);
+    }
+
+    /// `drop` clears every slice for the key and reports honestly.
+    #[test]
+    fn drop_clears_every_slice() {
+        let (server, user) = (oid(9), oid(10));
+        for slice in [
+            Slice::Tools,
+            Slice::Prompts,
+            Slice::Resources,
+            Slice::ResourceTemplates,
+            Slice::Initialize,
+        ] {
+            get_or_fetch(server, user, 60_000, slice, || items(1)).unwrap();
+        }
+        assert_eq!(slice_count(server, user), 5);
+        assert!(drop(server, user));
+        assert_eq!(slice_count(server, user), 0);
+        assert!(!drop(server, user), "dropping an absent key is false");
+    }
+
+    /// ADR-004 AP-P3: two roles never share a catalog — the user OID is part
+    /// of the key, and dropping one role's cache leaves the other's.
+    #[test]
+    fn per_user_isolation() {
+        let server = oid(11);
+        let (alice, bob) = (oid(12), oid(13));
+        let alice_items = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = alice_items.clone();
+        get_or_fetch(server, alice, 60_000, Slice::Tools, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            items(1)
+        })
+        .unwrap();
+        get_or_fetch(server, bob, 60_000, Slice::Tools, || items(2)).unwrap();
+
+        // Bob's hit must not count as Alice's.
+        let counter = alice_items.clone();
+        get_or_fetch(server, alice, 60_000, Slice::Tools, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            items(1)
+        })
+        .unwrap();
+        assert_eq!(alice_items.load(Ordering::SeqCst), 1, "Alice fetched once");
+        drop_tools(server, bob);
+        let counter = alice_items.clone();
+        get_or_fetch(server, alice, 60_000, Slice::Tools, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            items(1)
+        })
+        .unwrap();
+        assert_eq!(alice_items.load(Ordering::SeqCst), 1, "Bob's drop never touched Alice");
+    }
+
+    /// Different servers are independent keys even for the same user.
+    #[test]
+    fn per_server_isolation() {
+        let (a, b, user) = (oid(21), oid(22), oid(23));
+        get_or_fetch(a, user, 60_000, Slice::Tools, || items(1)).unwrap();
+        get_or_fetch(b, user, 60_000, Slice::Tools, || items(2)).unwrap();
+        drop_tools(a, user);
+        let fetches = AtomicUsize::new(0);
+        get_or_fetch(b, user, 60_000, Slice::Tools, || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            items(2)
+        })
+        .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 0, "server b unaffected by server a's drop");
+    }
+
+    /// Arc sharing: repeated hits hand out the same Arc (no clone of the
+    /// item vector per scan), and a refetch swaps in a fresh Arc.
+    #[test]
+    fn cached_items_are_shared_immutably() {
+        let (server, user) = (oid(31), oid(32));
+        let first = get_or_fetch(server, user, 60_000, Slice::Tools, || items(3)).unwrap();
+        let second = get_or_fetch(server, user, 60_000, Slice::Tools, || items(3)).unwrap();
+        assert!(Arc::ptr_eq(&first, &second), "the same fetch serves the same Arc");
+
+        std::thread::sleep(Duration::from_millis(30));
+        let fresh = get_or_fetch(server, user, 10, Slice::Tools, || items(4)).unwrap();
+        assert!(!Arc::ptr_eq(&first, &fresh), "a refetch is a new snapshot");
+        assert_eq!(fresh.len(), 4);
+        assert_eq!(first.len(), 3, "the old snapshot is untouched");
+    }
+}
+
 // ── the in-crate HTTP stub (shared by Track A's SQL-level tests) ─────────────
 //
 // A single-threaded MCP server on an ephemeral loopback port, speaking just

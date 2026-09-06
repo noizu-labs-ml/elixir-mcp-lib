@@ -78,6 +78,22 @@ The suite is version-gated where signatures drifted: `create_foreignscan_path`
 AC-7.12): **pg18 158/158 · pg17 158/158 · pg16 158/158** (pg16 via
 `cargo pgrx init --pg16 download`).
 
+**Host-side unit tests (no PostgreSQL needed).** Alongside the SQL probes,
+the pure logic — §4.1 type map, §4.5 identifier rules, the SSE frame parser,
+option validators, the §4.9 SQLSTATE map, the qual model, the catalog cache,
+the row model, and the PRD-8 planner — carries `#[cfg(test)]` unit and
+property tests (`proptest` is a dev-dependency only; never linked into the
+extension). The `pg_` prefix is generated for every `#[pgrx::pg_test]`, so:
+
+```bash
+cargo test --lib -- --skip pg_    # fast, hermetic, no cluster
+```
+
+Never touch `REGISTRY` / `find()` in a host test: the per-track handler
+statics pull translation units that reference PostgreSQL globals, which
+aborts the host binary at load (macOS flat namespace). The registry and all
+SQL behavior stay covered by the `#[pg_test]` probes below.
+
 **Note on `cargo pgrx test`:** the underlying pgrx-tests framework misbehaves
 on some machines — its `CREATE EXTENSION` step and its probe queries end up
 against different state, so every probe reports "does not exist" even though

@@ -552,3 +552,263 @@ mod tests {
         assert!(!err.message().contains("   "), "no value echo");
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// Numeric-parsing corners and the loopback/auth decision table, table-driven.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn opts(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn server(pairs: &[(&str, &str)]) -> McpResult<ServerOptions> {
+        ServerOptions::parse(&opts(pairs))
+    }
+
+    /// `cache_ttl_ms`: 0 is meaningful (no caching), the full u64 range is
+    /// legal, and the parse is `u64::from_str` after trimming.
+    #[test]
+    fn cache_ttl_parsing_edges() {
+        for (raw, want) in [
+            ("0", 0),
+            ("1", 1),
+            ("60000", 60_000),
+            (u64::MAX.to_string().as_str(), u64::MAX),
+            ("  5000  ", 5_000, ),
+        ] {
+            let parsed = server(&[
+                ("url", "https://x.example/mcp"),
+                ("cache_ttl_ms", raw),
+            ])
+            .unwrap_or_else(|e| panic!("{raw:?}: {e:?}"));
+            assert_eq!(parsed.cache_ttl_ms, want, "cache_ttl_ms {raw:?}");
+        }
+        for bad in ["-1", "abc", "1.5", "", "+", "0x10"] {
+            assert!(
+                server(&[("url", "https://x.example/mcp"), ("cache_ttl_ms", bad)]).is_err(),
+                "cache_ttl_ms {bad:?} must be rejected"
+            );
+        }
+        // i64 overflow (9223372036854775808 = 2^63) is still legal u64 space…
+        let big = server(&[
+            ("url", "https://x.example/mcp"),
+            ("cache_ttl_ms", "10000000000000000000"),
+        ])
+        .unwrap();
+        assert_eq!(big.cache_ttl_ms, 10_000_000_000_000_000_000);
+    }
+
+    /// `timeout_ms`: inclusive [1, 600_000], trimmed before parsing.
+    #[test]
+    fn timeout_parsing_edges() {
+        for ok in ["1", "600000", " 15 ", "15000"] {
+            assert!(
+                server(&[("url", "https://x.example/mcp"), ("timeout_ms", ok)]).is_ok(),
+                "timeout_ms {ok:?} must be accepted"
+            );
+        }
+        for bad in ["0", "-1", "600001", "abc", "", "1.5", "18446744073709551616"] {
+            assert!(
+                server(&[("url", "https://x.example/mcp"), ("timeout_ms", bad)]).is_err(),
+                "timeout_ms {bad:?} must be rejected"
+            );
+        }
+        let err = server(&[("url", "https://x.example/mcp"), ("timeout_ms", "abc")])
+            .unwrap_err();
+        assert_eq!(err.sqlstate(), "22023");
+        assert!(err.message().contains("timeout_ms"));
+        assert!(err.message().contains("abc"), "echoes the bad value: it is not a credential");
+    }
+
+    /// `max_unqualified_reads`: any i64 >= 0, including i64::MAX; negatives
+    /// and junk rejected.
+    #[test]
+    fn max_unqualified_reads_edges() {
+        let max = server(&[
+            ("url", "https://x.example/mcp"),
+            ("max_unqualified_reads", &i64::MAX.to_string()),
+        ])
+        .unwrap();
+        assert_eq!(max.max_unqualified_reads, i64::MAX);
+        for bad in ["-1", "9223372036854775808", "abc"] {
+            assert!(server(&[
+                ("url", "https://x.example/mcp"),
+                ("max_unqualified_reads", bad),
+            ])
+            .is_err());
+        }
+    }
+
+    /// ADR-004's decision table: `auth 'none'` only with a loopback URL; and
+    /// independently, plaintext http only with a loopback URL.
+    #[test]
+    fn loopback_and_scheme_table() {
+        // (url, auth) → expected ok
+        let table = [
+            ("http://127.0.0.1:4000/mcp", "none", true),
+            ("http://[::1]:4000/mcp", "none", true),
+            ("http://localhost:4000/mcp", "none", true),
+            ("https://npl.noizu.com/mcp", "none", false),
+            ("http://10.1.2.3:4000/mcp", "none", false),
+            ("https://npl.noizu.com/mcp", "bearer", true),
+            ("http://127.0.0.1:4000/mcp", "bearer", true),
+            ("http://10.1.2.3:4000/mcp", "bearer", false),
+            ("http://[fd00::1]:4000/mcp", "bearer", false),
+        ];
+        for (url, auth, ok) in table {
+            let outcome = server(&[("url", url), ("auth", auth)]);
+            assert_eq!(outcome.is_ok(), ok, "{url} with auth {auth}");
+            if let Err(e) = outcome {
+                assert_eq!(e.sqlstate(), "22023");
+            }
+        }
+        // Default is bearer, so a bare loopback http URL is fine and a bare
+        // routable http URL is not.
+        assert!(server(&[("url", "http://127.0.0.1/mcp")]).is_ok());
+        assert!(server(&[("url", "http://example.com/mcp")]).is_err());
+    }
+
+    /// `is_loopback` directly: literal IPs decide without DNS; the name
+    /// `localhost` short-circuits; an unresolvable name is not loopback.
+    #[test]
+    fn is_loopback_over_literals_and_names() {
+        let u = |s: &str| url::Url::parse(s).unwrap();
+        assert!(is_loopback(&u("http://127.0.0.1:1/mcp")));
+        assert!(is_loopback(&u("http://127.255.0.7/mcp")));
+        assert!(is_loopback(&u("http://[::1]/mcp")));
+        assert!(!is_loopback(&u("http://192.168.0.1/mcp")));
+        assert!(!is_loopback(&u("http://[fe80::1]/mcp")));
+        assert!(is_loopback(&u("http://LOCALHOST/mcp")), "name match is case-insensitive");
+        // A domain that cannot resolve (reserved TLD) is never loopback.
+        assert!(!is_loopback(&u("http://nonexistent.invalid/mcp")));
+    }
+
+    /// Every documented option name is accepted (with a value valid for that
+    /// name); the unknown-option error names the offender and lists the valid
+    /// set.
+    #[test]
+    fn option_name_matrix() {
+        let valid_value = [
+            ("url", "https://x.example/mcp"),
+            ("mode", "auto"),
+            ("timeout_ms", "15000"),
+            ("auth", "bearer"),
+            ("max_unqualified_reads", "1"),
+            ("audit_table", "mcp_audit.tool_calls"),
+            ("cache_ttl_ms", "5000"),
+        ];
+        for (name, value) in valid_value {
+            if name == "url" {
+                assert!(server(&[("url", value)]).is_ok());
+                continue;
+            }
+            let parsed = server(&[("url", "https://x.example/mcp"), (name, value)]);
+            assert!(parsed.is_ok(), "option {name:?} must be accepted");
+        }
+        let err = server(&[("url", "https://x.example/mcp"), ("urls", "x")]).unwrap_err();
+        assert!(err.message().contains("urls"));
+        assert!(err.message().contains("cache_ttl_ms"), "valid set is listed");
+
+        for name in ["token", "token_secret"] {
+            assert!(UserMappingOptions::parse(&opts(&[(name, "mcp_s.t")])).is_ok());
+        }
+        let err = UserMappingOptions::parse(&opts(&[("tokens", "x")])).unwrap_err();
+        assert!(err.message().contains("tokens"));
+    }
+
+    /// `token_secret` / `audit_table` identifier-pair shapes.
+    #[test]
+    fn qualified_name_shapes() {
+        for ok in ["mcp_secrets.npl", "a.b", "_x.y$1"] {
+            let parsed = UserMappingOptions::parse(&opts(&[("token_secret", ok)])).unwrap();
+            match parsed.credential {
+                Credential::TokenSecret { schema, table } => {
+                    assert!(!schema.is_empty() && !table.is_empty(), "{ok:?}");
+                }
+                other => panic!("{ok:?} → {other:?}"),
+            }
+        }
+        for bad in [
+            "npl", "a.b.c", ".b", "a.", "9a.b", "a.9b", "a b.c", "a. b", "a .b", "@.b", "a.b c",
+        ] {
+            assert!(
+                UserMappingOptions::parse(&opts(&[("token_secret", bad)])).is_err(),
+                "token_secret {bad:?} must be rejected"
+            );
+        }
+        // A 64-character identifier half is rejected (NAMEDATALEN rule).
+        let long = format!("{}.t", "s".repeat(64));
+        assert!(UserMappingOptions::parse(&opts(&[("token_secret", &long)])).is_err());
+        let long_table = format!("s.{}", "t".repeat(64));
+        assert!(UserMappingOptions::parse(&opts(&[("token_secret", &long_table)])).is_err());
+        // audit_table goes through the same shape check.
+        assert!(server(&[("url", "https://x.example/mcp"), ("audit_table", "a.b")]).is_ok());
+        assert!(server(&[("url", "https://x.example/mcp"), ("audit_table", "a")]).is_err());
+    }
+
+    /// SEC-1 across the whole surface: a canary credential never reaches any
+    /// message, whatever else goes wrong with the options.
+    #[test]
+    fn no_error_path_echoes_the_credential() {
+        let canary = "SPIKE_CANARY_TOKEN_9f8e7d";
+        for bad in [
+            vec![("token", canary), ("token_secret", "a.b")],
+            vec![("token", "   ")],
+            vec![("token", canary), ("unknown", "x")],
+        ] {
+            let err = UserMappingOptions::parse(&opts(&bad)).unwrap_err();
+            assert!(!err.message().contains(canary), "{:?} leaked", err.message());
+        }
+        // And the URL/option values are echoed only where they are not
+        // credentials: a malformed URL is echoed, a bad mode is echoed.
+        let err = server(&[("url", "https://x.example/mcp"), ("mode", "fast")]).unwrap_err();
+        assert!(err.message().contains("fast"));
+        let err = server(&[("url", "ht!tp://x")]).unwrap_err();
+        assert!(err.message().contains("ht!tp://x"));
+    }
+
+    /// The URL is re-serialized canonically; mode defaults and parses.
+    #[test]
+    fn url_normalization_and_mode_matrix() {
+        let parsed = server(&[("url", "HTTPS://x.example/mcp")]).unwrap();
+        // The scheme is matched case-insensitively and re-emitted lowercase.
+        assert!(parsed.url.starts_with("https://"), "{}", parsed.url);
+
+        for (raw, want) in [
+            ("auto", Mode::Auto),
+            ("generic", Mode::Generic),
+            ("sql", Mode::Sql),
+        ] {
+            assert_eq!(
+                server(&[("url", "https://x.example/mcp"), ("mode", raw)])
+                    .unwrap()
+                    .mode,
+                want
+            );
+        }
+        // Path, query and fragment survive normalization.
+        let parsed = server(&[("url", "https://x.example:8443/mcp?x=1#f")]).unwrap();
+        assert_eq!(parsed.url, "https://x.example:8443/mcp?x=1#f");
+    }
+
+    /// A relative URL, a missing host, and a wrong scheme all fail with the
+    /// url error class; fragments of the reason land in the message.
+    #[test]
+    fn malformed_urls_name_the_problem() {
+        for bad in ["/mcp", "ftp://x.example", "x.example/mcp", "http://", ""] {
+            let err = server(&[("url", bad)]).unwrap_err();
+            assert_eq!(err.sqlstate(), "22023", "{bad:?}");
+            assert!(err.message().contains("url"), "{bad:?}: {:?}", err.message());
+        }
+        // A URL with an empty host but a scheme ("http:///mcp") is rejected.
+        assert!(server(&[("url", "http:///mcp")]).is_err());
+        // Sanity: the IpAddr import is load-bearing for the loopback check.
+        let _ip: IpAddr = "127.0.0.1".parse().unwrap();
+    }
+}

@@ -451,3 +451,70 @@ mod tests {
         assert_ne!(current_user_oid(), pg_sys::Oid::INVALID);
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// The pure helpers plus the host-safe thread-local hygiene.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The FDW validator hands us `text[]` entries `name=value`; splitting is
+    /// on the FIRST '=' so URL-ish values survive whole; junk and NULLs drop.
+    #[test]
+    fn validator_options_split_on_the_first_equals() {
+        let parsed = split_validator_options(vec![
+            Some("url=https://x.example/mcp?a=b&c=d".into()),
+            Some("mode=generic".into()),
+            None,
+            Some("noequals".into()),
+            Some("=value".into()),
+            Some("empty=".into()),
+        ]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("url".to_string(), "https://x.example/mcp?a=b&c=d".to_string()),
+                ("mode".to_string(), "generic".to_string()),
+                (String::new(), "value".to_string()),
+                ("empty".to_string(), String::new()),
+            ]
+        );
+        assert!(split_validator_options(vec![]).is_empty());
+    }
+
+    /// `params_object`: the MCP arguments default — missing and SQL NULL
+    /// collapse to `{}`; scalars pass through untouched (the server's
+    /// problem to reject); an object is kept as-is.
+    #[test]
+    fn params_object_matrix() {
+        assert_eq!(params_object(None), json!({}));
+        assert_eq!(params_object(Some(Value::Null)), json!({}));
+        assert_eq!(params_object(Some(json!({}))), json!({}));
+        assert_eq!(params_object(Some(json!({"a": 1, "b": [true, null]}))), json!({"a": 1, "b": [true, null]}));
+        assert_eq!(params_object(Some(json!("scalar"))), json!("scalar"));
+        assert_eq!(params_object(Some(json!(7))), json!(7));
+    }
+
+
+    /// Thread-local hygiene without a backend: the map starts empty in this
+    /// thread, an absent key drops false, and clear is idempotent.
+    #[test]
+    fn session_map_hygiene_in_a_fresh_thread() {
+        clear_all_sessions();
+        assert_eq!(session_count(), 0);
+        assert!(!drop_session(pg_sys::Oid::from(77u32), pg_sys::Oid::from(88u32)));
+        assert_eq!(
+            initialize_count(pg_sys::Oid::from(77u32), pg_sys::Oid::from(88u32)),
+            None
+        );
+        assert_eq!(
+            with_cached_session(pg_sys::Oid::from(77u32), pg_sys::Oid::from(88u32), |s| s
+                .url
+                .clone()),
+            None
+        );
+        clear_all_sessions();
+        assert_eq!(session_count(), 0);
+    }
+}

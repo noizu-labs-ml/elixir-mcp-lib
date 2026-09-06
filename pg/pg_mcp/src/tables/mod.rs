@@ -1084,3 +1084,165 @@ mod tests {
         assert!(input.value("no_such_column").is_none());
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+///
+/// Deliberately does NOT touch `REGISTRY` / `find()`: those reach the
+/// per-track handler statics, whose translation units reference PostgreSQL
+/// globals — unrelocatable outside a backend (macOS aborts the host test
+/// binary at load). The registry itself is fully covered by the `#[pg_test]`
+/// module above; this module pins the pure row model against a local spec.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use serde_json::json;
+
+    static LOCAL_SPEC: TableSpec = TableSpec {
+        name: "local",
+        columns: &[
+            ColumnSpec { name: "alpha", pg_type: ColumnType::Text, source: Source::ServerIdentity },
+            ColumnSpec { name: "beta", pg_type: ColumnType::Jsonb, source: Source::List("tools/list") },
+            ColumnSpec { name: "gamma", pg_type: ColumnType::Int4, source: Source::Local },
+        ],
+    };
+
+    /// Bytea / Uuid / TimestampTz project as NULL so no pushed qual can
+    /// spuriously match; everything else projects faithfully; NaN/∞ have no
+    /// JSON number form and become null (never a panic).
+    #[test]
+    fn cell_json_projection_rules() {
+        assert_eq!(Cell::Text("hi".into()).as_json(), json!("hi"));
+        assert_eq!(Cell::Json(json!({"a": [1]})).as_json(), json!({"a": [1]}));
+        assert_eq!(Cell::Bool(false).as_json(), json!(false));
+        assert_eq!(Cell::Int4(-7).as_json(), json!(-7));
+        assert_eq!(Cell::Int8(i64::MIN).as_json(), json!(i64::MIN));
+        assert_eq!(Cell::Date("2026-09-06".into()).as_json(), json!("2026-09-06"));
+        for cell in [
+            Cell::Bytea(vec![0, 1, 2]),
+            Cell::Uuid([0u8; 16]),
+            Cell::TimestampTz(1_000),
+        ] {
+            assert_eq!(cell.as_json(), Value::Null, "{cell:?} projects as null");
+        }
+        assert_eq!(Cell::Float8(1.5).as_json(), json!(1.5));
+        assert_eq!(Cell::Float8(f64::NAN).as_json(), Value::Null);
+        assert_eq!(Cell::Float8(f64::INFINITY).as_json(), Value::Null);
+    }
+
+    /// `InsertRow::value`: present, explicit NULL, skipped, and unknown
+    /// columns are four different shapes the tool-call handler must
+    /// distinguish.
+    #[test]
+    fn insert_row_access_rules() {
+        let cells = vec![
+            Some(Cell::Text("present".into())),
+            None,
+            Some(Cell::Int4(3)),
+        ];
+        let input = InsertRow::new(&LOCAL_SPEC, cells.clone());
+        assert_eq!(input.value("alpha"), Some(&Cell::Text("present".into())));
+        assert_eq!(input.value("beta"), None, "explicit NULL reads as None");
+        assert_eq!(input.value("gamma"), Some(&Cell::Int4(3)));
+        assert_eq!(input.value("delta"), None, "unknown column");
+        assert_eq!(input.value(""), None);
+        // empty_row is all-NULL and arity-wide.
+        let empty = empty_row(&LOCAL_SPEC);
+        assert_eq!(empty.len(), 3);
+        assert!(empty.iter().all(|c| c.is_none()));
+    }
+
+    /// `attno` is 1-based, `column` is 0-based, and the boundaries behave.
+    #[test]
+    fn spec_index_boundaries() {
+        assert_eq!(LOCAL_SPEC.arity(), 3);
+        assert_eq!(LOCAL_SPEC.attno("alpha"), Some(1));
+        assert_eq!(LOCAL_SPEC.attno("gamma"), Some(3));
+        assert_eq!(LOCAL_SPEC.attno("delta"), None);
+        assert_eq!(LOCAL_SPEC.attno("ALPHA"), None, "exact match only");
+        assert_eq!(LOCAL_SPEC.attno(""), None);
+        assert!(LOCAL_SPEC.column(0).is_some());
+        assert!(LOCAL_SPEC.column(2).is_some());
+        assert!(LOCAL_SPEC.column(3).is_none());
+        assert!(LOCAL_SPEC.column(usize::MAX).is_none());
+        for (i, col) in LOCAL_SPEC.columns.iter().enumerate() {
+            assert_eq!(LOCAL_SPEC.attno(col.name), Some(i + 1));
+            assert_eq!(LOCAL_SPEC.column(i).unwrap().name, col.name);
+        }
+    }
+
+    /// The §4.1 SQL spellings, host-side (no OIDs touched).
+    #[test]
+    fn column_type_sql_names() {
+        let spellings = [
+            (ColumnType::Text, "text"),
+            (ColumnType::Jsonb, "jsonb"),
+            (ColumnType::Boolean, "boolean"),
+            (ColumnType::Int4, "integer"),
+            (ColumnType::Int8, "bigint"),
+            (ColumnType::Bytea, "bytea"),
+            (ColumnType::Uuid, "uuid"),
+            (ColumnType::TimestampTz, "timestamptz"),
+            (ColumnType::Float8, "double precision"),
+            (ColumnType::Date, "date"),
+        ];
+        for (ty, sql) in spellings {
+            assert_eq!(ty.sql_name(), sql);
+        }
+    }
+
+    /// ScanContext::restricted_values flattens qual values in qual order,
+    /// filtered by column name.
+    #[test]
+    fn scan_context_restricted_values() {
+        let ctx = ScanContext {
+            base: TableContext {
+                spec: &LOCAL_SPEC,
+                server_name: "t".into(),
+                resolved: test_resolved(),
+                table_options: vec![],
+            },
+            quals: vec![
+                Qual::equal("alpha", json!("a")),
+                Qual::any_equal("alpha", vec![json!("b"), json!("c")]),
+                Qual::equal("beta", json!("kept-for-beta")),
+            ],
+        };
+        assert_eq!(
+            ctx.restricted_values("alpha"),
+            vec![json!("a"), json!("b"), json!("c")]
+        );
+        assert_eq!(ctx.restricted_values("beta"), vec![json!("kept-for-beta")]);
+        assert!(ctx.restricted_values("gamma").is_empty());
+    }
+
+    /// TableContext's pure option helpers: ttl override (malformed → None,
+    /// i.e. the server default) and the upstream marker (None / "" / name).
+    #[test]
+    fn table_context_option_helpers() {
+        let mk = |options: &[(&str, &str)]| TableContext {
+            spec: &LOCAL_SPEC,
+            server_name: "t".into(),
+            resolved: test_resolved(),
+            table_options: options
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+
+        let ctx = mk(&[]);
+        assert!(ctx.table_ttl_ms().is_none());
+        assert_eq!(ctx.upstream(), None);
+        assert_eq!(ctx.table_option("cache_ttl_ms"), None);
+
+        assert_eq!(mk(&[("cache_ttl_ms", "5000")]).table_ttl_ms(), Some(5000));
+        assert_eq!(mk(&[("cache_ttl_ms", " 250 ")]).table_ttl_ms(), Some(250));
+        assert_eq!(mk(&[("cache_ttl_ms", "soon")]).table_ttl_ms(), None);
+        assert_eq!(mk(&[("upstream", "")]).upstream(), Some(""));
+        assert_eq!(mk(&[("upstream", "github")]).upstream(), Some("github"));
+        // cache_key is the (server, user) pair, opaque but stable.
+        let ctx = mk(&[]);
+        let (s, u) = ctx.cache_key();
+        assert_eq!(s, ctx.resolved.server_oid);
+        assert_eq!(u, ctx.resolved.user_oid);
+    }
+}

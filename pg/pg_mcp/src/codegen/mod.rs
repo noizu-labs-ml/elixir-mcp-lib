@@ -362,7 +362,18 @@ fn plan_one(
             params.push(col.sql_name.clone());
         }
     }
-    debug_assert_eq!(params.len(), required.len(), "params cover every required input");
+    // §4.3's assert, host-hardened: `required` may name a property that has
+    // no column (malformed-but-parseable schema). Those entries are dropped
+    // above, so the assert counts only requireds that map to a column — the
+    // original `required.len()` panicked a debug backend on hostile input.
+    debug_assert_eq!(
+        params.len(),
+        required
+            .iter()
+            .filter(|r| inputs.iter().any(|c| &c.property == *r))
+            .count(),
+        "params cover every required input"
+    );
     for col in &inputs {
         if !col.required {
             params.push(col.sql_name.clone());
@@ -817,5 +828,252 @@ mod tests {
             plan.tools[0].description.as_deref(),
             Some("Full-text search over the doc corpus.")
         );
+    }
+}
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// Planning is pure (D1's guarantee), so the whole planner runs here: the
+/// invariants every generation path depends on, plus a property sweep.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    fn tool(name: &str, inputs: Value) -> Value {
+        json!({ "name": name, "inputSchema": inputs })
+    }
+
+    fn object_schema(properties: Value) -> Value {
+        json!({ "type": "object", "properties": properties })
+    }
+
+    /// §4.3 parameter order: required inputs in `required` order first, then
+    /// optional inputs in property order — independent of either array's
+    /// relation to the property order.
+    #[test]
+    fn parameter_order_is_required_order_then_property_order() {
+        let inputs = json!({
+            "type": "object",
+            "properties": {
+                "opt_a": {"type": "string"},
+                "req_z": {"type": "string"},
+                "opt_b": {"type": "integer"},
+                "req_a": {"type": "boolean"},
+            },
+            "required": ["req_z", "req_a"],
+        });
+        let planned =
+            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
+                .unwrap();
+        let t = &planned.tools[0];
+        assert_eq!(t.params, vec!["req_z", "req_a", "opt_a", "opt_b"]);
+        // Every required input is a parameter.
+        for col in &t.inputs {
+            if col.required {
+                assert!(t.params.contains(&col.sql_name));
+            }
+        }
+    }
+
+    /// `required` entries that name no property are ignored by the parameter
+    /// list (there is no column to bind) — and planning does not panic.
+    #[test]
+    fn phantom_required_entries_do_not_break_planning() {
+        let inputs = json!({
+            "type": "object",
+            "properties": {"real": {"type": "string"}},
+            "required": ["ghost", "real"],
+        });
+        let planned =
+            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
+                .unwrap();
+        let t = &planned.tools[0];
+        assert_eq!(t.params, vec!["real"]);
+        assert_eq!(t.inputs.len(), 1);
+    }
+
+    /// Property-order preservation end-to-end (the `preserve_order` feature
+    /// is load-bearing): the published property order is the column order.
+    #[test]
+    fn column_order_follows_published_property_order() {
+        let names = ["zulu", "alpha", "mike", "bravo", "kilo"];
+        let mut props = serde_json::Map::new();
+        for n in names {
+            props.insert(n.to_string(), json!({"type": "string"}));
+        }
+        let inputs = json!({"type": "object", "properties": props});
+        let planned =
+            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
+                .unwrap();
+        let got: Vec<&str> =
+            planned.tools[0].inputs.iter().map(|c| c.property.as_str()).collect();
+        assert_eq!(got, names);
+    }
+
+    /// Duplicate tool names (a misbehaving server) get distinct suffixed SQL
+    /// names; the wire mapping stays recoverable via `tool_name`.
+    #[test]
+    fn duplicate_tool_names_get_distinct_sql_names() {
+        let tools = vec![tool("echo", object_schema(json!({}))); 3];
+        let planned =
+            plan(&tools, "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        assert_eq!(planned.tools.len(), 3);
+        let mut seen = std::collections::HashSet::new();
+        for t in &planned.tools {
+            assert!(seen.insert(t.sql_name.as_str()), "{} repeats", t.sql_name);
+            assert_eq!(t.tool_name, "echo");
+        }
+    }
+
+    /// A property whose derived name is empty (all punctuation) still gets a
+    /// column: the `_` substitute.
+    #[test]
+    fn empty_derivation_becomes_the_underscore_column() {
+        let inputs = object_schema(json!({"🚀": {"type": "string"}}));
+        let planned =
+            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
+                .unwrap();
+        let t = &planned.tools[0];
+        assert_eq!(t.inputs.len(), 1);
+        assert_eq!(t.inputs[0].sql_name, "_");
+        assert_eq!(t.inputs[0].property, "🚀");
+    }
+
+    /// Output-shape decision edges, host-side: a non-object output schema
+    /// collapses to an empty Single; `outputSchema` absent is `None`.
+    #[test]
+    fn output_shape_edges() {
+        assert_eq!(analyze_output(None), OutputShape::None);
+        // A non-object output schema has no properties → Single, no columns.
+        match analyze_output(Some(&json!(true))) {
+            OutputShape::Single(cols) => assert!(cols.is_empty()),
+            other => panic!("expected empty Single, got {other:?}"),
+        }
+        // The fan-out needs `items` to be an object-typed array.
+        let fanout = Some(&json!({
+            "type": "object",
+            "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}}}}}
+        }));
+        assert!(matches!(analyze_output(fanout), OutputShape::ElementOf { .. }));
+        // `items` of scalars is NOT a fan-out.
+        let scalar_items = Some(&json!({
+            "type": "object",
+            "properties": {"rows": {"type": "array", "items": {"type": "string"}}}
+        }));
+        match analyze_output(scalar_items) {
+            OutputShape::Single(cols) => {
+                assert_eq!(cols.len(), 1);
+                assert_eq!(cols[0].pg_type, ColumnType::Jsonb);
+            }
+            other => panic!("expected Single, got {other:?}"),
+        }
+    }
+
+    /// `InvokeOnSelect`: parse/round-trip and the error shape.
+    #[test]
+    fn invoke_on_select_parse_matrix() {
+        for (raw, want) in [
+            ("read_only", InvokeOnSelect::ReadOnly),
+            ("all", InvokeOnSelect::All),
+            ("none", InvokeOnSelect::None),
+        ] {
+            assert_eq!(InvokeOnSelect::parse(raw).unwrap(), want);
+            assert_eq!(want.as_str(), raw);
+        }
+        for bad in ["", "ALL", "readonly", "always"] {
+            let err = InvokeOnSelect::parse(bad).unwrap_err();
+            assert_eq!(err.sqlstate(), "22023");
+            assert!(err.message().contains("invoke_on_select"));
+        }
+        // Default is the read-only gate.
+        assert_eq!(InvokeOnSelect::default(), InvokeOnSelect::ReadOnly);
+    }
+
+    /// The planner property: over generated tool batches, planning is total
+    /// and its output obeys the contract — every named input appears exactly
+    /// once as a tool or a skip; SQL names are valid identifiers ≤63 bytes,
+    /// unique per schema; every required input is a parameter; the gate
+    /// table holds.
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+
+        #[test]
+        fn planning_is_total_and_well_shaped(
+            tools in prop::collection::vec(
+                (
+                    prop::collection::vec(("[a-z]", "[a-z][a-z]"), 0..4),
+                    prop::bool::ANY,
+                    prop::option::of(prop::bool::ANY),
+                    prop::option::of(prop::bool::ANY),
+                ).prop_map(|(name_chars, valid_schema, output, annotate)| {
+                    let name: String = name_chars.into_iter().map(|(a, b)| format!("{a}{b}")).collect();
+                    let input_schema = if valid_schema {
+                        json!({"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]})
+                    } else {
+                        json!("not an object schema")
+                    };
+                    let mut t = json!({"name": name, "inputSchema": input_schema});
+                    if let Some(has_output) = output {
+                        t["outputSchema"] = if has_output {
+                            json!({"type": "object", "properties": {"rows": {"type": "array",
+                                "items": {"type": "object", "properties": {"id": {"type": "string"}}}}}})
+                        } else {
+                            json!({"type": "object", "properties": {"total": {"type": "integer"}}})
+                        };
+                    }
+                    if annotate == Some(true) {
+                        t["annotations"] = json!({"readOnlyHint": true});
+                    }
+                    t
+                }),
+                0..12,
+            ),
+            prefix in prop::option::of(prop::sample::select(vec!["mcp_", ""])),
+            gate in prop::sample::select(vec![
+                InvokeOnSelect::ReadOnly,
+                InvokeOnSelect::All,
+                InvokeOnSelect::None,
+            ]),
+        ) {
+            let prefix = prefix.unwrap_or_default();
+            let result = plan(&tools, "target", &prefix, gate, SchemaMode::Single);
+            prop_assert!(result.is_ok(), "planning never fails on named tools");
+            let plan = result.unwrap();
+
+            // Partition: every *named* tool is either planned or skipped.
+            // An empty name is a warning-only skip (it cannot be addressed).
+            let named: Vec<&str> = tools
+                .iter()
+                .filter_map(|t| t.get("name").and_then(Value::as_str))
+                .filter(|n| !n.is_empty())
+                .collect();
+            prop_assert_eq!(plan.tools.len() + plan.skipped.len(), named.len());
+
+            let mut seen = std::collections::HashSet::new();
+            for t in &plan.tools {
+                prop_assert!(t.sql_name.len() <= 63, "{} too long", t.sql_name);
+                prop_assert!(t.sql_name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'));
+                prop_assert!(!t.sql_name.as_bytes().first().is_some_and(u8::is_ascii_digit));
+                prop_assert!(seen.insert(t.sql_name.as_str()), "duplicate sql name {}", t.sql_name);
+                // The wire mapping survives.
+                prop_assert!(named.contains(&t.tool_name.as_str()));
+                // The gate table.
+                match gate {
+                    InvokeOnSelect::ReadOnly => prop_assert_eq!(t.invoke_on_select, t.read_only),
+                    InvokeOnSelect::All => prop_assert!(t.invoke_on_select),
+                    InvokeOnSelect::None => prop_assert!(!t.invoke_on_select),
+                }
+                // Table column order: inputs then outputs (content/is_error
+                // are the emitters' business, not planned here).
+                prop_assert_eq!(t.table_columns().len(), t.inputs.len() + t.output_columns().len());
+                // Every required input is a parameter.
+                for col in &t.inputs {
+                    if col.required {
+                        prop_assert!(t.params.contains(&col.sql_name), "{} missing from params", col.sql_name);
+                    }
+                }
+            }
+        }
     }
 }

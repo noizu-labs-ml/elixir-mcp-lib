@@ -112,6 +112,11 @@ fn split_case_boundaries(name: &str) -> String {
 /// identifier gets `_` + 7 hex of the SHA-256 of *its* original name, applied
 /// after truncation so the result stays ≤63 bytes. Input order decides who
 /// wins.
+///
+/// Identical originals (a server publishing the same tool name twice) suffix
+/// to the same hash, so a repeat occurrence appends `_` + its occurrence
+/// count (`_2`, `_3`, …, head-trimmed to stay ≤63 bytes) — every colliding
+/// tool keeps its own name (§4.5 rule 5), deterministically per input order.
 pub fn dedup<I>(names: I, prefix: &str) -> Vec<(String, String)>
 where
     I: IntoIterator,
@@ -120,19 +125,31 @@ where
     let names: Vec<String> = names.into_iter().map(|n| n.as_ref().to_string()).collect();
     let derived: Vec<String> = names.iter().map(|n| derive(n, prefix)).collect();
 
-    let mut seen: HashMap<&str, usize> = HashMap::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
     let mut out = Vec::with_capacity(names.len());
     for (original, sql) in names.iter().zip(derived.iter()) {
-        if seen.insert(sql.as_str(), out.len()).is_none() {
+        if seen.insert(sql.clone(), out.len()).is_none() {
             out.push((original.clone(), sql.clone()));
         } else {
             // Collision: hash the original name, after truncation (the
             // derived name is already prefixed and ≤63 bytes, so trimming to
             // 55 leaves room for the suffix).
-            let mut suffixed = sql[..sql.len().min(TRUNCATE_BYTES)].to_string();
-            suffixed.push('_');
-            suffixed.push_str(&sha256_hex7(original.as_bytes()));
-            out.push((original.clone(), suffixed));
+            let head = &sql[..sql.len().min(TRUNCATE_BYTES)];
+            let original_hash = sha256_hex7(original.as_bytes());
+            let mut candidate = format!("{head}_{original_hash}");
+            // Identical originals hash identically; disambiguate repeats
+            // with an occurrence ordinal, shrinking the head to keep the
+            // 63-byte limit.
+            let mut occurrence = 1usize;
+            while seen.contains_key(&candidate) {
+                occurrence += 1;
+                let ordinal = occurrence.to_string();
+                let head_len = TRUNCATE_BYTES.saturating_sub(1 + ordinal.len());
+                candidate =
+                    format!("{}_{original_hash}_{ordinal}", &sql[..head_len.min(sql.len())]);
+            }
+            seen.insert(candidate.clone(), out.len());
+            out.push((original.clone(), candidate));
         }
     }
     out
@@ -144,8 +161,11 @@ where
 /// transformation.
 pub fn is_reserved(name: &str) -> bool {
     const RESERVED: &[&str] = &[
-        "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "both",
-        "binary", "case", "cast", "check", "collate", "collation", "column", "concurrently",
+        // Sorted: `binary_search` below requires it. (`both` sorts after
+        // `binary` — an earlier unsorted pairing made `is_reserved("both")`
+        // miss; caught by the host unit test.)
+        "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric",
+        "binary", "both", "case", "cast", "check", "collate", "collation", "column", "concurrently",
         "constraint", "create", "current_catalog", "current_date", "current_role", "current_time",
         "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct", "do",
         "else", "end", "except", "false", "fetch", "filter", "for", "foreign", "freeze", "from",
@@ -431,5 +451,302 @@ mod tests {
             of(&"a".repeat(1_000_000)),
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
+    }
+}
+
+/// Host-side unit tests (no PostgreSQL): the §7.1 property layer over
+/// identifier derivation. The `tests` module above pins the worked examples;
+/// this module proves the invariants over arbitrary input.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// §4.5's output contract: `[a-z0-9_]`, never a leading digit, ≤63 bytes.
+    fn assert_valid_identifier(sql: &str) {
+        assert!(sql.len() <= 63, "{sql:?} is {} bytes", sql.len());
+        assert!(
+            sql.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "{sql:?} leaves [a-z0-9_]"
+        );
+        if !sql.is_empty() {
+            assert!(
+                !sql.as_bytes()[0].is_ascii_digit(),
+                "{sql:?} starts with a digit"
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(1024))]
+
+        /// Arbitrary names — unicode, emoji, control bytes, keywords, quotes —
+        /// always yield a valid Postgres identifier under any prefix.
+        #[test]
+        fn arbitrary_names_always_produce_valid_identifiers(
+            name in prop::collection::vec(proptest::char::any(), 0..160)
+                .prop_map(|chars| chars.into_iter().collect::<String>()),
+            prefix in prop::option::of(
+                prop::collection::vec(
+                    prop::char::range('a', 'z').prop_union(prop::char::range('0', '9')),
+                    0..8,
+                )
+                .prop_map(|chars| chars.into_iter().collect::<String>())
+                .prop_filter("prefix must not start with a digit", |p| {
+                    !p.as_bytes().first().is_some_and(u8::is_ascii_digit)
+                }),
+            ),
+        ) {
+            let prefix = prefix.unwrap_or_default();
+            let derived = derive(&name, &prefix);
+            assert_valid_identifier(&derived);
+            if !prefix.is_empty() {
+                prop_assert!(derived.starts_with(&prefix), "{derived:?} carries the prefix");
+            }
+            // Deterministic: the same input derives the same identifier.
+            prop_assert_eq!(derive(&name, &prefix), derived);
+        }
+
+        /// Long names: exactly 63 bytes, head+`_`+7hex shape, deterministic.
+        #[test]
+        fn long_names_always_truncate_to_the_sixty_three_byte_shape(
+            name in prop::collection::vec(
+                prop::char::range('a', 'z').prop_union(prop::char::range('A', 'Z')),
+                64..200,
+            )
+            .prop_map(|chars| chars.into_iter().collect::<String>()),
+        ) {
+            let derived = derive(&name, "");
+            prop_assert_eq!(derived.len(), 63);
+            let (head, tail) = derived.split_at(55);
+            prop_assert_eq!(&tail[..1], "_");
+            prop_assert!(tail[1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+            // The suffix hashes the pre-truncation derived name.
+            prop_assert_eq!(
+                &tail[1..],
+                &sha256_hex7(derive_base(&name).as_bytes())
+            );
+            prop_assert!(head.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'));
+        }
+
+        /// Dedup: distinct originals never collide after suffixing, order is
+        /// stable, and every output is still a valid identifier. (Identical
+        /// originals are excluded: MCP requires unique tool names, and JSON
+        /// objects cannot carry duplicate property keys, so no production
+        /// path can produce them — see the explicit degenerate-case test
+        /// below.)
+        #[test]
+        fn dedup_always_resolves_collisions_distinctly(
+            names in prop::collection::vec(
+                prop::collection::vec(prop::char::range('a', 'z'), 1..12)
+                    .prop_map(|chars| chars.into_iter().collect::<String>()),
+                1..24,
+            )
+            .prop_filter("names must be distinct", |names| {
+                let unique = names.iter().collect::<std::collections::HashSet<_>>();
+                unique.len() == names.len()
+            }),
+        ) {
+            let out = dedup(&names, "");
+            prop_assert_eq!(out.len(), names.len());
+            let mut seen = std::collections::HashSet::new();
+            for (original, sql) in &out {
+                assert_valid_identifier(sql);
+                prop_assert!(seen.insert(sql.as_str()), "{sql:?} repeats — dedup failed for {original:?}");
+            }
+            // Order-stable: the same input list resolves identically.
+            let again = dedup(&names, "");
+            prop_assert_eq!(out, again);
+        }
+
+        /// sha_suffix: 7 lowercase hex, deterministic, distinct inputs usually
+        /// distinct suffixes (the birthday bound makes "usually" a property
+        /// only over a small sample, so just check shape + determinism).
+        #[test]
+        fn sha_suffix_is_seven_lowercase_hex_and_deterministic(
+            name in prop::collection::vec(proptest::char::any(), 0..64)
+                .prop_map(|chars| chars.into_iter().collect::<String>()),
+        ) {
+            let a = sha_suffix(&name);
+            let b = sha_suffix(&name);
+            prop_assert_eq!(&a, &b);
+            prop_assert_eq!(a.len(), 7);
+            prop_assert!(a.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        }
+    }
+
+    /// Case-boundary splitting: acronym runs split before the final upper
+    /// (`getHTTPResponse` → `get_http_response`), digits never split from a
+    /// following lower.
+    #[test]
+    fn case_boundary_matrix() {
+        for (name, want) in [
+            ("getHTTPResponse", "get_http_response"),
+            ("HTTPServer", "http_server"),
+            // Documented rule: the boundary sits before the LAST upper of an
+            // acronym run that meets a lower — so `HTTPs` splits before the P.
+            // ("http_server" would read better; this is the normative §4.5
+            // behavior and the output stays valid, deterministic and
+            // collision-free, with the original name in the table option.)
+            ("HTTPserver", "htt_pserver"),
+            ("xmlHttpRequest", "xml_http_request"),
+            ("a1b2", "a1b2"),
+            ("v2Api", "v2_api"),
+            ("APIv2", "ap_iv2"),
+            ("ALLCAPS", "allcaps"),
+            ("MiXeD", "mi_xe_d"),
+            ("aB", "a_b"),
+            ("Ab", "ab"),
+        ] {
+            assert_eq!(derive(name, ""), want, "boundary split of {name:?}");
+        }
+    }
+
+    /// Truncation is deterministic and collision-free across a name and its
+    /// own double (same derived base → same suffix).
+    #[test]
+    fn truncation_and_prefix_interact_deterministically() {
+        let long = "x".repeat(120);
+        assert_eq!(derive(&long, ""), derive(&long, ""));
+        assert_eq!(derive(&long, "npl_").len(), 63);
+        // The prefixed and unprefixed truncations share no forced relation,
+        // but each is stable and shape-correct.
+        assert_valid_identifier(&derive(&long, ""));
+        assert_valid_identifier(&derive(&long, "npl_"));
+    }
+
+    /// Same input → same output (idempotence of derivation over its own
+    /// output): derive(derive(x)) == derive(x) for the ASCII output class.
+    #[test]
+    fn derivation_is_idempotent_over_its_own_output() {
+        for name in ["searchDocs", "getHTTPResponse", "we!rd@@name", "2fa", "日本語"] {
+            let once = derive(name, "");
+            let twice = derive(&once, "");
+            assert_eq!(once, twice, "derive∘derive = derive for {name:?}");
+        }
+    }
+
+    /// SQL keywords survive verbatim (rule 3) and the reserved list answers
+    /// exactly (case-sensitive, whole-word).
+    #[test]
+    fn reserved_list_is_sorted_and_lookup_is_exact() {
+        assert_eq!(derive("limit", ""), "limit");
+        assert_eq!(derive("SELECT", ""), "select");
+        assert!(is_reserved("with"));
+        assert!(!is_reserved("withing"));
+        assert!(!is_reserved("WITH"));
+        assert!(!is_reserved(""));
+
+        // Appendix C's reserved column, as the implementation encodes it. If
+        // the production list drops any of these, `is_reserved` stops
+        // recognizing it and this loop fails — the check is behavioral, so a
+        // silently broken binary_search (unsorted list) is caught too.
+        const RESERVED: &[&str] = &[
+            "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "both",
+            "binary", "case", "cast", "check", "collate", "collation", "column", "concurrently",
+            "constraint", "create", "current_catalog", "current_date", "current_role", "current_time",
+            "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct", "do",
+            "else", "end", "except", "false", "fetch", "filter", "for", "foreign", "freeze", "from",
+            "full", "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect",
+            "into", "is", "isnull", "join", "lateral", "leading", "left", "like", "limit",
+            "localtime", "localtimestamp", "natural", "not", "notnull", "null", "offset", "on",
+            "only", "or", "order", "outer", "overlaps", "placing", "primary", "references",
+            "returning", "right", "select", "session_user", "similar", "some", "symmetric", "table",
+            "tablesample", "then", "to", "trailing", "true", "union", "unique", "user", "using",
+            "variadic", "verbose", "when", "where", "window", "with",
+        ];
+        for word in RESERVED {
+            assert!(is_reserved(word), "reserved keyword {word:?} not recognized");
+        }
+        // Every reserved word derives to itself and stays a valid identifier
+        // (rule 3: they are emitted verbatim, quoted by the emitters).
+        for word in RESERVED {
+            assert_eq!(derive(word, ""), *word);
+            assert_valid_identifier(word);
+        }
+    }
+
+    /// Hostile names from §7.1 plus the ones the closed vocabulary never
+    /// emits: NUL, BOM, RTL overrides, combining marks, 63-byte-exact names.
+    #[test]
+    fn hostile_names_stay_within_the_identifier_contract() {
+        let hostile = [
+            "\u{FEFF}bom\u{FEFF}",
+            "\u{202E}rtl_override",
+            "combining\u{0301}mark",
+            "null\0byte",
+            "tab\tnewline\n",
+            &"a".repeat(63),
+            &"a".repeat(64),
+            "quote\"dquote'squote",
+            "dollar$sign",
+            "-leading-dash",
+            "_leading_underscore",
+            "__double__underscore__",
+            "🚀🚀🚀",
+        ];
+        for name in hostile {
+            let derived = derive(name, "t_");
+            assert_valid_identifier(&derived);
+            assert!(!derived.is_empty(), "{name:?} must not go empty under a prefix");
+        }
+        // Without a prefix an all-punctuation name legitimately derives to
+        // "" — the planner substitutes "_" for such columns (codegen/mod.rs).
+        assert_eq!(derive("🚀🚀🚀", ""), "");
+    }
+
+    /// Identical originals (a server publishing the same tool name twice)
+    /// hash to the same suffix, so repeats add an occurrence ordinal — every
+    /// colliding tool keeps its own name, deterministically per input order.
+    #[test]
+    fn identical_originals_get_ordinal_disambiguation() {
+        let out = dedup(["h", "h", "h"], "");
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].1, "h", "the first keeps the plain name");
+        let hash = sha_suffix("h");
+        assert_eq!(out[1].1, format!("h_{hash}"));
+        assert_eq!(out[2].1, format!("h_{hash}_2"));
+        // Deterministic per input order.
+        assert_eq!(out, dedup(["h", "h", "h"], ""));
+
+        // Even a long name stays within the byte limit while ordinaling.
+        let long = "long_tool_name_that_is_well_past_the_truncation_threshold_ever_so_long";
+        let out = dedup([long, long, long, long], "p_");
+        let mut seen = std::collections::HashSet::new();
+        for (_, sql) in &out {
+            assert_valid_identifier(sql);
+            assert!(seen.insert(sql.as_str()), "{sql} repeats");
+        }
+    }
+
+    /// Ordinal head-trimming keeps the 63-byte limit for a 63-byte base name
+    /// and stays deterministic across run order.
+    #[test]
+    fn ordinal_disambiguation_respects_the_byte_limit() {
+        let base = "x".repeat(80);
+        let out = dedup([&base, &base], "");
+        assert_eq!(out.len(), 2);
+        let second = &out[1].1;
+        assert!(second.len() <= 63, "{second} is {} bytes", second.len());
+        assert!(second.contains("_2"), "{second} carries the ordinal");
+        // The un-ordinaled truncation shape is preserved for the head
+        // (53 chars: 55 minus the "_2" ordinal's room).
+        assert!(second.starts_with(&derive(&base, "")[..53]), "{second}");
+    }
+
+    /// Dedup's suffix hashes the *original*, not the derived, name — the
+    /// pg_test pins the worked example; this pins the rule for a unicode
+    /// original (`café` and `caf` both derive to `caf`).
+    #[test]
+    fn dedup_suffix_hashes_the_original_name() {
+        let out = dedup(["café", "caf"], "");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].1, "caf", "the first occurrence keeps the plain name");
+        assert_eq!(out[1].1, format!("caf_{}", sha_suffix("caf")));
+        // The first keeps the plain name even when it is the "weird" one.
+        let out = dedup(["a.b", "a-b"], "");
+        assert_eq!(out[0].1, "a_b");
+        assert_eq!(out[1].1, format!("a_b_{}", sha_suffix("a-b")));
     }
 }

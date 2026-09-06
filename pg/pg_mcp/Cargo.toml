@@ -33,6 +33,10 @@ url = "2.5"
 
 [dev-dependencies]
 pgrx-tests = "=0.19.2"
+# Host-side property tests only (`cargo test --lib -- --skip pg_`); never
+# linked into the extension. ADR-002's dependency discipline applies to
+# runtime deps; the dev-dependency set stays deliberate too.
+proptest = "1.9"
 
 [profile.dev]
 panic = "unwind"

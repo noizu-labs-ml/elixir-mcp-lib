@@ -305,3 +305,236 @@ mod tests {
             .is_none());
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// The `tests` module above carries the same map as `#[pg_test]` probes; this
+/// module adds the property layer and the JSON-Schema shapes the closed
+/// `fields.ex` vocabulary never produces but the wire might.
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn map(json: &str) -> ColumnType {
+        map_type(&serde_json::from_str(json).unwrap())
+    }
+
+    /// §4.1 normative rows, re-asserted host-side so a regression is visible
+    /// without a PostgreSQL install.
+    #[test]
+    fn the_normative_rows_hold_host_side() {
+        assert_eq!(map(r#"{"type":"string"}"#), ColumnType::Text);
+        assert_eq!(map(r#"{"type":"string","format":"date-time"}"#), ColumnType::TimestampTz);
+        assert_eq!(map(r#"{"type":"string","format":"date"}"#), ColumnType::Date);
+        assert_eq!(map(r#"{"type":"string","format":"uuid"}"#), ColumnType::Uuid);
+        assert_eq!(map(r#"{"type":"string","enum":["a"]}"#), ColumnType::Text);
+        assert_eq!(map(r#"{"type":"integer"}"#), ColumnType::Int8);
+        assert_eq!(map(r#"{"type":"number"}"#), ColumnType::Float8);
+        assert_eq!(map(r#"{"type":"boolean"}"#), ColumnType::Boolean);
+        assert_eq!(map(r#"{"type":"object"}"#), ColumnType::Jsonb);
+        assert_eq!(map(r#"{"type":"array","items":{"type":"string"}}"#), ColumnType::Jsonb);
+    }
+
+    /// `true` and `false` are legal (trivial) JSON Schemas; both carry no type
+    /// and fall back to jsonb like any other non-object schema.
+    #[test]
+    fn boolean_schemas_are_jsonb() {
+        assert_eq!(map_type(&Value::Bool(true)), ColumnType::Jsonb);
+        assert_eq!(map_type(&Value::Bool(false)), ColumnType::Jsonb);
+        assert_eq!(map_type(&Value::Null), ColumnType::Jsonb);
+        // A schema-typed `true` nested where a property schema is expected.
+        assert_eq!(
+            map(r#"{"type":"object","properties":{"a":true}}"#),
+            ColumnType::Jsonb,
+            "the property itself is irrelevant; the object type decides"
+        );
+    }
+
+    /// Formats only apply to strings, and only the three §4.1 names apply.
+    #[test]
+    fn format_matrix_is_exact() {
+        for (format, want) in [
+            ("date-time", ColumnType::TimestampTz),
+            ("date", ColumnType::Date),
+            ("uuid", ColumnType::Uuid),
+            ("email", ColumnType::Text),
+            ("uri", ColumnType::Text),
+            ("duration", ColumnType::Text),
+            ("json-pointer", ColumnType::Text),
+            ("", ColumnType::Text),
+        ] {
+            let schema = serde_json::json!({"type": "string", "format": format});
+            assert_eq!(map_type(&schema), want, "format {format:?}");
+            // The same format on a number is invisible (§4.1: formats on
+            // non-strings never apply).
+            let on_number = serde_json::json!({"type": "number", "format": format});
+            assert_eq!(map_type(&on_number), ColumnType::Float8);
+        }
+        // A non-string `format` is ignored, not fatal.
+        assert_eq!(map(r#"{"type":"string","format":7}"#), ColumnType::Text);
+    }
+
+    /// `nullable` is OpenAPI vocabulary, not JSON Schema: it does not affect
+    /// the map (nullability is metadata, not DDL — moduledoc).
+    #[test]
+    fn nullable_keyword_does_not_change_the_map() {
+        assert_eq!(
+            map(r#"{"type":"string","nullable":true}"#),
+            ColumnType::Text
+        );
+        // The JSON-Schema spelling of the same intent is the type union.
+        assert_eq!(map(r#"{"type":["string","null"]}"#), ColumnType::Text);
+    }
+
+    /// `const` and a single-member `enum` still map like their base type —
+    /// this module never looks at `const`, and `enum` is comment metadata.
+    #[test]
+    fn const_and_single_member_enum_map_like_their_base() {
+        assert_eq!(map(r#"{"const":"lit"}"#), ColumnType::Jsonb, "no type: fallback");
+        assert_eq!(
+            map(r#"{"type":"string","const":"lit"}"#),
+            ColumnType::Text
+        );
+        assert_eq!(map(r#"{"type":"integer","enum":[1]}"#), ColumnType::Int8);
+    }
+
+    /// Union arrays: exactly one non-null string member applies (with its
+    /// format); anything wider falls back. A non-§4.1 type name inside a
+    /// union is an unknown name like any other — jsonb.
+    #[test]
+    fn union_matrix_is_exact() {
+        assert_eq!(map(r#"{"type":["string"]}"#), ColumnType::Text);
+        // `uuid` is not a §4.1 *type name* (it is a string format), so a
+        // union of it falls back even with the format present.
+        assert_eq!(map(r#"{"type":["uuid","null"],"format":"uuid"}"#), ColumnType::Jsonb);
+        assert_eq!(map(r#"{"type":["null","null"]}"#), ColumnType::Jsonb);
+        assert_eq!(map(r#"{"type":[["string"]]}"#), ColumnType::Jsonb, "nested arrays are not type names");
+        assert_eq!(map(r#"{"type":["string",42,"null"]}"#), ColumnType::Text, "non-string members skipped");
+    }
+
+    /// Deeply-nested property paths cannot loop: the map never recurses, so
+    /// even a self-referential-looking document maps on its face.
+    #[test]
+    fn deeply_nested_schemas_map_without_recursion() {
+        let mut schema = serde_json::json!({"type":"object"});
+        for _ in 0..64 {
+            schema = serde_json::json!({"type":"object","properties":{"leaf": schema}});
+        }
+        assert_eq!(map_type(&schema), ColumnType::Jsonb);
+    }
+
+    /// Property order preservation (the `preserve_order` feature is
+    /// load-bearing for §4.2/§4.3): `properties` must return names exactly as
+    /// published, and `required_list` its own order.
+    #[test]
+    fn property_and_required_order_are_preserved() {
+        let schema: Value = serde_json::from_str(
+            r#"{"required":["z","a","m"],
+                "properties":{"z":{},"a":{},"m":{},"q":{},"b":{}}}"#,
+        )
+        .unwrap();
+        let names: Vec<&str> = properties(&schema).unwrap().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["z", "a", "m", "q", "b"]);
+        assert_eq!(required_list(&schema), vec!["z", "a", "m"]);
+        // `required` naming a property that does not exist is kept verbatim
+        // (the function layer simply finds no column for it).
+        let phantom: Value = serde_json::from_str(r#"{"required":["ghost"]}"#).unwrap();
+        assert_eq!(required_list(&phantom), vec!["ghost"]);
+    }
+
+    /// The §4.1 map is total: for *any* JSON value it returns a fixed
+    /// `ColumnType`, deterministically, without panicking.
+    #[test]
+    fn the_type_map_is_total_and_deterministic_over_arbitrary_json() {
+        fn assert_total(v: &Value) {
+            let a = map_type(v);
+            let b = map_type(v);
+            assert_eq!(a, b, "deterministic for {v}");
+            // Whatever it returns must be one of the ten real types; the enum
+            // match below fails to compile if the set drifts.
+            match a {
+                ColumnType::Text
+                | ColumnType::Jsonb
+                | ColumnType::Boolean
+                | ColumnType::Int4
+                | ColumnType::Int8
+                | ColumnType::Bytea
+                | ColumnType::Uuid
+                | ColumnType::TimestampTz
+                | ColumnType::Float8
+                | ColumnType::Date => {}
+            }
+        }
+        for raw in [
+            "null", "true", "false", "0", "-1.5e3", r#""string""#, "[]",
+            r#"{"type":null}"#, r#"{"type":{}}"#, r#"{"TYPE":"string"}"#,
+            r##"{"$ref":"#/a","type":"string"}"##,
+            r#"{"allOf":[],"anyOf":[],"oneOf":[]}"#,
+            r#"{"type":"string","oneOf":[{"type":"integer"}]}"#,
+            r#"{"type":"STRING"}"#, r#"{"type":""}"#,
+            r#"{"type":["string","null","null"]}"#,
+            r#"{"format":"date-time"}"#,
+            r#"{"properties":null}"#,
+        ] {
+            assert_total(&serde_json::from_str::<Value>(raw).unwrap());
+        }
+    }
+
+    // Property: generated schema shapes always map to one of the declared
+    // column types and never panic — the type-map fuzz.
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(512))]
+
+        #[test]
+        fn generated_schemas_always_map_to_a_declared_type(
+            type_name in prop::option::of(prop::sample::select(vec![
+                "string", "integer", "number", "boolean", "object", "array",
+                "null", "int64", "",
+            ])),
+            format in prop::option::of(prop::sample::select(vec![
+                "date-time", "date", "uuid", "email", "unknown-format",
+            ])),
+            composition in prop::option::of(prop::sample::select(vec![
+                "$ref", "oneOf", "anyOf", "allOf",
+            ])),
+            as_union in prop::bool::ANY,
+            extra in prop::sample::select(vec![
+                "enum", "const", "nullable", "properties", "items", "required",
+            ]),
+        ) {
+            let mut schema = serde_json::Map::new();
+            if let Some(t) = &type_name {
+                if as_union {
+                    schema.insert("type".into(), serde_json::json!([t, "null"]));
+                } else {
+                    schema.insert("type".into(), serde_json::json!(t));
+                }
+            }
+            if let Some(f) = &format {
+                schema.insert("format".into(), serde_json::json!(f));
+            }
+            if let Some(c) = &composition {
+                schema.insert((*c).to_string(), serde_json::json!([{"type": "string"}]));
+            }
+            schema.insert(extra.into(), serde_json::json!(null));
+
+            let mapped = map_type(&Value::Object(schema.clone()));
+            let again = map_type(&Value::Object(schema));
+            prop_assert_eq!(mapped, again, "deterministic");
+            prop_assert!(
+                matches!(
+                    mapped,
+                    ColumnType::Text
+                        | ColumnType::Jsonb
+                        | ColumnType::Boolean
+                        | ColumnType::Int8
+                        | ColumnType::Float8
+                        | ColumnType::TimestampTz
+                        | ColumnType::Date
+                        | ColumnType::Uuid
+                ),
+                "{mapped:?} is a §4.1 type"
+            );
+        }
+    }
+}

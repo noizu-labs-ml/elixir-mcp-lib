@@ -269,3 +269,170 @@ mod tests {
         assert!(!back.quals.iter().any(|qual| qual.use_or));
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn q(field: &str, op: Operator, value: Value) -> Qual {
+        Qual {
+            field: field.into(),
+            operator: op,
+            value,
+            use_or: false,
+        }
+    }
+
+    /// The support matrix the planner relies on: only `=` on non-null and
+    /// `= ANY` over primitive arrays is claimed; everything else must be left
+    /// in the plan for Postgres to re-check.
+    #[test]
+    fn support_matrix() {
+        // Supported.
+        for v in [json!("x"), json!(42), json!(-1.5), json!(true), json!(false)] {
+            assert!(q("f", Operator::Equal, v.clone()).is_supported(), "{v}");
+        }
+        for items in [
+            vec![],
+            vec![json!("a")],
+            vec![json!(1), json!(2), json!(3)],
+            vec![json!(true), json!("mixed"), json!(2.5)],
+        ] {
+            assert!(
+                q("f", Operator::AnyEqual, Value::Array(items.clone())).is_supported(),
+                "{items:?}"
+            );
+        }
+        // Supported for Equal: any non-null value — including objects and
+        // arrays, which jsonb columns compare structurally (moduledoc).
+        for v in [json!({}), json!([])] {
+            assert!(q("f", Operator::Equal, v.clone()).is_supported(), "{v}");
+        }
+        // Unsupported for Equal: SQL NULL (never satisfiable).
+        assert!(!q("f", Operator::Equal, Value::Null).is_supported());
+        for items in [
+            vec![Value::Null],
+            vec![json!([1])],
+            vec![json!({"a": 1})],
+            vec![json!("ok"), Value::Null],
+        ] {
+            assert!(
+                !q("f", Operator::AnyEqual, Value::Array(items.clone())).is_supported(),
+                "{items:?}"
+            );
+        }
+        // A non-array value for AnyEqual (corrupt qual) is unsupported.
+        assert!(!q("f", Operator::AnyEqual, json!("scalar")).is_supported());
+        // An empty field name is never supported, either operator.
+        assert!(!q("", Operator::Equal, json!("x")).is_supported());
+        assert!(!q("", Operator::AnyEqual, json!(["x"])).is_supported());
+    }
+
+    /// `matches_json` numeric semantics: int vs float spellings compare
+    /// numerically; a NULL row value satisfies nothing; other columns are
+    /// never falsified.
+    #[test]
+    fn matching_semantics() {
+        assert!(q("n", Operator::Equal, json!(1)).matches_json("n", &json!(1.0)));
+        assert!(q("n", Operator::Equal, json!(2.5)).matches_json("n", &json!(2.5)));
+        // bool vs number: structural inequality (Value::Bool != Value::Number).
+        assert!(!q("n", Operator::Equal, json!(1)).matches_json("n", &json!(true)));
+        // NULL never satisfies, on either side.
+        assert!(!q("n", Operator::Equal, Value::Null).matches_json("n", &json!(1)));
+        assert!(!q("n", Operator::Equal, json!(1)).matches_json("n", &Value::Null));
+        // ANY over an empty array matches nothing at all.
+        assert!(!q("f", Operator::AnyEqual, json!([])).matches_json("f", &json!("a")));
+        // Structural equality for jsonb shapes.
+        assert!(q(
+            "a",
+            Operator::Equal,
+            json!({"b": [1, 2], "c": null})
+        )
+        .matches_json("a", &json!({"c": null, "b": [1, 2]})));
+    }
+
+    /// `restricted_values`: Equal yields one, AnyEqual flattens in order, a
+    /// corrupt non-array AnyEqual yields none.
+    #[test]
+    fn restricted_value_shapes() {
+        assert_eq!(q("f", Operator::Equal, json!("a")).restricted_values(), vec![&json!("a")]);
+        let many = q("f", Operator::AnyEqual, json!(["a", 1, true]));
+        assert_eq!(many.restricted_values(), vec![&json!("a"), &json!(1), &json!(true)]);
+        assert!(q("f", Operator::AnyEqual, json!("scalar")).restricted_values().is_empty());
+    }
+
+    /// ParamQual round-trips through the fdw_private JSON blob, preserving
+    /// the param type OID and the optional-argument flag.
+    #[test]
+    fn param_qual_round_trips_through_json() {
+        let pq = ParamQual {
+            field: "name".into(),
+            index: 3,
+            omit_null: true,
+            param_type: 25, // TEXTOID
+        };
+        let text = serde_json::to_string(&pq).unwrap();
+        let back: ParamQual = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, pq);
+
+        // FdwPrivate carrying both qual kinds and a param list.
+        let private = FdwPrivate {
+            table: "prompt_messages".into(),
+            quals: vec![q("prompt", Operator::Equal, json!("greet"))],
+            params: vec![
+                ParamQual {
+                    field: "arguments".into(),
+                    index: 0,
+                    omit_null: true,
+                    param_type: 114, // JSONBOID
+                },
+                ParamQual {
+                    field: "idx".into(),
+                    index: 1,
+                    omit_null: false,
+                    param_type: 23, // INT4OID
+                },
+            ],
+        };
+        let text = serde_json::to_string(&private).unwrap();
+        let back: FdwPrivate = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.params.len(), 2);
+        assert_eq!(back.params[0].param_type, 114);
+        assert!(back.params[0].omit_null);
+        assert!(!back.params[1].omit_null);
+        assert_eq!(back.params[1].field, "idx");
+    }
+
+    /// Backward compatibility: blobs written before PRD-8's param support
+    /// carry no `params` key — `#[serde(default)]` must decode them to an
+    /// empty list (copyObject'd plans from an older backend session).
+    #[test]
+    fn pre_param_private_blobs_still_decode() {
+        let legacy = r#"{"table":"resource_contents","quals":[{"field":"uri","operator":"Equal","value":"file:///a","use_or":false}]}"#;
+        let back: FdwPrivate = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back.table, "resource_contents");
+        assert_eq!(back.quals.len(), 1);
+        assert!(back.params.is_empty());
+    }
+
+    /// Qual serde: operator names and use_or round-trip; the JSON value
+    /// survives byte-for-byte in meaning.
+    #[test]
+    fn qual_serde_round_trip() {
+        let qual = q("uri", Operator::AnyEqual, json!(["a", "b"]));
+        let text = serde_json::to_string(&qual).unwrap();
+        assert!(text.contains("\"AnyEqual\""));
+        assert!(text.contains("\"use_or\":false"));
+        let back: Qual = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, qual);
+
+        // use_or=true survives too (shape parity, even though the extractor
+        // never produces it).
+        let mut or_qual = q("f", Operator::Equal, json!(1));
+        or_qual.use_or = true;
+        let back: Qual = serde_json::from_str(&serde_json::to_string(&or_qual).unwrap()).unwrap();
+        assert!(back.use_or);
+    }
+}

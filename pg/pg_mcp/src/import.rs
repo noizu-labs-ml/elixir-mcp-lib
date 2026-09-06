@@ -793,3 +793,185 @@ mod tests {
             .any(|s| s.contains("OPTIONS (upstream 'up\"stream')")));
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+/// The jsonb options parser, prefix validation and DDL shaping against a
+/// local spec (the REGISTRY-driven statement builders stay pg-side: the
+/// handler statics cannot link outside a backend).
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `null` and `{}` are the defaults; every documented key parses; every
+    /// mistyped value names its key; unknown keys are rejected with the
+    /// valid set.
+    #[test]
+    fn import_options_parse_matrix() {
+        let d = ImportOptions::parse(&Value::Null).unwrap();
+        assert_eq!(d.cache_ttl_ms, None);
+        assert!(!d.all_upstreams);
+        assert!(!d.per_tool);
+        assert_eq!(d.invoke_on_select, codegen::InvokeOnSelect::ReadOnly);
+        assert!(d.prefix.is_empty());
+        assert!(!d.per_upstream_schema);
+        assert_eq!(ImportOptions::parse(&json!({})).unwrap(), d);
+
+        let full = ImportOptions::parse(&json!({
+            "cache_ttl_ms": "5000",
+            "all_upstreams": true,
+            "per_tool": true,
+            "invoke_on_select": "all",
+            "prefix": "npl_",
+            "per_upstream_schema": true,
+        }))
+        .unwrap();
+        assert_eq!(full.cache_ttl_ms, Some(5000));
+        assert!(full.all_upstreams && full.per_tool && full.per_upstream_schema);
+        assert_eq!(full.invoke_on_select, codegen::InvokeOnSelect::All);
+        assert_eq!(full.prefix, "npl_");
+
+        // cache_ttl_ms also accepts a JSON number.
+        assert_eq!(
+            ImportOptions::parse(&json!({"cache_ttl_ms": 250})).unwrap().cache_ttl_ms,
+            Some(250)
+        );
+
+        // Type errors name the offending key and value class.
+        for (key, value) in [
+            ("cache_ttl_ms", json!("-5")),
+            ("cache_ttl_ms", json!(1.5)),
+            ("all_upstreams", json!("yes")),
+            ("per_tool", json!(1)),
+            ("invoke_on_select", json!(3)),
+            ("prefix", json!(7)),
+            ("per_upstream_schema", json!("maybe")),
+        ] {
+            let err = ImportOptions::parse(&json!({key: value})).unwrap_err();
+            assert_eq!(err.sqlstate(), "22023", "{key}");
+            assert!(err.message().contains(key), "{key}: {:?}", err.message());
+        }
+
+        // Non-object options and unknown keys are rejected, the latter with
+        // the valid set spelled out.
+        assert_eq!(ImportOptions::parse(&json!("all")).unwrap_err().sqlstate(), "22023");
+        assert_eq!(ImportOptions::parse(&json!(7)).unwrap_err().sqlstate(), "22023");
+        let err = ImportOptions::parse(&json!({"cache": 1})).unwrap_err();
+        assert!(err.message().contains("cache"));
+        assert!(err.message().contains("all_upstreams"), "lists the valid set");
+    }
+
+    /// §4.5 rule 6's prefix grammar: identifier fragments only, never a
+    /// leading digit; empty is the default.
+    #[test]
+    fn prefix_validation() {
+        for ok in ["", "npl", "npl_", "x1_2", "_hidden"] {
+            assert!(validate_prefix(ok).is_ok(), "{ok:?}");
+        }
+        for bad in ["9x", "NPL", "npl-", "npl.x", "npl x", "nplé", "🚀"] {
+            assert!(validate_prefix(bad).is_err(), "{bad:?}");
+        }
+        let err = validate_prefix("Npl").unwrap_err();
+        assert!(err.message().contains("prefix"));
+        assert!(err.message().contains("Npl"), "the bad value is echoed: not a credential");
+    }
+
+    /// Only a validated ttl is stamped onto the table OPTIONS.
+    #[test]
+    fn table_options_stamping() {
+        let no_ttl = ImportOptions::parse(&json!({})).unwrap();
+        assert!(no_ttl.table_options().is_empty());
+        let ttl = ImportOptions::parse(&json!({"cache_ttl_ms": 1000})).unwrap();
+        assert_eq!(
+            ttl.table_options(),
+            vec![("cache_ttl_ms".to_string(), "1000".to_string())]
+        );
+    }
+
+    /// `quote_ident` doubles embedded quotes — the only escaping DDL needs.
+    #[test]
+    fn quote_ident_escapes_quotes() {
+        assert_eq!(quote_ident("plain"), "\"plain\"");
+        assert_eq!(quote_ident("up\"stream"), "\"up\"\"stream\"");
+        assert_eq!(quote_ident(""), "\"\"");
+    }
+
+    static LOCAL_SPEC: tables::TableSpec = tables::TableSpec {
+        name: "local",
+        columns: &[
+            tables::ColumnSpec {
+                name: "alpha",
+                pg_type: tables::ColumnType::Text,
+                source: tables::Source::ServerIdentity,
+            },
+            tables::ColumnSpec {
+                name: "beta",
+                pg_type: tables::ColumnType::Int4,
+                source: tables::Source::Local,
+            },
+        ],
+    };
+
+    static FEDERATED_SPEC: tables::TableSpec = tables::TableSpec {
+        name: "federated",
+        columns: &[tables::ColumnSpec {
+            name: "uri",
+            pg_type: tables::ColumnType::Text,
+            source: tables::Source::ReadThrough("resources/read"),
+        }],
+    };
+
+    /// The CREATE FOREIGN TABLE shape: quoted identifiers, the SQL type
+    /// spellings, and OPTIONS appended after SERVER with value escaping.
+    #[test]
+    fn create_foreign_table_shape() {
+        let ddl = create_foreign_table(
+            "srv\"q",
+            "target",
+            &LOCAL_SPEC,
+            &[("upstream".to_string(), "it's".to_string())],
+        );
+        assert!(ddl.starts_with("CREATE FOREIGN TABLE \"target\".\"local\" ("), "{ddl}");
+        assert!(ddl.contains("  \"alpha\" text,"), "{ddl}");
+        assert!(ddl.contains("  \"beta\" integer"), "{ddl}");
+        assert!(ddl.contains(") SERVER \"srv\"\"q\" OPTIONS (upstream 'it''s');"), "{ddl}");
+
+        let bare = create_foreign_table("srv", "target", &LOCAL_SPEC, &[]);
+        assert!(bare.ends_with(" SERVER \"srv\";"), "{bare}");
+        assert!(!bare.contains("OPTIONS"));
+    }
+
+    /// Engine-local = no list/read-through source; `server` and `tool_calls`
+    /// shapes qualify, anything federated does not.
+    #[test]
+    fn engine_local_rule() {
+        assert!(is_engine_local(&LOCAL_SPEC));
+        assert!(!is_engine_local(&FEDERATED_SPEC));
+    }
+
+    /// Upstream extraction: prefixes before the first dot only, sorted,
+    /// deduplicated; unprefixed names contribute nothing.
+    #[test]
+    fn upstream_names_from_tool_names() {
+        assert_eq!(
+            upstreams_from_tool_names([
+                "github.create_issue",
+                "slack.post",
+                "github.list",
+                "local_echo",
+                "a.b.c",
+            ]),
+            vec!["a".to_string(), "github".to_string(), "slack".to_string()]
+        );
+        assert!(upstreams_from_tool_names(["plain"]).is_empty());
+        // Degenerate dotted shapes DO yield a segment (the extractor does not
+        // validate halves, unlike plan()'s per-upstream routing which
+        // requires both to be non-empty): pinned so the difference between
+        // the two paths is deliberate knowledge, not a surprise.
+        assert_eq!(
+            upstreams_from_tool_names([".leading", "trailing."]),
+            vec![String::new(), "trailing".to_string()]
+        );
+        assert!(upstreams_from_tool_names([]).is_empty());
+    }
+}

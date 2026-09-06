@@ -688,3 +688,141 @@ mod tests {
         assert!(!flags.tools_list_changed());
     }
 }
+
+/// Host-side unit tests (no PostgreSQL; `cargo test --lib -- --skip pg_`).
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    /// FR-6.11: the Debug rendering is opaque — the easiest accident (a
+    /// `{:?}` in some future log line) cannot leak the credential.
+    #[test]
+    fn bearer_redaction_and_header_shape() {
+        let b = Bearer::new("SPIKE_CANARY_TOKEN".to_string());
+        let rendered = format!("{b:?}");
+        assert_eq!(rendered, "Bearer(<redacted>)");
+        assert!(!rendered.contains("SPIKE_CANARY_TOKEN"));
+        assert_eq!(b.header(), "Bearer SPIKE_CANARY_TOKEN");
+        // A token containing newline material cannot forge header lines.
+        let hostile = Bearer::new("a\r\nX-Evil: 1".to_string());
+        assert_eq!(hostile.header(), "Bearer a\r\nX-Evil: 1");
+        assert!(!format!("{hostile:?}").contains("X-Evil"));
+    }
+
+    /// `finish`: result extraction, the §4.9 error mapping, the
+    /// neither-nor transport case, and a literal `result: null` — which is a
+    /// *successful* answer per JSON-RPC and yields `Ok(Value::Null)`.
+    #[test]
+    fn finish_matrix() {
+        assert_eq!(
+            finish(json!({"jsonrpc":"2.0","id":1,"result":null}), 1).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            finish(json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}}), 1).unwrap()["ok"],
+            serde_json::json!(true)
+        );
+        let err = finish(
+            json!({"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad args"}}),
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(err.sqlstate(), "22023");
+        assert_eq!(err.message(), "bad args");
+
+        let neither = finish(json!({"jsonrpc":"2.0","id":1}), 1).unwrap_err();
+        assert_eq!(neither.sqlstate(), "08006");
+        assert!(neither.message().contains("neither result nor error"));
+    }
+
+    /// `rpc_error` tolerates malformed error objects: a missing code reads as
+    /// 0 (→ the generic Rpc class), a missing message gets the default text.
+    #[test]
+    fn rpc_error_defaults_on_malformed_objects() {
+        let (code, message) = rpc_error(&json!({"error": {}})).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(message, "MCP server returned an error");
+        let (code, message) =
+            rpc_error(&json!({"error": {"code": "notanumber", "message": 7}})).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(message, "MCP server returned an error");
+        assert!(rpc_error(&json!({"result": {}})).is_none());
+        assert!(rpc_error(&json!({})).is_none());
+    }
+
+    /// `text_content`: text parts concatenate in order; other content types
+    /// are skipped; unicode passes through.
+    #[test]
+    fn text_content_matrix() {
+        let result = json!({"content": [
+            {"type": "text", "text": "héllo "},
+            {"type": "image", "data": "AAAA"},
+            {"type": "text", "text": "🚀"},
+            {"type": "text"},
+            {"type": "resource", "resource": {"text": "nope"}},
+        ]});
+        assert_eq!(text_content(&result).as_deref(), Some("héllo 🚀"));
+
+        assert_eq!(text_content(&json!({"content": []})), None);
+        assert_eq!(text_content(&json!({"content": [{"type": "audio"}]})), None);
+        assert_eq!(text_content(&json!({})), None);
+        assert_eq!(text_content(&json!({"content": "not an array"})), None);
+    }
+
+    #[test]
+    fn is_error_result_matrix() {
+        assert!(is_error_result(&json!({"isError": true})));
+        assert!(!is_error_result(&json!({"isError": false})));
+        assert!(!is_error_result(&json!({"isError": "yes"})), "non-bool is not an error flag");
+        assert!(!is_error_result(&json!({})));
+    }
+
+    /// `page_items`: the array key and nextCursor; a non-string cursor (a
+    /// misbehaving server) is the same as no cursor.
+    #[test]
+    fn page_items_matrix() {
+        let page = json!({"tools": [1, 2, 3], "nextCursor": "p2"});
+        let (items, next) = page_items(&page, "tools");
+        assert_eq!(items.len(), 3);
+        assert_eq!(next.as_deref(), Some("p2"));
+
+        let (items, next) = page_items(&json!({"tools": [], "nextCursor": ""}), "tools");
+        assert!(items.is_empty());
+        assert_eq!(next.as_deref(), Some(""), "an empty cursor still asks for another page");
+
+        let (items, next) = page_items(&json!({"tools": [1], "nextCursor": 42}), "tools");
+        assert_eq!(items.len(), 1);
+        assert_eq!(next, None, "a numeric cursor is ignored, not stringified");
+
+        let (items, next) = page_items(&json!({}), "tools");
+        assert!(items.is_empty());
+        assert_eq!(next, None);
+    }
+
+    /// The flags are atomics on an Arc: a notification observed on another
+    /// thread is visible after a take, and one observation invalidates once.
+    #[test]
+    fn notifications_are_visible_across_threads() {
+        let flags = Arc::new(Notifications::new());
+        let writer = Arc::clone(&flags);
+        std::thread::spawn(move || {
+            writer.observe(&json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}));
+        })
+        .join()
+        .unwrap();
+        assert!(flags.tools_list_changed());
+        assert!(flags.take_tools_list_changed());
+        assert!(!flags.tools_list_changed());
+        assert!(!flags.take_tools_list_changed());
+    }
+
+    /// The protocol identity: the pinned wire strings. A drift here is a
+    /// handshake change and must be deliberate.
+    #[test]
+    fn wire_identity_is_pinned() {
+        assert_eq!(CLIENT_PROTOCOL_VERSION, "2025-11-25");
+        assert_eq!(CLIENT_NAME, "pg_mcp");
+        assert_eq!(CLIENT_VERSION, "0.3.0");
+        assert_eq!(MAX_LIST_PAGES, 1_000);
+    }
+}
