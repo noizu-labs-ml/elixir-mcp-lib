@@ -263,7 +263,7 @@ One hard gate remains at PRD-6. **S1** (handshake) or **S3** (auth → `%Princip
 
 | PRD | File | Title | Repo | Status |
 |---|---|---|---|---|
-| 12 | [PRD-12-mcp-fuse-companion.md](./PRD-12-mcp-fuse-companion.md) | Kernel FUSE companion readiness | `fuse/` | Draft |
+| 12 | [PRD-12-mcp-fuse-companion.md](./PRD-12-mcp-fuse-companion.md) | Kernel FUSE companion readiness | `fuse/` | Ready for review |
 
-Architecture source: proposed ADR-008. ADR acceptance remains a merge gate;
-this record does not claim retroactive approval for the pre-existing feature branch.
+Architecture source: accepted ADR-008. The maintainer approved the scoped
+docs-with-implementation sequencing exception for the pre-existing feature branch.

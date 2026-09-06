@@ -4,10 +4,10 @@
 
 **Repo**: `Portfolio/Libs/ai/elixir-mcp` — `fuse/`, build/docs, and scoped CI
 
-**Architecture source**: ADR-008 (**proposed; acceptance is a merge gate**)
+**Architecture source**: ADR-008 (**accepted 2026-09-06**)
 
 **Date**: 2026-09-06
-**Status**: Draft
+**Status**: Ready for review
 
 ## 1. Goal
 
@@ -60,8 +60,9 @@ workflow, and its root Make target fully rolls it back without changing any
 Elixir module or wire method. The 8 MiB default is operator-adjustable; the
 16 MiB frame cap matches `VFSSocket`'s default.
 
-## 5. Open gate
+## 5. Acceptance record
 
-ADR-008 is proposed. Keep the implementation PR draft until the owner accepts
-the decision and a FUSE-capable Linux run records AC-12.9, unless CI provides
-that device and passes the smoke automatically.
+The maintainer accepted ADR-008 on 2026-09-06 and approved landing these
+architecture documents with the pre-existing implementation in PR #15. The
+PR's Linux CI ran `TestMountedRootIntegration` through `/dev/fuse` successfully,
+recording AC-12.9. The architecture and mount-validation gates are satisfied.

@@ -1,7 +1,7 @@
 ---
 id: ADR-008
 title: "A standalone Go FUSE companion with bounded, explicit filesystem semantics"
-status: proposed
+status: accepted
 date: 2026-09-06
 ---
 
@@ -36,6 +36,13 @@ truncate or sparse write to exhaust the daemon before the server can reject it.
 - Pin repository/CI development to Go 1.25.8 while retaining `go 1.22` module
   compatibility. CI runs format, vet, unit, race, and Linux build checks. A
   kernel-mount smoke runs when Linux CI exposes `/dev/fuse`.
+
+## Acceptance
+
+Accepted by the maintainer on 2026-09-06. The maintainer also approved the
+one-time sequencing exception for this pre-existing feature: ADR-008 and
+PRD-12 may land with the implementation in PR #15 instead of through an
+earlier docs-only PR.
 
 ## Consequences
 

@@ -22,6 +22,6 @@ PRDs for this series: `project-management/PRDs/` (PRD-6 … PRD-11, Series 2 in 
 
 | ADR | Title | Status |
 |---|---|---|
-| [ADR-008](ADR-008-mcp-fuse-companion.md) | Standalone Go FUSE companion and bounded write semantics | proposed |
+| [ADR-008](ADR-008-mcp-fuse-companion.md) | Standalone Go FUSE companion and bounded write semantics | accepted |
 
 Implementation plan: `project-management/PRDs/PRD-12-mcp-fuse-companion.md`.
