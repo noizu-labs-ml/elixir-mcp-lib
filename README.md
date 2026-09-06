@@ -227,9 +227,10 @@ and push `notify_changed(:tools)` when it flips — worked example in the
 The hidden flag above is a static per-module switch; the layer beneath it is
 dynamic and per-caller. Every tool-surface consumer — `tools/list`,
 `tools/call`, and the catalog tool — resolves through one path: your static
-registrations, then persisted layers (per-caller grants and negotiations that
-an operator UI can use to adjust descriptions, ordering, or visibility for one
-principal — layers adjust and extend, never hide), then ACL visibility gating.
+registrations, then persisted layers (per-caller grants and negotiations —
+the primitives to build on if you expose an operator or preference UI; they
+adjust descriptions, ordering, or visibility for one principal, extending but
+never hiding), then ACL visibility gating.
 You implement a single policy seam (`Noizu.MCP.ACL.Provider` — a binary
 `check/5` verdict); the library owns no policy, and an unconfigured ACL is an
 inert `:allow`. Denials are silent: an ACL-hidden tool is indistinguishable
@@ -688,15 +689,15 @@ Testing · MCP Inspector — plus a cheatsheet.
 
 ## Examples
 
-- [`examples/echo_stdio`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/echo_stdio)
+- [`examples/echo_stdio`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/echo_stdio)
   — minimal stdio server, ready for `claude mcp add`
-- [`examples/no_dsl_server`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/no_dsl_server)
+- [`examples/no_dsl_server`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/no_dsl_server)
   — behaviour-only server (no macros), hand-written schemas and dynamic dispatch
-- [`examples/http_kitchen_sink`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/http_kitchen_sink)
+- [`examples/http_kitchen_sink`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/http_kitchen_sink)
   — Streamable HTTP server on Bandit exercising the full feature surface
   (progress, cancellation, sampling, subscriptions, templates, completion,
   a toolkit module, hidden tools + the catalog discovery tool)
-- [`examples/agent_client`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/agent_client)
+- [`examples/agent_client`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/agent_client)
   — client demo: spawns `echo_stdio` over stdio, lists and calls tools with
   progress, answers elicitations
 
