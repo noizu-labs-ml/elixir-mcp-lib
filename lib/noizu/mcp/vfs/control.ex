@@ -23,7 +23,9 @@ defmodule Noizu.MCP.VFS.Control do
   registers.
 
   The root listing merges the real backend's entries with the `etc/dev` branch,
-  so the control tree is discoverable from `/`.
+  so the control tree is discoverable from `/` — alongside the mount's
+  generated, read-only `/README.md` (`Noizu.MCP.VFS.Readme`), which documents
+  the registered backends, this control plane, and the transports.
 
   ## Node table
 
@@ -686,7 +688,9 @@ defmodule Noizu.MCP.VFS.Control do
     {Noizu.MCP.Transport.VFSSocket, "vfs_socket"}
   ]
 
-  defp transports do
+  @doc false
+  # ⟦𓆒⟧ transports
+  def transports do
     for {mod, name} <- @transports, Code.ensure_loaded?(mod), do: name
   end
 

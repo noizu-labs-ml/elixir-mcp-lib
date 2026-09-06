@@ -106,7 +106,6 @@ Strictly sequential by design: each lib PR builds on the previous behaviour defa
 All open questions are non-blocking for PRD-1 (its §9 list) and blocking-flagged inline where they gate a later PRD's assumptions.
 
 ---
----
 
 # Series 2 — pg_mcp: MCP servers as Postgres structures (0.4.0)
 
