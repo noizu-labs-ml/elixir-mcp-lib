@@ -32,6 +32,7 @@ defmodule Noizu.MCP.Auth.Server.Store.ETS do
 
   use GenServer
 
+  alias Noizu.MCP.Auth.Server.Agent
   alias Noizu.MCP.Auth.Server.Secret
   alias Noizu.MCP.Auth.Server.Store
   alias Noizu.MCP.Auth.Server.Store.AccessToken
@@ -40,7 +41,21 @@ defmodule Noizu.MCP.Auth.Server.Store.ETS do
   alias Noizu.MCP.Auth.Server.Store.RefreshToken
 
   @default_name __MODULE__
-  @tables [:clients, :login_states, :codes, :refresh_tokens, :consents, :access_tokens]
+  @tables [
+    :clients,
+    :login_states,
+    :codes,
+    :refresh_tokens,
+    :consents,
+    :access_tokens,
+    :agent_accounts,
+    :agent_handles,
+    :agent_keys,
+    :agent_sessions,
+    :agent_assertion_jti,
+    :agent_credentials,
+    :agent_events
+  ]
 
   # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -262,6 +277,138 @@ defmodule Noizu.MCP.Auth.Server.Store.ETS do
     GenServer.call(server(opts), {:purge, now})
   end
 
+  # ── agent accounts ───────────────────────────────────────────────────────
+
+  @impl Store
+  def put_agent_account(%Agent.Account{} = account, opts) do
+    GenServer.call(server(opts), {:put_agent_account, account})
+  end
+
+  @impl Store
+  def get_agent_account(id, opts) do
+    lookup(opts, :agent_accounts, id)
+  end
+
+  @impl Store
+  def get_agent_account_by_handle(handle, opts) do
+    case lookup(opts, :agent_handles, String.downcase(handle)) do
+      {:ok, id} -> lookup(opts, :agent_accounts, id)
+      error -> error
+    end
+  end
+
+  @impl Store
+  def list_agent_accounts(filter, opts) do
+    accounts =
+      table_name(name(opts), :agent_accounts)
+      |> :ets.tab2list()
+      |> Enum.map(fn {_id, account} -> account end)
+      |> filter_accounts(filter)
+
+    {:ok, accounts}
+  rescue
+    ArgumentError -> {:error, :store_unavailable}
+  end
+
+  # ── agent keys ───────────────────────────────────────────────────────────
+
+  @impl Store
+  def put_agent_key(%Agent.Key{} = key, opts) do
+    case GenServer.call(server(opts), {:put, :agent_keys, key.fingerprint, key}) do
+      {:ok, _} -> :ok
+      other -> other
+    end
+  end
+
+  @impl Store
+  def get_agent_key(fingerprint, opts) do
+    lookup(opts, :agent_keys, fingerprint)
+  end
+
+  @impl Store
+  def list_agent_keys(account_id, opts) do
+    keys =
+      table_name(name(opts), :agent_keys)
+      |> :ets.tab2list()
+      |> Enum.filter(fn {_fingerprint, key} -> key.account_id == account_id end)
+      |> Enum.map(fn {_fingerprint, key} -> key end)
+
+    {:ok, keys}
+  rescue
+    ArgumentError -> {:error, :store_unavailable}
+  end
+
+  # ── agent sessions ───────────────────────────────────────────────────────
+
+  @doc false
+  # `id` and `nonce` are credentials (see `Store`'s @moduledoc). The stored —
+  # and returned — struct carries their hashes in those two fields rather than
+  # `nil`: callers only ever use them to look a session back up (never to
+  # re-issue one), and the hash is exactly the value that lookup needs.
+  @impl Store
+  def put_agent_session(%Agent.Session{} = session, opts) do
+    record = %{
+      session
+      | id: Secret.token_hash(session.id),
+        nonce: Secret.token_hash(session.nonce)
+    }
+
+    case GenServer.call(server(opts), {:put, :agent_sessions, record.id, record}) do
+      {:ok, _} -> :ok
+      other -> other
+    end
+  end
+
+  @impl Store
+  def get_agent_session(id, opts) do
+    lookup(opts, :agent_sessions, Secret.token_hash(id))
+  end
+
+  @impl Store
+  def consume_agent_session(id, nonce, opts) do
+    GenServer.call(
+      server(opts),
+      {:consume_agent_session, Secret.token_hash(id), Secret.token_hash(nonce)}
+    )
+  end
+
+  @impl Store
+  def claim_assertion_jti(jti, expires_at, opts) do
+    GenServer.call(server(opts), {:claim_jti, Secret.token_hash(jti), expires_at})
+  end
+
+  # ── human credentials ────────────────────────────────────────────────────
+
+  @impl Store
+  def put_agent_credential(account_id, password_hash, recovery_hashes, opts) do
+    record = %{password_hash: password_hash, recovery_hashes: recovery_hashes}
+
+    case GenServer.call(server(opts), {:put, :agent_credentials, account_id, record}) do
+      {:ok, _} -> :ok
+      other -> other
+    end
+  end
+
+  @impl Store
+  def get_agent_credential(account_id, opts) do
+    lookup(opts, :agent_credentials, account_id)
+  end
+
+  # ── agent audit ──────────────────────────────────────────────────────────
+
+  @impl Store
+  def put_agent_event(%{"account_id" => account_id} = event, opts) do
+    GenServer.call(server(opts), {:put_agent_event, account_id, event})
+  end
+
+  @impl Store
+  def list_agent_events(account_id, opts) do
+    case lookup(opts, :agent_events, account_id) do
+      {:ok, events} -> {:ok, events}
+      {:error, :not_found} -> {:ok, []}
+    end
+  end
+
   # ── server ───────────────────────────────────────────────────────────────
 
   @impl GenServer
@@ -438,10 +585,94 @@ defmodule Noizu.MCP.Auth.Server.Store.ETS do
       login_states: purge(state, :login_states, & &1.expires_at, now),
       authorization_codes: purge(state, :codes, & &1.expires_at, now),
       refresh_tokens: purge(state, :refresh_tokens, & &1.expires_at, now),
-      access_tokens: purge(state, :access_tokens, & &1.expires_at, now)
+      access_tokens: purge(state, :access_tokens, & &1.expires_at, now),
+      agent_sessions: purge(state, :agent_sessions, & &1.expires_at, now),
+      assertion_jti: purge_jti(state, now)
     }
 
     {:reply, {:ok, counts}, state}
+  end
+
+  def handle_call({:put_agent_account, account}, _from, state) do
+    handle_key = String.downcase(account.handle)
+    accounts = table(state, :agent_accounts)
+    handles = table(state, :agent_handles)
+
+    reply =
+      case :ets.lookup(handles, handle_key) do
+        [{^handle_key, other_id}] when other_id != account.id ->
+          {:error, :handle_taken}
+
+        _ ->
+          :ets.insert(accounts, {account.id, account})
+          :ets.insert(handles, {handle_key, account.id})
+          :ok
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:consume_agent_session, id_hash, nonce_hash}, _from, state) do
+    table = table(state, :agent_sessions)
+
+    reply =
+      case :ets.lookup(table, id_hash) do
+        [{^id_hash, %Agent.Session{consumed_at: nil} = session}] ->
+          cond do
+            expired?(session.expires_at) ->
+              {:error, :not_found}
+
+            session.nonce != nonce_hash ->
+              {:error, :not_found}
+
+            true ->
+              consumed = %{session | consumed_at: DateTime.utc_now()}
+              :ets.insert(table, {id_hash, consumed})
+              {:ok, consumed}
+          end
+
+        [{^id_hash, %Agent.Session{}}] ->
+          {:error, :replayed}
+
+        [] ->
+          {:error, :not_found}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:claim_jti, hash, expires_at}, _from, state) do
+    table = table(state, :agent_assertion_jti)
+
+    reply =
+      case :ets.lookup(table, hash) do
+        [{^hash, existing_expires_at}] ->
+          if expired?(existing_expires_at) do
+            :ets.insert(table, {hash, expires_at})
+            :ok
+          else
+            {:error, :replayed}
+          end
+
+        [] ->
+          :ets.insert(table, {hash, expires_at})
+          :ok
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:put_agent_event, account_id, event}, _from, state) do
+    table = table(state, :agent_events)
+
+    events =
+      case :ets.lookup(table, account_id) do
+        [{^account_id, existing}] -> [event | existing]
+        [] -> [event]
+      end
+
+    :ets.insert(table, {account_id, events})
+    {:reply, :ok, state}
   end
 
   def handle_call(:reset, _from, state) do
@@ -490,6 +721,41 @@ defmodule Noizu.MCP.Auth.Server.Store.ETS do
       table
     )
   end
+
+  defp purge_jti(state, now) do
+    table = table(state, :agent_assertion_jti)
+
+    :ets.foldl(
+      fn {key, expires_at}, count ->
+        if DateTime.compare(now, expires_at) == :gt do
+          :ets.delete(table, key)
+          count + 1
+        else
+          count
+        end
+      end,
+      0,
+      table
+    )
+  end
+
+  defp filter_accounts(accounts, filter) do
+    accounts
+    |> filter_by(:status, filter)
+    |> filter_by(:kind, filter)
+    |> Enum.drop(Keyword.get(filter, :offset, 0))
+    |> take_limit(Keyword.get(filter, :limit))
+  end
+
+  defp filter_by(accounts, key, filter) do
+    case Keyword.get(filter, key) do
+      nil -> accounts
+      value -> Enum.filter(accounts, fn account -> Map.get(account, key) == value end)
+    end
+  end
+
+  defp take_limit(accounts, nil), do: accounts
+  defp take_limit(accounts, limit), do: Enum.take(accounts, limit)
 
   defp lookup(opts, table_key, key) do
     case :ets.lookup(table_name(name(opts), table_key), key) do

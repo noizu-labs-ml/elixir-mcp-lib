@@ -19,6 +19,13 @@ if Code.ensure_loaded?(Plug.Conn) do
     | `register` | `RegistrationPlug` | POST; **must skip CSRF** |
     | `revoke` | `RevokePlug` | POST; **must skip CSRF** |
     | `jwks` | `JWKSPlug` | GET; RS256 only |
+    | `session` | `AgentSessionPlug` | POST; **unauthenticated**, must skip CSRF |
+    | `agents` | `AgentRegisterPlug` | POST; **must skip CSRF** |
+    | `keys` | `AgentKeysPlug` | GET/POST/DELETE; **must skip CSRF** |
+
+    The last three appear only when `agent_auth: [enabled: true]`. With it off they
+    are not routed at all, so an agent discovers the feature is absent from a 404
+    rather than from a 500 or a misleading 401.
 
     The paths come from `paths:` on the config, so overriding one moves it here and
     in the metadata document together — which is the only way they cannot drift.
@@ -41,6 +48,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
     @behaviour Plug
 
+    alias Noizu.MCP.Auth.Server.Agent
+    alias Noizu.MCP.Auth.Server.AgentKeysPlug
+    alias Noizu.MCP.Auth.Server.AgentRegisterPlug
+    alias Noizu.MCP.Auth.Server.AgentSessionPlug
     alias Noizu.MCP.Auth.Server.AuthorizePlug
     alias Noizu.MCP.Auth.Server.Config
     alias Noizu.MCP.Auth.Server.Errors
@@ -62,7 +73,10 @@ if Code.ensure_loaded?(Plug.Conn) do
         config: config,
         routes:
           config.paths
-          |> Map.take([:authorize, :consent, :callback, :token, :register, :revoke, :jwks])
+          |> Map.take(
+            [:authorize, :consent, :callback, :token, :register, :revoke, :jwks] ++
+              agent_routes(config)
+          )
           |> Map.new(fn {name, path} ->
             {path |> String.split("/", trim: true) |> List.last(), name}
           end)
@@ -81,8 +95,20 @@ if Code.ensure_loaded?(Plug.Conn) do
         :register -> RegistrationPlug.call(conn, config)
         :revoke -> RevokePlug.call(conn, config)
         :jwks -> JWKSPlug.call(conn, config)
+        :agent_session -> AgentSessionPlug.call(conn, config)
+        :agent_register -> AgentRegisterPlug.call(conn, config)
+        :agent_keys -> AgentKeysPlug.call(conn, config)
         _ -> not_found(conn)
       end
+    end
+
+    # Routed only when the feature is on AND the store can actually serve it.
+    # Advertising an endpoint the store cannot back would turn a configuration
+    # mistake into a 500 on an unauthenticated path.
+    defp agent_routes(config) do
+      if Agent.supported?(config),
+        do: [:agent_session, :agent_register, :agent_keys],
+        else: []
     end
 
     # Only `Upstream.OIDC` runs its own callback leg; `Upstream.HostSession` has

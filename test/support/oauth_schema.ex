@@ -12,6 +12,8 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
   @tables ~w(
     mcp_oauth_access_tokens mcp_oauth_consents mcp_oauth_refresh_tokens
     mcp_oauth_authorization_codes mcp_oauth_login_states mcp_oauth_clients
+    mcp_agent_accounts mcp_agent_account_keys mcp_agent_credentials
+    mcp_agent_sessions mcp_agent_assertion_jti mcp_agent_account_events
   )
 
   def tables, do: @tables
@@ -122,7 +124,7 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
       )
       """,
       access_tokens_sql(subject_type)
-    ]
+    ] ++ agent_tables_sql()
   end
 
   defp subject_column(:text), do: "text"
@@ -153,5 +155,89 @@ defmodule Noizu.MCP.Auth.Server.TestSchema do
       inserted_at timestamptz NOT NULL DEFAULT now()
     )
     """
+  end
+
+  @doc """
+  The agent-block tables (anonymous keypair / human-credential auth), as a
+  list — mirrors the `noizu-mcp-agent-*` changeSets in `noizu_mcp_oauth.yaml`.
+  Broken out from `create_sql/1` the same way `access_tokens_sql/1` is, in
+  case a test ever needs to create the OAuth tables without these, or vice
+  versa.
+  """
+  def agent_tables_sql do
+    [
+      """
+      CREATE TABLE mcp_agent_accounts (
+        id text PRIMARY KEY,
+        handle text NOT NULL,
+        kind varchar(10) NOT NULL DEFAULT 'agent'
+          CHECK (kind IN ('agent','human')),
+        status varchar(10) NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending','approved','rejected','suspended')),
+        display_name text,
+        profile jsonb NOT NULL DEFAULT '{}'::jsonb,
+        revocation_epoch integer NOT NULL DEFAULT 0,
+        status_reason text,
+        approved_at timestamptz,
+        approved_by text,
+        inserted_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+      """,
+      """
+      CREATE TABLE mcp_agent_account_keys (
+        fingerprint text PRIMARY KEY,
+        account_id text NOT NULL REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+        public_key bytea NOT NULL,
+        alg varchar(10) NOT NULL DEFAULT 'ed25519' CHECK (alg = 'ed25519'),
+        label text,
+        added_via text,
+        added_at timestamptz NOT NULL DEFAULT now(),
+        revoked_at timestamptz,
+        revoked_by text
+      )
+      """,
+      """
+      CREATE TABLE mcp_agent_credentials (
+        account_id text PRIMARY KEY REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+        password_hash text NOT NULL,
+        recovery_hashes jsonb NOT NULL DEFAULT '[]'::jsonb,
+        inserted_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+      """,
+      """
+      CREATE TABLE mcp_agent_sessions (
+        id_hash char(64) PRIMARY KEY,
+        nonce_hash char(64) NOT NULL,
+        level varchar(10) NOT NULL DEFAULT 'anonymous'
+          CHECK (level IN ('anonymous','agent','human')),
+        account_id text REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+        key_fingerprint text,
+        public_key bytea,
+        client jsonb NOT NULL DEFAULT '{}'::jsonb,
+        ip_hash text,
+        issued_at timestamptz NOT NULL DEFAULT now(),
+        expires_at timestamptz NOT NULL,
+        consumed_at timestamptz,
+        revoked_at timestamptz
+      )
+      """,
+      """
+      CREATE TABLE mcp_agent_assertion_jti (
+        jti_hash char(64) PRIMARY KEY,
+        expires_at timestamptz NOT NULL,
+        inserted_at timestamptz NOT NULL DEFAULT now()
+      )
+      """,
+      """
+      CREATE TABLE mcp_agent_account_events (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id text NOT NULL REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+        event jsonb NOT NULL,
+        inserted_at timestamptz NOT NULL DEFAULT now()
+      )
+      """
+    ]
   end
 end

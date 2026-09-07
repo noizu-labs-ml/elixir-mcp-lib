@@ -27,6 +27,7 @@ defmodule Noizu.MCP.Auth.Server.Config do
           upstream: {module(), keyword()},
           consent: keyword(),
           api_keys: keyword() | nil,
+          agent_auth: keyword(),
           rate_limit: term() | nil,
           track_access_tokens: boolean(),
           leeway: non_neg_integer(),
@@ -51,6 +52,7 @@ defmodule Noizu.MCP.Auth.Server.Config do
             upstream: nil,
             consent: [],
             api_keys: nil,
+            agent_auth: [],
             rate_limit: nil,
             track_access_tokens: false,
             leeway: 0,
@@ -79,6 +81,43 @@ defmodule Noizu.MCP.Auth.Server.Config do
   @spec asymmetric?(t()) :: boolean()
   def asymmetric?(%__MODULE__{signing: {:rs256, _}}), do: true
   def asymmetric?(%__MODULE__{}), do: false
+
+  @doc """
+  Whether anonymous keypair (agent) authentication is turned on.
+
+  Off by default. A host that has not implemented the agent block of
+  `Noizu.MCP.Auth.Server.Store` and turns this on gets an `ArgumentError` at boot
+  rather than a 500 on the first agent that tries to register.
+  """
+  @spec agent_auth?(t()) :: boolean()
+  def agent_auth?(%__MODULE__{agent_auth: opts}), do: Keyword.get(opts, :enabled, false)
+
+  @doc "One `:agent_auth` option, with the library default."
+  @spec agent_auth(t(), atom()) :: term()
+  def agent_auth(%__MODULE__{agent_auth: opts}, key) do
+    Keyword.get(opts, key, Map.fetch!(agent_auth_defaults(), key))
+  end
+
+  @doc """
+  Defaults for every `:agent_auth` option.
+
+  Exposed so a host can render its own "how to connect an agent" page from the
+  same numbers the server enforces, rather than from a copy that drifts.
+  """
+  @spec agent_auth_defaults() :: map()
+  def agent_auth_defaults do
+    %{
+      enabled: false,
+      session_ttl: 600,
+      assertion_max_age: 300,
+      clock_skew: 60,
+      max_keys: 10,
+      require_approval: true,
+      ip_salt: nil,
+      pending_scope: ["agent:profile", "agent:keys"],
+      approved_scope: ["agent:profile", "agent:keys", "mcp"]
+    }
+  end
 
   @doc "Adapter module and opts, for a `Store` call."
   @spec store(t()) :: {module(), keyword()}
