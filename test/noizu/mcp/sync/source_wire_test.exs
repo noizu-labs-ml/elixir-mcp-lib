@@ -38,6 +38,12 @@ defmodule Noizu.MCP.Sync.SourceWireTest do
     end
   end
 
+  defmodule DeniedLookup do
+    def capabilities(params, state), do: RevisionedDataset.capabilities(params, state)
+    def operation(_params, _state), do: {:error, Protocol.error("permission_denied")}
+    def mutate(_, _), do: raise("an unauthorized lookup must not mutate")
+  end
+
   defmodule EndlessSnapshot do
     def snapshot(params, state) do
       index = String.to_integer(params["snapshotCursor"] || "0")
@@ -183,5 +189,68 @@ defmodule Noizu.MCP.Sync.SourceWireTest do
 
     assert {:error, %{data: %{"syncCode" => "snapshot_limit_exceeded"}}} = Worker.snapshot(opts)
     assert {:ok, nil} = Store.checkpoint(SyncCacheRepo, context.binding)
+  end
+
+  test "snapshot byte budget preserves an already published generation", context do
+    params = %{
+      "relation" => "notes",
+      "key" => context.key,
+      "operationId" => Ecto.UUID.generate(),
+      "operation" => "create",
+      "precondition" => %{"absent" => true},
+      "value" => %{"title" => "preserved"}
+    }
+
+    assert {:ok, _} = RevisionedDataset.mutate(params, context.state)
+    assert {:ok, _} = Worker.snapshot(context.opts)
+    assert {:ok, before} = Store.checkpoint(SyncCacheRepo, context.binding)
+
+    assert {:error, %{data: %{"syncCode" => "snapshot_limit_exceeded"}}} =
+             Worker.snapshot(Keyword.put(context.opts, :max_snapshot_bytes, 10))
+
+    assert {:ok, ^before} = Store.checkpoint(SyncCacheRepo, context.binding)
+
+    assert {:ok, %{"title" => "preserved"}} =
+             Store.query(
+               SyncAppRepo,
+               "SELECT payload FROM mcp_sync.records WHERE binding_id=$1::text::uuid",
+               [context.binding]
+             )
+  end
+
+  test "unauthorized ambiguous operation lookup pauses without replay until explicit resume",
+       context do
+    assert {:ok, _} =
+             Store.put(SyncAppRepo, context.binding, context.key, %{"title" => "queued"}, 0)
+
+    assert {:ok, operation} = Store.claim(SyncCacheRepo, context.binding, 30)
+
+    assert {:ok, _} =
+             Store.fail(
+               SyncCacheRepo,
+               operation["operationId"],
+               operation["fencingToken"],
+               "unknown"
+             )
+
+    DB.query!(
+      context.admin,
+      "UPDATE mcp_sync.outbox SET next_attempt_at=clock_timestamp() WHERE binding_id=$1::text::uuid",
+      [context.binding]
+    )
+
+    opts = Keyword.put(context.opts, :source, {DeniedLookup, context.state})
+    assert {:ok, %{"state" => "unknown"}} = Worker.run_once(opts)
+    assert {:ok, %{"status" => "paused_auth"}} = Store.checkpoint(SyncCacheRepo, context.binding)
+    assert {:error, %{data: %{"syncCode" => "permission_denied"}}} = Worker.run_once(opts)
+
+    assert DB.scalar!(
+             context.source_admin,
+             "SELECT count(*) FROM mcp_sync.source_operations WHERE binding_id=$1::text::uuid",
+             [context.binding]
+           ) == 0
+
+    assert {:ok, %{"resumed" => true}} = Store.resume(SyncCacheRepo, context.binding)
+    assert {:ok, %{"status" => "ready"}} = Store.checkpoint(SyncCacheRepo, context.binding)
   end
 end

@@ -61,7 +61,9 @@ defmodule Noizu.MCP.Sync.EngineWireTest do
                  "url" => url,
                  "auth_ref" => "passthrough",
                  "enabled" => true
-               }, timeout: 10_000)
+               },
+               timeout: 10_000
+             )
 
     for {subject, token} <- [{"alice", "sync-alice"}, {"bob", "sync-bob"}] do
       assert {:ok, %{"principal" => ^subject}} =
@@ -86,11 +88,16 @@ defmodule Noizu.MCP.Sync.EngineWireTest do
                  "transport" => "http",
                  "url" => url,
                  "enabled" => true
-               }, timeout: 10_000)
+               },
+               timeout: 10_000
+             )
 
     assert {:error, %{"data" => %{"syncCode" => "permission_denied"}}} =
              request(client, "sync/capabilities", %{"relation" => "shared.notes"},
                claims: %{"sub" => "alice", "token" => "sync-alice"}
              )
+
+    # Close clients while the authenticated listener is still alive.
+    Fixture.reset!()
   end
 end

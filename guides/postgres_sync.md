@@ -210,6 +210,11 @@ Point a worker at an already authenticated MCP client using
 `:source`. For an engine-attached upstream, use relation `"upstream.notes"`.
 Federated sync requires `auth_ref="passthrough"`, per-principal sessions,
 engine dataset authorization and a negotiated upstream sync v1 capability.
+Allow the upstream connection timeout plus cleanup time for the management
+attach request (for example a 1-second connect timeout and a 10-second attach
+request timeout in local tests). Protected upstreams may reject the anonymous
+catalog session; its error status does not replace or authorize a principal
+session. Sync requests establish the separately authenticated principal session.
 Pooled service credentials are refused for this path; a deliberately configured
 single-principal `RevisionedDataset` or `RemoteSource` remains available directly.
 
