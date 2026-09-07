@@ -46,6 +46,13 @@ defmodule Noizu.MCP.Engine.Supervisor do
     end
   end
 
+  @doc "Resolves a strictly principal-bound synchronization session; pooled identities are refused."
+  def sync_session(name, ctx) when is_binary(name) do
+    if row_auth_ref(name) == "passthrough",
+      do: invoke_session(name, ctx),
+      else: {:error, :forbidden}
+  end
+
   defp row_auth_ref(name) do
     case row_for(name) do
       {:ok, row} -> row["auth_ref"]

@@ -36,6 +36,12 @@ defmodule Noizu.MCP.Protocol.Methods do
     "sql/schema" => {:request, :client_to_server},
     "sql/scan" => {:request, :client_to_server},
     "sql/modify" => {:request, :client_to_server},
+    # Optional sync/version 1 extension; hosts still explicitly opt in.
+    "sync/capabilities" => {:request, :client_to_server},
+    "sync/snapshot" => {:request, :client_to_server},
+    "sync/changes" => {:request, :client_to_server},
+    "sync/mutate" => {:request, :client_to_server},
+    "sync/operation" => {:request, :client_to_server},
     # logging
     "logging/setLevel" => {:request, :client_to_server},
     "notifications/message" => {:notification, :server_to_client},
