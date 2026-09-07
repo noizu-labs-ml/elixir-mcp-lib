@@ -13,20 +13,32 @@ Requirements: Go 1.22+. Repository development and CI pin Go 1.25.8 in
 `.tool-versions` and `.github/workflows/fuse.yml`.
 
 ```bash
-make fuse-build        # from repo root; binary at bin/mcp-fuse
+make fuse-build        # from repo root; host binary at bin/mcp-fuse
+make fuse-cross        # linux/amd64 linux/arm64 darwin/arm64 windows/amd64 windows/arm64
 # or directly:
 cd fuse && go build -o ../bin/mcp-fuse .
 ```
 
-`mcp-fuse` is a standalone source-built companion executable. It is
-deliberately not included in the `noizu_mcp` Hex archive, which remains an
-Elixir-only package; build or distribute the Go binary separately.
+Prebuilt companions are attached to GitHub Releases as
+`mcp-fuse-{os}-{arch}[.exe]` (linux amd64/arm64, darwin arm64, windows
+amd64/arm64). The `noizu_mcp` Hex archive remains Elixir-only; the Go
+binary is never packed into Hex.
+
+Windows release binaries are built with `CGO_ENABLED=0` (cgofuse **nocgo**):
+WinFsp is demand-loaded at mount time, so compiling does not require WinFsp
+headers. The `windows-11-arm` GitHub-hosted runner is used for arm64; if that
+job fails to schedule, the release still ships windows amd64.
 
 ## Mount prerequisites
 
 * **macOS** — [macFUSE](https://osxfuse.github.io/) or
   [fuse-t](https://www.fuse-t.app/) must be installed.
 * **Linux** — FUSE 3 (`fusermount3`) must be available.
+* **Windows** — [WinFsp](https://winfsp.dev/) must be installed at runtime.
+  The binary does not link WinFsp at compile time (`CGO_ENABLED=0`); the
+  driver is loaded when `mcp-fuse` mounts. Use `--server unix:/path` (Windows
+  10+ AF_UNIX). Remote NPL browse over `wss://` should use `mcp-mount`
+  (no kernel driver), not `mcp-fuse`.
 
 ## Usage
 

@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -26,8 +28,6 @@ type vfsRoot struct {
 	ro          bool
 	maxFileSize uint64
 }
-
-const defaultMaxFileSize = 8 << 20
 
 func newVFSRoot(client *Client, cache *Cache, ro bool) *vfsRoot {
 	return &vfsRoot{client: client, cache: cache, ro: ro, maxFileSize: defaultMaxFileSize}
@@ -64,25 +64,10 @@ func (r *vfsRoot) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 	return r.rootNode().Setattr(ctx, fh, in, out)
 }
 
-// childPath joins a directory path with a child name.
-func childPath(dir, name string) string {
-	if dir == "/" {
-		return "/" + name
-	}
-	return dir + "/" + name
-}
-
 // statCached resolves a path to node metadata through the attr cache.
 func (r *vfsRoot) statCached(path string) (*Node, syscall.Errno) {
-	if node, ok := r.cache.GetAttr(path); ok {
-		return node, 0
-	}
-	node, errno := r.client.Stat(path)
-	if errno != 0 {
-		return nil, errno
-	}
-	r.cache.PutAttr(path, node)
-	return node, 0
+	node, errno := statCached(r.client, r.cache, path)
+	return node, toSyscall(errno)
 }
 
 func (r *vfsRoot) newNode(path string, node *Node) *fs.Inode {
@@ -224,24 +209,8 @@ func (n *vfsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 // listAll gathers every page of vfs/list for this directory, consulting
 // the dentry cache first.
 func (n *vfsNode) listAll() ([]Entry, syscall.Errno) {
-	if entries, ok := n.root.cache.GetDentries(n.path); ok {
-		return entries, 0
-	}
-	var all []Entry
-	cursor := ""
-	for {
-		page, next, errno := n.root.client.List(n.path, cursor)
-		if errno != 0 {
-			return nil, errno
-		}
-		all = append(all, page...)
-		if next == "" {
-			break
-		}
-		cursor = next
-	}
-	n.root.cache.PutDentries(n.path, all)
-	return all, 0
+	entries, errno := listAll(n.root.client, n.root.cache, n.path)
+	return entries, toSyscall(errno)
 }
 
 // Create implements O_CREAT (M4 write path): vfs/create with empty data.
@@ -252,7 +221,7 @@ func (n *vfsNode) Create(ctx context.Context, name string, flags uint32, mode ui
 	child := childPath(n.path, name)
 	node, errno := n.root.client.Create(child, nil)
 	if errno != 0 {
-		return nil, nil, 0, errno
+		return nil, nil, 0, toSyscall(errno)
 	}
 	// Drop the containing directory's listing, then retain the fresh child
 	// attributes returned by create.
@@ -277,7 +246,7 @@ func (n *vfsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	}
 	child := childPath(n.path, name)
 	if errno := n.root.client.Remove(child); errno != 0 {
-		return errno
+		return toSyscall(errno)
 	}
 	n.root.cache.Invalidate(child)
 	return 0
@@ -288,7 +257,7 @@ func (n *vfsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 // success. FATTR_FH and FATTR_LOCKOWNER are request metadata, not mutations.
 func (n *vfsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	allowed := uint32(fuse.FATTR_SIZE | fuse.FATTR_FH | fuse.FATTR_LOCKOWNER | fuse.FATTR_KILL_SUIDGID)
-	if in.Valid & ^allowed != 0 {
+	if in.Valid&^allowed != 0 {
 		return syscall.EOPNOTSUPP
 	}
 	if in.Valid&fuse.FATTR_SIZE == 0 {
@@ -343,18 +312,6 @@ type fileHandle struct {
 	flushed    bool // latest dirty batch was flushed
 }
 
-type fileOp struct {
-	kind uint8
-	off  int64
-	data []byte
-	size uint64
-}
-
-const (
-	opWrite uint8 = iota
-	opTruncate
-)
-
 var (
 	_ fs.FileReader   = (*fileHandle)(nil)
 	_ fs.FileWriter   = (*fileHandle)(nil)
@@ -387,19 +344,8 @@ func (h *fileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.Rea
 }
 
 func (r *vfsRoot) contentReader(path string) ([]byte, syscall.Errno) {
-	node, errno := r.statCached(path)
-	if errno != 0 {
-		return nil, errno
-	}
-	if data, ok := r.cache.GetContent(path, node.Version); ok {
-		return data, 0
-	}
-	data, version, errno := r.client.Read(path)
-	if errno != 0 {
-		return nil, errno
-	}
-	r.cache.PutContent(path, version, data)
-	return data, 0
+	data, errno := contentReader(r.client, r.cache, path)
+	return data, toSyscall(errno)
 }
 
 // Write buffers the write locally; nothing hits the wire until Flush.
@@ -453,15 +399,15 @@ func (h *fileHandle) Flush(ctx context.Context) syscall.Errno {
 		return errno
 	}
 
-	node, errno := h.root.client.Write(h.path, buf)
-	if errno != 0 {
+	node, verr := h.root.client.Write(h.path, buf)
+	if verr != 0 {
 		// Version conflict or server refusal: surface ESTALE/EACCES so the
 		// caller knows its data did not land. Keep the buffer dirty so a
 		// retry (e.g. fsync) can try again.
-		if errno == syscall.ENOENT {
+		if verr == vfsENOENT {
 			return syscall.ESTALE
 		}
-		return errno
+		return toSyscall(verr)
 	}
 
 	h.root.cache.PutAttr(h.path, node)
@@ -485,82 +431,12 @@ func (h *fileHandle) materializeLocked() ([]byte, syscall.Errno) {
 		}
 		base = data
 	}
-	return applyFileOps(base, h.ops, h.root.maxFileSize)
-}
-
-func applyFileOps(base []byte, ops []fileOp, maxFileSize uint64) ([]byte, syscall.Errno) {
-	var buf []byte
-	start := 0
-	if uint64(len(base)) > maxFileSize {
-		// A pre-existing oversized file may only enter a write batch if its
-		// first operation brings it under the configured ceiling. Do that
-		// before copying the oversized base.
-		if len(ops) == 0 || ops[0].kind != opTruncate {
-			return nil, syscall.EFBIG
-		}
-		resized, errno := resizeContent(base, ops[0].size, maxFileSize)
-		if errno != 0 {
-			return nil, errno
-		}
-		buf = resized
-		start = 1
-	} else {
-		buf = append([]byte(nil), base...)
-	}
-
-	for _, op := range ops[start:] {
-		switch op.kind {
-		case opTruncate:
-			resized, errno := resizeContent(buf, op.size, maxFileSize)
-			if errno != 0 {
-				return nil, errno
-			}
-			buf = resized
-		case opWrite:
-			if uint64(len(buf)) > maxFileSize || op.off < 0 || uint64(op.off) > maxFileSize || uint64(len(op.data)) > maxFileSize-uint64(op.off) {
-				return nil, syscall.EFBIG
-			}
-			end := int(op.off) + len(op.data)
-			if end > len(buf) {
-				grown := make([]byte, end)
-				copy(grown, buf)
-				buf = grown
-			}
-			copy(buf[int(op.off):end], op.data)
-		default:
-			return nil, syscall.EINVAL
-		}
-	}
-	return buf, 0
-}
-
-const maxInt = int(^uint(0) >> 1)
-
-func resizeContent(data []byte, size, maxFileSize uint64) ([]byte, syscall.Errno) {
-	if size > maxFileSize || size > uint64(maxInt) {
-		return nil, syscall.EFBIG
-	}
-	resized := make([]byte, int(size))
-	copy(resized, data)
-	return resized, 0
+	buf, errno := applyFileOps(base, h.ops, h.root.maxFileSize)
+	return buf, toSyscall(errno)
 }
 
 func (r *vfsRoot) truncatePath(path string, size uint64) syscall.Errno {
-	data, errno := r.contentReader(path)
-	if errno != 0 {
-		return errno
-	}
-	resized, errno := resizeContent(data, size, r.maxFileSize)
-	if errno != 0 {
-		return errno
-	}
-	node, errno := r.client.Write(path, resized)
-	if errno != 0 {
-		return errno
-	}
-	r.cache.PutAttr(path, node)
-	r.cache.PutContent(path, node.Version, resized)
-	return 0
+	return toSyscall(truncatePath(r.client, r.cache, path, size, r.maxFileSize))
 }
 
 // Release flushes anything left (belt and braces: not every caller runs

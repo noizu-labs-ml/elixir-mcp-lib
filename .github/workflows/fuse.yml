@@ -9,11 +9,7 @@ on:
       - ".github/workflows/fuse.yml"
   push:
     branches: [develop]
-    paths:
-      - "fuse/**"
-      - "Makefile"
-      - ".tool-versions"
-      - ".github/workflows/fuse.yml"
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -21,6 +17,7 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,3 +52,106 @@ jobs:
           else
             echo "::notice::Hosted runner has no /dev/fuse; kernel mount smoke skipped"
           fi
+
+  compile-darwin-arm64:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: fuse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache-dependency-path: fuse/go.sum
+      - name: Compile darwin/arm64
+        run: go build -o /tmp/mcp-fuse-darwin-arm64 .
+
+  compile-windows-amd64:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "0"
+    defaults:
+      run:
+        working-directory: fuse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache-dependency-path: fuse/go.sum
+      - name: Compile windows/amd64 (nocgo)
+        run: go build -o mcp-fuse-windows-amd64.exe .
+
+  release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mcp-fuse-linux-amd64
+          - os: ubuntu-24.04-arm
+            artifact: mcp-fuse-linux-arm64
+          - os: macos-14
+            artifact: mcp-fuse-darwin-arm64
+          - os: windows-latest
+            artifact: mcp-fuse-windows-amd64.exe
+          - os: windows-11-arm
+            artifact: mcp-fuse-windows-arm64.exe
+            optional: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    # windows-11-arm is a hosted runner; if it cannot schedule, this cell
+    # fails and we still publish whatever other artifacts succeeded.
+    continue-on-error: ${{ matrix.os == 'windows-11-arm' }}
+    env:
+      CGO_ENABLED: "0"
+    defaults:
+      run:
+        working-directory: fuse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache-dependency-path: fuse/go.sum
+      - name: Build ${{ matrix.artifact }}
+        run: go build -o ${{ matrix.artifact }} .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: fuse/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: release
+    if: always() && !cancelled() && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mcp-fuse-*
+          path: dist
+          merge-multiple: true
+      - name: Attach binaries to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/mcp-fuse-*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no mcp-fuse artifacts downloaded"
+            exit 1
+          fi
+          ls -l dist
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
