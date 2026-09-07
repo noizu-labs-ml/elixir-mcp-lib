@@ -187,6 +187,10 @@ defmodule Noizu.MCP.Engine.Session do
   def sql_scan(pid, relation, wire_opts),
     do: GenServer.call(pid, {:sql_scan, relation, wire_opts})
 
+  @doc "Proxies only negotiated sync/version 1 methods on a principal-bound session."
+  def sync_request(pid, method, params),
+    do: GenServer.call(pid, {:sync_request, method, params}, 30_000)
+
   @doc "Force a full re-list (engine.refresh, FR-11.13)."
   @spec refresh(pid()) :: map()
   def refresh(pid), do: GenServer.call(pid, :refresh)
@@ -248,6 +252,25 @@ defmodule Noizu.MCP.Engine.Session do
 
   def handle_call({:sql_scan, relation, wire_opts}, _from, state) do
     {:reply, Client.request(state.client, "sql/scan", wire_params(relation, wire_opts)), state}
+  end
+
+  def handle_call({:sync_request, _method, _params}, _from, %{client: nil} = state) do
+    {:reply, {:error, Noizu.MCP.Sync.Protocol.error("unknown")}, state}
+  end
+
+  def handle_call({:sync_request, method, params}, _from, state) do
+    result =
+      with :ok <- Noizu.MCP.Sync.Protocol.validate(method, params),
+           true <- state.row["auth_ref"] == "passthrough" and not is_nil(state.principal),
+           %{"version" => 1} <-
+             get_in(Client.server_capabilities(state.client), ["experimental", "sync"]) do
+        Client.request(state.client, method, params)
+      else
+        {:error, _} = error -> error
+        _ -> {:error, Noizu.MCP.Sync.Protocol.error("unsupported_consistency")}
+      end
+
+    {:reply, result, state}
   end
 
   def handle_call(:refresh, _from, %{client: nil} = state) do
@@ -335,8 +358,20 @@ defmodule Noizu.MCP.Engine.Session do
 
   @impl true
   def terminate(_reason, state) do
-    if state.client, do: Client.close(state.client)
+    if state.client do
+      try do
+        Client.close(state.client)
+      catch
+        :exit, _reason -> :ok
+      end
+    end
+
     :ok
+  end
+
+  @impl true
+  def format_status(status) do
+    Map.put(status, :state, %{upstream: status.state.name, status: status.state.status})
   end
 
   # ── connect ────────────────────────────────────────────────────────────────
@@ -382,7 +417,7 @@ defmodule Noizu.MCP.Engine.Session do
 
     case state.row["transport"] do
       "stdio" -> stdio_transport(state.row["command"], credential, passthrough?)
-      "http" -> http_transport(state.row["url"], credential, passthrough?)
+      "http" -> http_transport(state.row["url"], credential)
       _other -> {:error, "unknown transport"}
     end
   end
@@ -404,11 +439,11 @@ defmodule Noizu.MCP.Engine.Session do
     end
   end
 
-  defp http_transport(url, _credential, false) do
+  defp http_transport(url, nil) do
     {:ok, {:streamable_http, url: url, headers: []}}
   end
 
-  defp http_transport(url, credential, true) do
+  defp http_transport(url, credential) do
     {:ok, {:streamable_http, url: url, headers: [{"authorization", "Bearer " <> credential}]}}
   end
 
@@ -454,10 +489,10 @@ defmodule Noizu.MCP.Engine.Session do
   # ── catalog listing ────────────────────────────────────────────────────────
 
   defp list_surfaces(state) do
-    with {:ok, tools} <- Client.list_tools(state.client),
-         {:ok, prompts} <- Client.list_prompts(state.client),
-         {:ok, resources} <- Client.list_resources(state.client),
-         {:ok, templates} <- Client.list_resource_templates(state.client),
+    with {:ok, tools} <- optional_surface(Client.list_tools(state.client)),
+         {:ok, prompts} <- optional_surface(Client.list_prompts(state.client)),
+         {:ok, resources} <- optional_surface(Client.list_resources(state.client)),
+         {:ok, templates} <- optional_surface(Client.list_resource_templates(state.client)),
          {:ok, sql_relations} <- list_sql_relations(state) do
       {:ok,
        %{
@@ -470,6 +505,10 @@ defmodule Noizu.MCP.Engine.Session do
        }}
     end
   end
+
+  defp optional_surface({:error, %Noizu.MCP.Error{code: -32601}}), do: {:ok, []}
+  defp optional_surface({:error, %{"code" => -32601}}), do: {:ok, []}
+  defp optional_surface(result), do: result
 
   # An upstream advertising `experimental.sql` re-exports its relations
   # namespaced (FR-11.19). A failed schema call degrades to no relations.
@@ -577,6 +616,8 @@ defmodule Noizu.MCP.Engine.Session do
   end
 
   defp failed(state, detail) do
+    detail = if is_binary(detail), do: detail, else: "upstream catalog request failed"
+
     if state.client do
       Client.close(state.client)
     end

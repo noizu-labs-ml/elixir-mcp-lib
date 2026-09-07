@@ -15,6 +15,13 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     its own changelog directory and owns from then on. This adapter speaks to
     those tables through `Ecto.Adapters.SQL.query/4` and nothing else.
 
+    The optional agent block (`put_agent_account/2` and friends, backing
+    `Noizu.MCP.Auth.Server.Agent` anonymous keypair/human auth) has its own
+    template, `priv/liquibase/noizu_mcp_agent.yaml`, applied independently —
+    it shares no tables with the OAuth template above. A host that never
+    calls those callbacks need not apply it; `purge_expired/2` tolerates the
+    agent tables being absent — see that function.
+
     ## Options
 
       * `:repo` (required) — an `Ecto.Repo`
@@ -57,6 +64,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
 
     @behaviour Noizu.MCP.Auth.Server.Store
 
+    alias Noizu.MCP.Auth.Server.Agent
     alias Noizu.MCP.Auth.Server.Client
     alias Noizu.MCP.Auth.Server.Secret
     alias Noizu.MCP.Auth.Server.Store
@@ -78,6 +86,18 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
                         rotated_at revoked_at expires_at family_expires_at inserted_at)
 
     @consent_columns ~w(subject client_id scope resource granted_at expires_at)
+
+    @agent_account_columns ~w(id handle kind status display_name profile revocation_epoch
+                              status_reason approved_at approved_by inserted_at updated_at)
+
+    @agent_key_columns ~w(fingerprint account_id public_key alg label added_via added_at
+                          revoked_at revoked_by)
+
+    # `id_hash`/`nonce_hash` are deliberately excluded: they are one-way, so a
+    # row can never repopulate `Agent.Session.id`/`.nonce` on read — the same
+    # convention `@code_columns` follows for `code_hash` and `AuthorizationCode.code`.
+    @agent_session_columns ~w(account_id level key_fingerprint public_key client ip_hash
+                              issued_at expires_at consumed_at revoked_at)
 
     # ── clients ────────────────────────────────────────────────────────────
 
@@ -577,12 +597,357 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
             []
           end
 
-      Enum.reduce_while(purges, {:ok, %{}}, fn {name, sql}, {:ok, counts} ->
+      with {:ok, counts} <-
+             Enum.reduce_while(purges, {:ok, %{}}, fn {name, sql}, {:ok, counts} ->
+               case query(opts, sql, [now]) do
+                 {:ok, %{num_rows: rows}} -> {:cont, {:ok, Map.put(counts, name, rows)}}
+                 {:error, reason} -> {:halt, {:error, reason}}
+               end
+             end) do
+        purge_agent_tables(counts, now, opts)
+      end
+    end
+
+    # Unlike the OAuth tables above, the agent tables are optional as a *group*
+    # (`priv/liquibase/noizu_mcp_agent.yaml`, applied only by hosts that use
+    # anonymous keypair or human auth) and there is no `:track_agent_accounts`
+    # opt threaded through `Noizu.MCP.Auth.Server.config/1` the way
+    # `:track_access_tokens` is. Gating on an undefined-relation error rather
+    # than a config flag means a host that never applied that template keeps
+    # sweeping its OAuth tables on schedule instead of the purge job failing
+    # forever the first time it also happens to run against an agent-less repo.
+    defp purge_agent_tables(counts, now, opts) do
+      purges = [
+        agent_sessions: "DELETE FROM #{agent_table(opts, "sessions")} WHERE expires_at < $1",
+        agent_assertion_jti:
+          "DELETE FROM #{agent_table(opts, "assertion_jti")} WHERE expires_at < $1"
+      ]
+
+      Enum.reduce_while(purges, {:ok, counts}, fn {name, sql}, {:ok, acc} ->
         case query(opts, sql, [now]) do
-          {:ok, %{num_rows: rows}} -> {:cont, {:ok, Map.put(counts, name, rows)}}
-          {:error, reason} -> {:halt, {:error, reason}}
+          {:ok, %{num_rows: rows}} ->
+            {:cont, {:ok, Map.put(acc, name, rows)}}
+
+          # Deliberately swallowed, and ONLY here: this `reduce_while` runs
+          # exclusively over the two agent-table statements built above
+          # (`agent_sessions`, `agent_assertion_jti`), never over the OAuth
+          # statements in `purge_expired/2`'s own `reduce_while` — a `42P01`
+          # from an OAuth table still halts that one and propagates as
+          # `{:error, reason}`, same as before this function existed. A `42P01`
+          # here means only "this host never applied noizu_mcp_agent.yaml",
+          # which is an expected, supported configuration, not a fault — so it
+          # is reported as zero rows purged rather than failing the whole
+          # sweep (which would otherwise also stop the OAuth purge above from
+          # running on schedule, on every host that hasn't opted into the
+          # agent tables).
+          {:error, {:store_error, %{postgres: %{code: :undefined_table}}}} ->
+            {:cont, {:ok, acc}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
         end
       end)
+    end
+
+    # ── agent accounts ────────────────────────────────────────────────────────
+
+    @impl Store
+    def put_agent_account(%Agent.Account{} = account, opts) do
+      sql = """
+      INSERT INTO #{agent_table(opts, "accounts")}
+        (id, handle, kind, status, display_name, profile, revocation_epoch,
+         status_reason, approved_at, approved_by, inserted_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      ON CONFLICT (id) DO UPDATE SET
+        handle = EXCLUDED.handle,
+        kind = EXCLUDED.kind,
+        status = EXCLUDED.status,
+        display_name = EXCLUDED.display_name,
+        profile = EXCLUDED.profile,
+        revocation_epoch = EXCLUDED.revocation_epoch,
+        status_reason = EXCLUDED.status_reason,
+        approved_at = EXCLUDED.approved_at,
+        approved_by = EXCLUDED.approved_by,
+        updated_at = EXCLUDED.updated_at
+      """
+
+      params = [
+        account.id,
+        account.handle,
+        to_string(account.kind),
+        to_string(account.status),
+        account.display_name,
+        json(account.profile),
+        account.revocation_epoch,
+        account.status_reason,
+        account.approved_at,
+        account.approved_by,
+        account.inserted_at,
+        account.updated_at
+      ]
+
+      with {:ok, _} <- query(opts, sql, params), do: :ok
+    end
+
+    @impl Store
+    def get_agent_account(id, opts) do
+      sql = "SELECT #{cols(@agent_account_columns)} FROM #{agent_table(opts, "accounts")} WHERE id = $1"
+
+      case query(opts, sql, [id]) do
+        {:ok, %{rows: [row]}} -> {:ok, to_agent_account(row)}
+        {:ok, %{rows: []}} -> {:error, :not_found}
+        error -> error
+      end
+    end
+
+    @impl Store
+    def get_agent_account_by_handle(handle, opts) do
+      sql = """
+      SELECT #{cols(@agent_account_columns)} FROM #{agent_table(opts, "accounts")}
+      WHERE lower(handle) = lower($1)
+      """
+
+      case query(opts, sql, [handle]) do
+        {:ok, %{rows: [row]}} -> {:ok, to_agent_account(row)}
+        {:ok, %{rows: []}} -> {:error, :not_found}
+        error -> error
+      end
+    end
+
+    @impl Store
+    def list_agent_accounts(filter, opts) do
+      status = filter |> Keyword.get(:status) |> string_or_nil()
+      kind = filter |> Keyword.get(:kind) |> string_or_nil()
+      limit = Keyword.get(filter, :limit, 100)
+      offset = Keyword.get(filter, :offset, 0)
+
+      sql = """
+      SELECT #{cols(@agent_account_columns)} FROM #{agent_table(opts, "accounts")}
+      WHERE ($1::text IS NULL OR status = $1)
+        AND ($2::text IS NULL OR kind = $2)
+      ORDER BY inserted_at DESC
+      LIMIT $3 OFFSET $4
+      """
+
+      case query(opts, sql, [status, kind, limit, offset]) do
+        {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, &to_agent_account/1)}
+        error -> error
+      end
+    end
+
+    # ── agent keys ─────────────────────────────────────────────────────────────
+
+    @impl Store
+    def put_agent_key(%Agent.Key{} = key, opts) do
+      sql = """
+      INSERT INTO #{agent_table(opts, "account_keys")}
+        (fingerprint, account_id, public_key, alg, label, added_via, added_at,
+         revoked_at, revoked_by)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      ON CONFLICT (fingerprint) DO UPDATE SET
+        label = EXCLUDED.label,
+        revoked_at = EXCLUDED.revoked_at,
+        revoked_by = EXCLUDED.revoked_by
+      """
+
+      params = [
+        key.fingerprint,
+        key.account_id,
+        key.public_key,
+        to_string(key.alg),
+        key.label,
+        key.added_via,
+        key.added_at,
+        key.revoked_at,
+        key.revoked_by
+      ]
+
+      with {:ok, _} <- query(opts, sql, params), do: :ok
+    end
+
+    @impl Store
+    def get_agent_key(fingerprint, opts) do
+      sql =
+        "SELECT #{cols(@agent_key_columns)} FROM #{agent_table(opts, "account_keys")} WHERE fingerprint = $1"
+
+      case query(opts, sql, [fingerprint]) do
+        {:ok, %{rows: [row]}} -> {:ok, to_agent_key(row)}
+        {:ok, %{rows: []}} -> {:error, :not_found}
+        error -> error
+      end
+    end
+
+    @impl Store
+    def list_agent_keys(account_id, opts) do
+      sql = """
+      SELECT #{cols(@agent_key_columns)} FROM #{agent_table(opts, "account_keys")}
+      WHERE account_id = $1
+      ORDER BY added_at ASC
+      """
+
+      case query(opts, sql, [account_id]) do
+        {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, &to_agent_key/1)}
+        error -> error
+      end
+    end
+
+    # ── agent sessions ─────────────────────────────────────────────────────────
+
+    @impl Store
+    def put_agent_session(%Agent.Session{} = session, opts) do
+      sql = """
+      INSERT INTO #{agent_table(opts, "sessions")}
+        (id_hash, nonce_hash, level, account_id, key_fingerprint, public_key,
+         client, ip_hash, issued_at, expires_at, consumed_at, revoked_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      ON CONFLICT (id_hash) DO UPDATE SET
+        level = EXCLUDED.level,
+        account_id = EXCLUDED.account_id,
+        key_fingerprint = EXCLUDED.key_fingerprint,
+        public_key = EXCLUDED.public_key,
+        client = EXCLUDED.client,
+        ip_hash = EXCLUDED.ip_hash,
+        consumed_at = EXCLUDED.consumed_at,
+        revoked_at = EXCLUDED.revoked_at
+      """
+
+      params = [
+        Secret.token_hash(session.id),
+        Secret.token_hash(session.nonce),
+        to_string(session.level),
+        session.account_id,
+        session.key_fingerprint,
+        session.public_key,
+        json(session.client),
+        session.ip_hash,
+        session.issued_at,
+        session.expires_at,
+        session.consumed_at,
+        session.revoked_at
+      ]
+
+      with {:ok, _} <- query(opts, sql, params), do: :ok
+    end
+
+    @impl Store
+    def get_agent_session(id, opts) do
+      sql =
+        "SELECT #{cols(@agent_session_columns)} FROM #{agent_table(opts, "sessions")} WHERE id_hash = $1"
+
+      case query(opts, sql, [Secret.token_hash(id)]) do
+        {:ok, %{rows: [row]}} -> {:ok, to_agent_session(row)}
+        {:ok, %{rows: []}} -> {:error, :not_found}
+        error -> error
+      end
+    end
+
+    @impl Store
+    def consume_agent_session(id, nonce, opts) do
+      id_hash = Secret.token_hash(id)
+      nonce_hash = Secret.token_hash(nonce)
+
+      sql = """
+      UPDATE #{agent_table(opts, "sessions")}
+      SET consumed_at = now()
+      WHERE id_hash = $1 AND nonce_hash = $2 AND consumed_at IS NULL AND expires_at > now()
+      RETURNING #{cols(@agent_session_columns)}
+      """
+
+      case query(opts, sql, [id_hash, nonce_hash]) do
+        {:ok, %{rows: [row]}} ->
+          {:ok, to_agent_session(row)}
+
+        {:ok, %{rows: []}} ->
+          # Zero rows is ambiguous: unknown id, wrong nonce, expired, or already
+          # consumed. Only the last is a replay — same disambiguation shape as
+          # `take_authorization_code/2` above.
+          replayed_session(id_hash, nonce_hash, opts)
+
+        error ->
+          error
+      end
+    end
+
+    @impl Store
+    def claim_assertion_jti(jti, expires_at, opts) do
+      sql = """
+      INSERT INTO #{agent_table(opts, "assertion_jti")} (jti_hash, expires_at, inserted_at)
+      VALUES ($1,$2,now())
+      ON CONFLICT (jti_hash) DO NOTHING
+      RETURNING jti_hash
+      """
+
+      case query(opts, sql, [Secret.token_hash(jti), expires_at]) do
+        {:ok, %{rows: [_row]}} -> :ok
+        {:ok, %{rows: []}} -> {:error, :replayed}
+        error -> error
+      end
+    end
+
+    # ── human credentials ──────────────────────────────────────────────────────
+
+    @impl Store
+    def put_agent_credential(account_id, password_hash, recovery_hashes, opts) do
+      sql = """
+      INSERT INTO #{agent_table(opts, "credentials")}
+        (account_id, password_hash, recovery_hashes, inserted_at, updated_at)
+      VALUES ($1,$2,$3,now(),now())
+      ON CONFLICT (account_id) DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
+        recovery_hashes = EXCLUDED.recovery_hashes,
+        updated_at = now()
+      """
+
+      with {:ok, _} <-
+             query(opts, sql, [account_id, password_hash, json(recovery_hashes)]),
+           do: :ok
+    end
+
+    @impl Store
+    def get_agent_credential(account_id, opts) do
+      sql = """
+      SELECT password_hash, recovery_hashes FROM #{agent_table(opts, "credentials")}
+      WHERE account_id = $1
+      """
+
+      case query(opts, sql, [account_id]) do
+        {:ok, %{rows: [[password_hash, recovery_hashes]]}} ->
+          {:ok, %{password_hash: password_hash, recovery_hashes: list(recovery_hashes)}}
+
+        {:ok, %{rows: []}} ->
+          {:error, :not_found}
+
+        error ->
+          error
+      end
+    end
+
+    # ── audit ──────────────────────────────────────────────────────────────────
+
+    @impl Store
+    def put_agent_event(event, opts) when is_map(event) do
+      account_id = Map.get(event, "account_id") || Map.get(event, :account_id)
+
+      sql = """
+      INSERT INTO #{agent_table(opts, "account_events")} (account_id, event, inserted_at)
+      VALUES ($1,$2,now())
+      """
+
+      with {:ok, _} <- query(opts, sql, [account_id, json(event)]), do: :ok
+    end
+
+    @impl Store
+    def list_agent_events(account_id, opts) do
+      sql = """
+      SELECT event FROM #{agent_table(opts, "account_events")}
+      WHERE account_id = $1
+      ORDER BY inserted_at DESC
+      """
+
+      case query(opts, sql, [account_id]) do
+        {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [event] -> event end)}
+        error -> error
+      end
     end
 
     # ── internals ──────────────────────────────────────────────────────────
@@ -639,6 +1004,101 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
         error -> error
       end
     end
+
+    defp replayed_session(id_hash, nonce_hash, opts) do
+      sql = """
+      SELECT 1 FROM #{agent_table(opts, "sessions")}
+      WHERE id_hash = $1 AND nonce_hash = $2 AND consumed_at IS NOT NULL
+      """
+
+      case query(opts, sql, [id_hash, nonce_hash]) do
+        {:ok, %{rows: [_row]}} -> {:error, :replayed}
+        {:ok, %{rows: []}} -> {:error, :not_found}
+        error -> error
+      end
+    end
+
+    defp to_agent_account(row) do
+      fields = row_map(@agent_account_columns, row)
+
+      %Agent.Account{
+        id: fields["id"],
+        handle: fields["handle"],
+        kind: agent_kind(fields["kind"]),
+        status: agent_status(fields["status"]),
+        display_name: fields["display_name"],
+        profile: fields["profile"] || %{},
+        revocation_epoch: fields["revocation_epoch"] || 0,
+        status_reason: fields["status_reason"],
+        approved_at: fields["approved_at"],
+        approved_by: fields["approved_by"],
+        inserted_at: fields["inserted_at"],
+        updated_at: fields["updated_at"]
+      }
+    end
+
+    defp to_agent_key(row) do
+      fields = row_map(@agent_key_columns, row)
+
+      %Agent.Key{
+        fingerprint: fields["fingerprint"],
+        account_id: fields["account_id"],
+        public_key: fields["public_key"],
+        alg: :ed25519,
+        label: fields["label"],
+        added_via: fields["added_via"],
+        added_at: fields["added_at"],
+        revoked_at: fields["revoked_at"],
+        revoked_by: fields["revoked_by"]
+      }
+    end
+
+    # `id`/`nonce` are left at their struct defaults (`nil`) — only their
+    # hashes are ever stored, so there is nothing to read back. Matches
+    # `to_code/1` leaving `AuthorizationCode.code` unset.
+    defp to_agent_session(row) do
+      fields = row_map(@agent_session_columns, row)
+
+      %Agent.Session{
+        level: agent_level(fields["level"]),
+        account_id: fields["account_id"],
+        key_fingerprint: fields["key_fingerprint"],
+        public_key: fields["public_key"],
+        client: fields["client"] || %{},
+        ip_hash: fields["ip_hash"],
+        issued_at: fields["issued_at"],
+        expires_at: fields["expires_at"],
+        consumed_at: fields["consumed_at"],
+        revoked_at: fields["revoked_at"]
+      }
+    end
+
+    defp agent_kind("human"), do: :human
+    defp agent_kind(_value), do: :agent
+
+    defp agent_status(value) when is_binary(value) do
+      case value do
+        "approved" -> :approved
+        "rejected" -> :rejected
+        "suspended" -> :suspended
+        _ -> :pending
+      end
+    end
+
+    defp agent_status(_value), do: :pending
+
+    defp agent_level(value) when is_binary(value) do
+      case value do
+        "agent" -> :agent
+        "human" -> :human
+        _ -> :anonymous
+      end
+    end
+
+    defp agent_level(_value), do: :anonymous
+
+    defp string_or_nil(nil), do: nil
+    defp string_or_nil(value), do: to_string(value)
 
     defp to_client(row) do
       fields = row_map(@client_columns, row)
@@ -819,6 +1279,17 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       case Keyword.get(opts, :prefix) do
         nil -> "mcp_oauth_" <> name
         prefix -> ~s("#{prefix}".mcp_oauth_#{name})
+      end
+    end
+
+    # Same `:prefix` option as `table/2`, separate namespace: the agent tables
+    # (`priv/liquibase/noizu_mcp_agent.yaml`) are an independent, optional
+    # template and are named `mcp_agent_*` rather than `mcp_oauth_*` so the two
+    # can be applied — or not — without either implying the other.
+    defp agent_table(opts, name) do
+      case Keyword.get(opts, :prefix) do
+        nil -> "mcp_agent_" <> name
+        prefix -> ~s("#{prefix}".mcp_agent_#{name})
       end
     end
 

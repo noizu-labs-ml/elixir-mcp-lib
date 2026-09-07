@@ -267,3 +267,12 @@ One hard gate remains at PRD-6. **S1** (handshake) or **S3** (auth → `%Princip
 
 Architecture source: accepted ADR-008. The maintainer approved the scoped
 docs-with-implementation sequencing exception for the pre-existing feature branch.
+
+## Series 4 — PostgreSQL cache synchronization
+
+| PRD | File | Title | Status |
+|---|---|---|---|
+| 13 | [PRD-13-postgres-cache-synchronization.md](PRD-13-postgres-cache-synchronization.md) | Regular tables, conditional writes and durable synchronization | Accepted |
+
+Architecture source: accepted ADR-009, maintainer sign-off 2026-09-07.
+This change contains documentation only; docs-only sequencing applies.

@@ -539,6 +539,25 @@ defmodule Noizu.MCP.Server.Session do
     )
   end
 
+  defp dispatch(state, method, id, params)
+       when method in [
+              "sync/capabilities",
+              "sync/snapshot",
+              "sync/changes",
+              "sync/mutate",
+              "sync/operation"
+            ] do
+    if state.server.__mcp__(:opts)[:sync] == true do
+      dispatch_feature(state, method, id, params, {:handle_sync, 3},
+        run: fn server, request, ctx ->
+          Noizu.MCP.Server.Features.Sync.dispatch(server, method, request, ctx)
+        end
+      )
+    else
+      reply_result(state, id, {:error, Error.method_not_found(method)})
+    end
+  end
+
   defp dispatch(state, method, id, _params) do
     reply_result(state, id, {:error, Error.method_not_found(method)})
   end

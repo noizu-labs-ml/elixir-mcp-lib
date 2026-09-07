@@ -25,6 +25,7 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
 
   defmacro __using__(_opts) do
     quote do
+      alias Noizu.MCP.Auth.Server.Agent
       alias Noizu.MCP.Auth.Server.Client
       alias Noizu.MCP.Auth.Server.Secret
       alias Noizu.MCP.Auth.Server.Store
@@ -110,6 +111,39 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
       defp next_refresh(record) do
         raw = Store.generate_token()
         {raw, %{record | id: Store.generate_id(), token: raw, rotated_at: nil, rotated_to: nil}}
+      end
+
+      defp unique_handle_suffix, do: 4 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
+
+      defp agent_account(overrides \\ []) do
+        {:ok, account} =
+          Agent.Account.new(
+            Keyword.put_new(overrides, :handle, "agent-" <> unique_handle_suffix())
+          )
+
+        account
+      end
+
+      defp put_agent_account(ctx, overrides \\ []) do
+        account = agent_account(overrides)
+        :ok = ctx.adapter.put_agent_account(account, ctx.store_opts)
+        account
+      end
+
+      defp agent_key(account_id, overrides \\ []) do
+        raw = 32 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+        {:ok, key} = Agent.Key.new(raw, [account_id: account_id] ++ overrides)
+        key
+      end
+
+      defp put_agent_key(ctx, account_id, overrides \\ []) do
+        key = agent_key(account_id, overrides)
+        :ok = ctx.adapter.put_agent_key(key, ctx.store_opts)
+        key
+      end
+
+      defp agent_session(overrides \\ []) do
+        struct(Agent.Session.new(ttl: 600), overrides)
       end
 
       # ── clients ──────────────────────────────────────────────────────────
@@ -580,6 +614,279 @@ defmodule Noizu.MCP.Auth.Server.StoreConformanceCase do
                      ctx.adapter.get_refresh_token(expired_refresh, ctx.store_opts)
 
             assert {:ok, _} = ctx.adapter.get_refresh_token(live_refresh, ctx.store_opts)
+          end
+        end
+      end
+
+      # ── agent accounts (optional) ───────────────────────────────────────
+
+      describe "conformance: agent accounts" do
+        test "round-trips an account by id", ctx do
+          if Store.supports?(ctx.adapter, {:put_agent_account, 2}) do
+            account = put_agent_account(ctx, display_name: "Test Agent")
+
+            assert {:ok, loaded} = ctx.adapter.get_agent_account(account.id, ctx.store_opts)
+            assert loaded.id == account.id
+            assert loaded.handle == account.handle
+            assert loaded.display_name == "Test Agent"
+          end
+        end
+
+        test "handle lookup is case-insensitive", ctx do
+          if Store.supports?(ctx.adapter, {:get_agent_account_by_handle, 2}) do
+            account = put_agent_account(ctx, handle: "MixedCase-" <> unique_handle_suffix())
+
+            assert {:ok, loaded} =
+                     ctx.adapter.get_agent_account_by_handle(
+                       String.upcase(account.handle),
+                       ctx.store_opts
+                     )
+
+            assert loaded.id == account.id
+
+            assert {:ok, ^loaded} =
+                     ctx.adapter.get_agent_account_by_handle(
+                       String.downcase(account.handle),
+                       ctx.store_opts
+                     )
+          end
+        end
+
+        test "an unknown id or handle is :not_found", ctx do
+          if Store.supports?(ctx.adapter, {:get_agent_account, 2}) do
+            assert {:error, :not_found} = ctx.adapter.get_agent_account("nope", ctx.store_opts)
+          end
+
+          if Store.supports?(ctx.adapter, {:get_agent_account_by_handle, 2}) do
+            assert {:error, :not_found} =
+                     ctx.adapter.get_agent_account_by_handle("nope", ctx.store_opts)
+          end
+        end
+
+        test "list_agent_accounts/2, when supported", ctx do
+          if Store.supports?(ctx.adapter, {:list_agent_accounts, 2}) do
+            _a = put_agent_account(ctx)
+            _b = put_agent_account(ctx)
+
+            assert {:ok, accounts} = ctx.adapter.list_agent_accounts([], ctx.store_opts)
+            assert length(accounts) >= 2
+          end
+        end
+      end
+
+      # ── agent keys (optional) ────────────────────────────────────────────
+
+      describe "conformance: agent keys" do
+        test "round-trips a key by fingerprint", ctx do
+          if Store.supports?(ctx.adapter, {:put_agent_key, 2}) do
+            account = put_agent_account(ctx)
+            key = put_agent_key(ctx, account.id, label: "primary")
+
+            assert {:ok, loaded} = ctx.adapter.get_agent_key(key.fingerprint, ctx.store_opts)
+            assert loaded.fingerprint == key.fingerprint
+            assert loaded.account_id == account.id
+            assert loaded.public_key == key.public_key
+            assert loaded.label == "primary"
+          end
+        end
+
+        test "an unknown fingerprint is :not_found", ctx do
+          if Store.supports?(ctx.adapter, {:get_agent_key, 2}) do
+            assert {:error, :not_found} = ctx.adapter.get_agent_key("nope", ctx.store_opts)
+          end
+        end
+
+        test "list_agent_keys/2 returns revoked keys too", ctx do
+          if Store.supports?(ctx.adapter, {:list_agent_keys, 2}) do
+            account = put_agent_account(ctx)
+            active = put_agent_key(ctx, account.id)
+            revoked = agent_key(account.id) |> Agent.Key.revoke("admin", DateTime.utc_now())
+            :ok = ctx.adapter.put_agent_key(revoked, ctx.store_opts)
+
+            assert {:ok, keys} = ctx.adapter.list_agent_keys(account.id, ctx.store_opts)
+            fingerprints = Enum.map(keys, & &1.fingerprint)
+
+            assert active.fingerprint in fingerprints
+            assert revoked.fingerprint in fingerprints
+          end
+        end
+      end
+
+      # ── agent sessions (optional) ────────────────────────────────────────
+
+      describe "conformance: agent sessions" do
+        test "round-trips a session by raw id", ctx do
+          if Store.supports?(ctx.adapter, {:put_agent_session, 2}) do
+            session = agent_session()
+            :ok = ctx.adapter.put_agent_session(session, ctx.store_opts)
+
+            assert {:ok, loaded} = ctx.adapter.get_agent_session(session.id, ctx.store_opts)
+            assert loaded.level == session.level
+          end
+        end
+
+        test "consume with the correct nonce succeeds exactly once", ctx do
+          if Store.supports?(ctx.adapter, {:consume_agent_session, 3}) do
+            session = agent_session()
+            :ok = ctx.adapter.put_agent_session(session, ctx.store_opts)
+
+            assert {:ok, _consumed} =
+                     ctx.adapter.consume_agent_session(
+                       session.id,
+                       session.nonce,
+                       ctx.store_opts
+                     )
+
+            assert {:error, :replayed} =
+                     ctx.adapter.consume_agent_session(
+                       session.id,
+                       session.nonce,
+                       ctx.store_opts
+                     )
+          end
+        end
+
+        test "consume with the wrong nonce is :not_found and does not consume", ctx do
+          if Store.supports?(ctx.adapter, {:consume_agent_session, 3}) do
+            session = agent_session()
+            :ok = ctx.adapter.put_agent_session(session, ctx.store_opts)
+
+            assert {:error, :not_found} =
+                     ctx.adapter.consume_agent_session(session.id, "wrong-nonce", ctx.store_opts)
+
+            # The real nonce still works — the bad attempt did not burn the session.
+            assert {:ok, _} =
+                     ctx.adapter.consume_agent_session(
+                       session.id,
+                       session.nonce,
+                       ctx.store_opts
+                     )
+          end
+        end
+
+        test "consuming an unknown session is :not_found", ctx do
+          if Store.supports?(ctx.adapter, {:consume_agent_session, 3}) do
+            assert {:error, :not_found} =
+                     ctx.adapter.consume_agent_session("nope", "nope", ctx.store_opts)
+          end
+        end
+
+        test "20 concurrent consumes of one session: exactly one succeeds", ctx do
+          if Store.supports?(ctx.adapter, {:consume_agent_session, 3}) do
+            session = agent_session()
+            :ok = ctx.adapter.put_agent_session(session, ctx.store_opts)
+
+            results =
+              1..20
+              |> Task.async_stream(
+                fn _ ->
+                  ctx.adapter.consume_agent_session(session.id, session.nonce, ctx.store_opts)
+                end,
+                max_concurrency: 20,
+                timeout: 10_000
+              )
+              |> Enum.map(fn {:ok, result} -> result end)
+
+            successes = Enum.count(results, &match?({:ok, _}, &1))
+            replays = Enum.count(results, &match?({:error, :replayed}, &1))
+
+            assert successes == 1, "expected exactly one consume, got #{successes}"
+            assert successes + replays == 20, "every loser must report a replay"
+          end
+        end
+      end
+
+      # ── assertion jti claims (optional) ──────────────────────────────────
+
+      describe "conformance: claim_assertion_jti" do
+        test "first claim is :ok, second is a REPLAY", ctx do
+          if Store.supports?(ctx.adapter, {:claim_assertion_jti, 3}) do
+            jti = Store.generate_token()
+            expires = DateTime.add(DateTime.utc_now(), 600, :second)
+
+            assert :ok = ctx.adapter.claim_assertion_jti(jti, expires, ctx.store_opts)
+
+            assert {:error, :replayed} =
+                     ctx.adapter.claim_assertion_jti(jti, expires, ctx.store_opts)
+          end
+        end
+
+        test "20 concurrent claims of one jti: exactly one succeeds", ctx do
+          if Store.supports?(ctx.adapter, {:claim_assertion_jti, 3}) do
+            jti = Store.generate_token()
+            expires = DateTime.add(DateTime.utc_now(), 600, :second)
+
+            results =
+              1..20
+              |> Task.async_stream(
+                fn _ -> ctx.adapter.claim_assertion_jti(jti, expires, ctx.store_opts) end,
+                max_concurrency: 20,
+                timeout: 10_000
+              )
+              |> Enum.map(fn {:ok, result} -> result end)
+
+            successes = Enum.count(results, &match?(:ok, &1))
+            replays = Enum.count(results, &match?({:error, :replayed}, &1))
+
+            assert successes == 1, "expected exactly one claim, got #{successes}"
+            assert successes + replays == 20, "every loser must report a replay"
+          end
+        end
+      end
+
+      # ── human credentials (optional) ─────────────────────────────────────
+
+      describe "conformance: agent credentials" do
+        test "round-trips already-hashed credentials", ctx do
+          if Store.supports?(ctx.adapter, {:put_agent_credential, 4}) do
+            account = put_agent_account(ctx)
+
+            assert :ok =
+                     ctx.adapter.put_agent_credential(
+                       account.id,
+                       "pw-hash",
+                       ["rec-1", "rec-2"],
+                       ctx.store_opts
+                     )
+
+            assert {:ok, loaded} = ctx.adapter.get_agent_credential(account.id, ctx.store_opts)
+            assert loaded.password_hash == "pw-hash"
+            assert loaded.recovery_hashes == ["rec-1", "rec-2"]
+          end
+        end
+
+        test "an unknown account is :not_found", ctx do
+          if Store.supports?(ctx.adapter, {:get_agent_credential, 2}) do
+            assert {:error, :not_found} =
+                     ctx.adapter.get_agent_credential("nope", ctx.store_opts)
+          end
+        end
+      end
+
+      # ── agent audit (optional) ───────────────────────────────────────────
+
+      describe "conformance: agent events" do
+        test "list_agent_events/2 returns newest first", ctx do
+          if Store.supports?(ctx.adapter, {:put_agent_event, 2}) do
+            account = put_agent_account(ctx)
+
+            :ok =
+              ctx.adapter.put_agent_event(
+                %{"account_id" => account.id, "action" => "created", "at" => DateTime.utc_now()},
+                ctx.store_opts
+              )
+
+            :ok =
+              ctx.adapter.put_agent_event(
+                %{"account_id" => account.id, "action" => "approved", "at" => DateTime.utc_now()},
+                ctx.store_opts
+              )
+
+            assert {:ok, [newest, oldest]} =
+                     ctx.adapter.list_agent_events(account.id, ctx.store_opts)
+
+            assert newest["action"] == "approved"
+            assert oldest["action"] == "created"
           end
         end
       end

@@ -1,8 +1,18 @@
 # Noizu MCP
 
+[![Hex](https://img.shields.io/hexpm/v/noizu_mcp)](https://hex.pm/packages/noizu_mcp)
+[![Hex Docs](https://img.shields.io/badge/docs-hexdocs-blue)](https://hexdocs.pm/noizu_mcp)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 [Model Context Protocol](https://modelcontextprotocol.io) for Elixir — **server
-and client** — targeting spec revision **2025-11-25** (negotiates down to
-2025-06-18).
+and client**, full spec surface, targeting spec revision **2025-11-25**
+(negotiates down to 2025-06-18). Define tools, resources, and prompts with a
+compile-time DSL and serve them over stdio or Streamable HTTP; consume other
+MCP servers from the same library; mount MCP data as real local files;
+federate whole MCP servers behind one catalog; project your surface into
+Postgres relations.
+
+**Core protocol**
 
 - 🧩 **Declarative components** — tools (compile-time schema DSL → JSON Schema,
   validated atom-keyed args via [JSV](https://hex.pm/packages/jsv), 2020-12
@@ -16,29 +26,52 @@ and client** — targeting spec revision **2025-11-25** (negotiates down to
   can implement by hand
 - 🔌 **Transports**: stdio and Streamable HTTP (Plug — mount in Phoenix or run
   standalone on Bandit) on both the server and the client side
-- 📁 **VFS filesystem surface** — file-shaped backends (behaviour + DSL +
-  conformance battery), unix-socket & WebSocket transports with live change
-  events, a `/etc/dev` control tree, and an `mcp_fs_search` grep tool (see the
-  VFS section below)
 - ↔️ **Full bidirectionality**: server handlers can `sample`, `elicit`, and
   `list_roots` against the connected client mid-call
+
+**Extension architecture** (opt-in; interfaces frozen since 0.3.0)
+
+- 🪪 **Per-caller toolsets** — one resolution path for every tool surface:
+  static registrations → persisted grants/negotiations (per-caller adjustments,
+  which extend but never hide) → ACL visibility gating, over pluggable
+  providers (ETS, Postgres/Ecto, or none) with fail-closed seams — see
+  [Per-caller toolsets](#per-caller-toolsets-acl--persistence) below
 - 🔐 **OAuth 2.1**: resource-server enforcement (`TokenVerifier`,
-  `WWW-Authenticate`, RFC 9728 metadata) and a full client flow (discovery,
-  PKCE S256, refresh, `resource` indicators, scope step-up)
+  `WWW-Authenticate`, RFC 9728 metadata) and a full authorization-server
+  facade for hosts; complete client flow (discovery, PKCE S256, refresh,
+  `resource` indicators, scope step-up)
+- 📁 **VFS filesystem surface** — file-shaped backends (behaviour + DSL +
+  conformance battery), unix-socket & WebSocket transports with live change
+  events, a `/etc/dev` control tree, an `mcp_fs_search` grep tool, and two
+  mounters that materialize a tree as **real local files** (Elixir escript
+  and a Go FUSE daemon — see the VFS section below)
+- 🛰️ **Engine federation** (experimental) — attach other MCP servers with a
+  row insert; one namespaced catalog across stdio and HTTP upstreams (see
+  [Engine federation](#engine-federation-experimental))
+- 🐘 **`sql/*` projection** (experimental) — expose tools, resources, and
+  datasets as typed Postgres relations for the `pg_mcp` foreign-data wrapper
+  (see [SQL projection](#sql-projection-experimental-sql))
+
+**Dev experience**
+
+- 🔍 **Built-in inspector** — `mix mcp.client` opens an HTML inspector for any
+  server, including point-and-click handling of sampling/elicitation (see
+  [Inspector](#inspector))
 - 🧪 **First-class testing** with `Noizu.MCP.Test` over an in-memory transport
   (`async: true` safe), plus conformance checks against the official spec schema
 - 📈 Concurrent request handling per session — slow tools never block ping,
   cancellation, or progress
 
-> Status: pre-release (0.1.x). All protocol features above are implemented and
-> covered by 240+ tests including real-subprocess stdio e2e and Bandit HTTP
-> round-trips. Pre-1.0 API may still move.
+> **Status:** 0.4.0, published on hex. Pre-1.0 — APIs may still move
+> (toolset/ACL/persistence interfaces frozen at 0.3.0; changes go through an
+> ADR). Covered by 1,500+ tests including real-subprocess stdio e2e and
+> Bandit HTTP round-trips.
 
 ## Quickstart: a stdio server
 
 ```elixir
 # mix.exs
-{:noizu_mcp, "~> 0.1"}
+{:noizu_mcp, "~> 0.4"}
 ```
 
 Define a tool and a server:
@@ -188,6 +221,30 @@ or not they were listed. For session-gated visibility (an "unlock" flow),
 override `handle_list_tools/2` with `include_hidden:` driven by session state
 and push `notify_changed(:tools)` when it flips — worked example in the
 [Toolkits, Categories & Hidden Tools](guides/toolkits_and_discovery.md) guide.
+
+## Per-caller toolsets (ACL & persistence)
+
+The hidden flag above is a static per-module switch; the layer beneath it is
+dynamic and per-caller. Every tool-surface consumer — `tools/list`,
+`tools/call`, and the catalog tool — resolves through one path: your static
+registrations, then persisted layers (per-caller grants and negotiations —
+the primitives to build on if you expose an operator or preference UI; they
+adjust descriptions, ordering, or visibility for one principal, extending but
+never hiding), then ACL visibility gating.
+You implement a single policy seam (`Noizu.MCP.ACL.Provider` — a binary
+`check/5` verdict); the library owns no policy, and an unconfigured ACL is an
+inert `:allow`. Denials are silent: an ACL-hidden tool is indistinguishable
+from an absent one, and consent-gated tools stay listed but resolve to one
+honest `:forbidden`.
+
+State lives behind the `Noizu.MCP.Persistence` provider contract — an ETS
+memory provider (default), Postgres via the Ecto provider (tables ship as
+change sets for an Oban-shaped `Migration.Runner`), or a disabled provider —
+and all writes flow through the `Noizu.MCP.Store` facade (write → version
+bump → cache invalidate → best-effort fan-out). Design notes:
+[toolsets](docs/arch/toolsets.md) ·
+[authorization](docs/arch/authorization.md) ·
+[persistence](docs/arch/persistence.md).
 
 ## Streamable HTTP (Phoenix / Bandit)
 
@@ -626,20 +683,21 @@ end
 
 Guides on [hexdocs](https://hexdocs.pm/noizu_mcp): Getting Started ·
 Tools & Schemas · Toolkits & Discovery · Resources & Prompts · the Handler
-Context · Client · Streamable HTTP · stdio · Authentication · Testing ·
-MCP Inspector — plus a cheatsheet.
+Context · Client · Streamable HTTP · stdio · Authentication · Authorization
+Server · Postgres (`sql/*` + the FDW) · Engine · MCP Client Compatibility ·
+Testing · MCP Inspector — plus a cheatsheet.
 
 ## Examples
 
-- [`examples/echo_stdio`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/echo_stdio)
+- [`examples/echo_stdio`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/echo_stdio)
   — minimal stdio server, ready for `claude mcp add`
-- [`examples/no_dsl_server`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/no_dsl_server)
+- [`examples/no_dsl_server`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/no_dsl_server)
   — behaviour-only server (no macros), hand-written schemas and dynamic dispatch
-- [`examples/http_kitchen_sink`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/http_kitchen_sink)
+- [`examples/http_kitchen_sink`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/http_kitchen_sink)
   — Streamable HTTP server on Bandit exercising the full feature surface
   (progress, cancellation, sampling, subscriptions, templates, completion,
   a toolkit module, hidden tools + the catalog discovery tool)
-- [`examples/agent_client`](https://github.com/noizu-labs/noizu-mcp/tree/main/examples/agent_client)
+- [`examples/agent_client`](https://github.com/noizu-labs-ml/elixir-mcp-lib/tree/main/examples/agent_client)
   — client demo: spawns `echo_stdio` over stdio, lists and calls tools with
   progress, answers elicitations
 

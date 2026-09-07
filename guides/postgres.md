@@ -147,3 +147,9 @@ operator runbook — image roll with failover warning, one foreign server for
 the engine, USER MAPPINGS from Infisical, import, attach-as-rows, upgrade
 (`ALTER EXTENSION pg_mcp UPDATE`) and rollback (`DROP EXTENSION pg_mcp
 CASCADE`; audit tables survive) — lives at `docs/pg-mcp-install.md`.
+
+## Regular local cache tables
+
+For revision-checked SQL/MCP edits, durable queues and a controlled PostgreSQL
+source, see [PostgreSQL cache synchronization](postgres_sync.md). This optional
+experimental subsystem uses regular local tables alongside the existing FDW.

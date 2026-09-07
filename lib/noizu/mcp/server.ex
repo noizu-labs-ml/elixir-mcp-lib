@@ -148,6 +148,9 @@ defmodule Noizu.MCP.Server do
   @callback handle_sql_modify(relation :: String.t(), params :: map(), Ctx.t()) ::
               {:ok, map()} | {:error, Error.t()}
 
+  @doc "Handles an explicitly enabled sync/version 1 method using a principal-bound Source."
+  @callback handle_sync(String.t(), map(), Ctx.t()) :: {:ok, map()} | {:error, Error.t()}
+
   @doc false
   @callback server_info() :: Types.Implementation.t()
 
@@ -167,7 +170,8 @@ defmodule Noizu.MCP.Server do
                       handle_complete: 3,
                       handle_sql_schema: 2,
                       handle_sql_scan: 3,
-                      handle_sql_modify: 3
+                      handle_sql_modify: 3,
+                      handle_sync: 3
 
   # ⟦𓍂𓐝𓋠𓍒⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
@@ -831,6 +835,7 @@ defmodule Noizu.MCP.Server do
           completions?: unquote(completions?),
           vfs?: unquote(vfs != []),
           sql?: unquote(sql?),
+          sync?: unquote(opts[:sync] == true and defines?.({:handle_sync, 3})),
           user_subscribe?: unquote(defines?.({:handle_subscribe, 2}))
         })
       end
@@ -907,6 +912,17 @@ defmodule Noizu.MCP.Server do
       else
         caps
       end
+    end)
+    |> then(fn caps ->
+      if Map.get(flags, :sync?, false),
+        do:
+          Map.update(
+            caps,
+            "experimental",
+            %{"sync" => %{"version" => 1}},
+            &Map.put(&1, "sync", %{"version" => 1})
+          ),
+        else: caps
     end)
     |> Map.put("logging", %{})
   end

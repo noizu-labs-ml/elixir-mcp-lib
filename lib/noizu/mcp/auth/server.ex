@@ -84,6 +84,12 @@ defmodule Noizu.MCP.Auth.Server do
       affects preconfigured ones.
     * `:api_keys` — options for `ApiKeyTokenPlug`, which trades a host API key
       for an access token. Omit to disable that endpoint.
+    * `:agent_auth` — anonymous keypair authentication for MCP agents:
+      `[enabled: true, session_ttl: 600, assertion_max_age: 300, clock_skew: 60,
+      max_keys: 10, require_approval: true, ip_salt: <<...>>,
+      pending_scope: [...], approved_scope: [...]]`. Off by default; see
+      `Noizu.MCP.Auth.Server.Agent`. Turning it on requires a store that
+      implements the agent callbacks, and boot fails loudly if it does not.
     * `:rate_limit` — `{mod, fun}` or 3-arity fun called as
       `(endpoint, conn, config)` returning `:ok | {:error, retry_after_seconds}`.
       The limiter itself is host-owned.
@@ -107,7 +113,14 @@ defmodule Noizu.MCP.Auth.Server do
     jwks: "/oauth/jwks",
     consent: "/oauth/consent",
     callback: "/oauth/callback",
-    api_token: "/api/mcp/token"
+    api_token: "/api/mcp/token",
+    # Agent endpoints share the `/oauth` mount so one `forward` still serves the
+    # whole server. Their last path segments — session, agents, keys — are what
+    # `Router` dispatches on, so an override must keep them distinct from
+    # authorize/consent/callback/token/register/revoke/jwks or it will shadow one.
+    agent_session: "/oauth/session",
+    agent_register: "/oauth/agents",
+    agent_keys: "/oauth/keys"
   }
 
   @doc """
@@ -143,6 +156,7 @@ defmodule Noizu.MCP.Auth.Server do
       upstream: upstream(opts),
       consent: Keyword.get(opts, :consent, []),
       api_keys: Keyword.get(opts, :api_keys),
+      agent_auth: agent_auth!(opts),
       rate_limit: Keyword.get(opts, :rate_limit),
       track_access_tokens: track_access_tokens,
       leeway: Keyword.get(opts, :leeway, 0),
@@ -342,6 +356,34 @@ defmodule Noizu.MCP.Auth.Server do
       }
     end)
   end
+
+  # An agent-auth config that names a store missing the agent callbacks is the
+  # kind of mistake that presents as "registration 500s, nothing in the logs, and
+  # only for agents" — hours from symptom to cause. Refuse to boot instead.
+  defp agent_auth!(opts) do
+    agent_auth = Keyword.get(opts, :agent_auth, [])
+
+    if Keyword.get(agent_auth, :enabled, false) do
+      {adapter, _store_opts} = Keyword.fetch!(opts, :store) |> normalize_store()
+
+      case Noizu.MCP.Auth.Server.Agent.missing_callbacks(adapter) do
+        [] ->
+          agent_auth
+
+        missing ->
+          raise ArgumentError,
+                "Auth.Server: agent_auth is enabled but #{inspect(adapter)} does not implement " <>
+                  "#{Enum.map_join(missing, ", ", fn {f, a} -> "#{f}/#{a}" end)}. " <>
+                  "Implement the agent block of Noizu.MCP.Auth.Server.Store, or set " <>
+                  "agent_auth: [enabled: false]."
+      end
+    else
+      agent_auth
+    end
+  end
+
+  defp normalize_store({adapter, store_opts}), do: {adapter, store_opts}
+  defp normalize_store(adapter) when is_atom(adapter), do: {adapter, []}
 
   defp upstream(opts) do
     case Keyword.get(opts, :upstream) do

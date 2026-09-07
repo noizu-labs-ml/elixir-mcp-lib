@@ -263,6 +263,22 @@ if Code.ensure_loaded?(Plug.Conn) do
       end
     end
 
+    @doc """
+    The bearer token from the `authorization` header, if there is one.
+
+    Returns `nil` rather than an error: an endpoint that accepts several kinds of
+    caller decides for itself what a missing token means, and a helper that
+    guessed would have to guess wrong for one of them.
+    """
+    @spec bearer(Plug.Conn.t()) :: String.t() | nil
+    def bearer(conn) do
+      case conn |> get_req_header("authorization") |> List.first() do
+        "Bearer " <> token -> String.trim(token)
+        "bearer " <> token -> String.trim(token)
+        _ -> nil
+      end
+    end
+
     @doc "405 with an `allow` header."
     @spec method_not_allowed(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
     def method_not_allowed(conn, allow) do

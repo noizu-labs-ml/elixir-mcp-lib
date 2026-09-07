@@ -47,6 +47,7 @@ defmodule Noizu.MCP.Auth.Server.Store do
   replay silently disables reuse detection.
   """
 
+  alias Noizu.MCP.Auth.Server.Agent
   alias Noizu.MCP.Auth.Server.Client
 
   @typedoc "Adapter options — the second element of `store: {Module, opts}`."
@@ -353,12 +354,173 @@ defmodule Noizu.MCP.Auth.Server.Store do
   @callback purge_expired(now :: DateTime.t(), opts()) ::
               {:ok, %{optional(atom()) => non_neg_integer()}} | {:error, reason()}
 
+
+  # ── agent accounts (optional: anonymous keypair auth) ────────────────────
+
+  @doc """
+  Persist (insert or replace) an agent account. Optional.
+
+  `Agent.Account.id` and `.handle` are **public identifiers, not credentials** —
+  store them in the clear. They are what an admin queue lists and what an
+  attribution line renders; hashing them would make both impossible. This is the
+  one place the hashing rule above does not apply, and it is deliberate.
+
+  The handle must be enforced unique by the adapter, case-insensitively. The
+  service layer checks for a collision first, but only a unique constraint closes
+  the race between two simultaneous registrations of the same handle.
+  """
+  @callback put_agent_account(Agent.Account.t(), opts()) :: :ok | {:error, reason()}
+
+  @doc "Fetch an agent account by its public id. Optional."
+  @callback get_agent_account(id :: String.t(), opts()) ::
+              {:ok, Agent.Account.t()} | {:error, :not_found} | {:error, reason()}
+
+  @doc "Fetch an agent account by handle, case-insensitively. Optional."
+  @callback get_agent_account_by_handle(handle :: String.t(), opts()) ::
+              {:ok, Agent.Account.t()} | {:error, :not_found} | {:error, reason()}
+
+  @doc """
+  List accounts for an admin queue. Optional.
+
+  `filter` accepts `:status`, `:kind`, `:limit` and `:offset`. An adapter may
+  ignore filters it cannot serve, but must never return *more* than `:limit`.
+  """
+  @callback list_agent_accounts(filter :: keyword(), opts()) ::
+              {:ok, [Agent.Account.t()]} | {:error, reason()}
+
+  # ── agent keys ───────────────────────────────────────────────────────────
+
+  @doc """
+  Persist (insert or replace) a public key. Optional.
+
+  A public key and its thumbprint are public by definition — store both in the
+  clear. `fingerprint` is globally unique, not unique per account: the same key
+  must never authenticate as two different accounts.
+  """
+  @callback put_agent_key(Agent.Key.t(), opts()) :: :ok | {:error, reason()}
+
+  @doc "Fetch a key by thumbprint, revoked or not. Optional."
+  @callback get_agent_key(fingerprint :: String.t(), opts()) ::
+              {:ok, Agent.Key.t()} | {:error, :not_found} | {:error, reason()}
+
+  @doc "Every key for an account, revoked ones included. Optional."
+  @callback list_agent_keys(account_id :: String.t(), opts()) ::
+              {:ok, [Agent.Key.t()]} | {:error, reason()}
+
+  # ── agent sessions ───────────────────────────────────────────────────────
+
+  @doc """
+  Persist an anonymous session. Optional.
+
+  `Agent.Session.id` and `.nonce` **are** credentials and must be hashed with
+  `Secret.token_hash/1` — the nonce is the value an assertion proves knowledge of,
+  and a leaked session table would otherwise hand an attacker every live
+  challenge.
+  """
+  @callback put_agent_session(Agent.Session.t(), opts()) :: :ok | {:error, reason()}
+
+  @doc """
+  Fetch a session by its raw id. Optional. Hash before looking up.
+
+  Returns the session whether or not it is still usable; the caller decides, so
+  that "expired" and "never existed" can be told apart in logs.
+  """
+  @callback get_agent_session(id :: raw(), opts()) ::
+              {:ok, Agent.Session.t()} | {:error, :not_found} | {:error, reason()}
+
+  @doc """
+  Atomically spend a session against a nonce. Optional. **Must be atomic.**
+
+  This is the anonymous-auth equivalent of `take_authorization_code/2`, and it
+  fails the same way if it is not a single operation: two concurrent assertions
+  carrying one captured nonce must not both be issued a token. One
+  `UPDATE … WHERE consumed_at IS NULL AND nonce_hash = $2 RETURNING *` does it.
+
+  Must distinguish the three cases. `{:error, :replayed}` — the session existed
+  and was already spent — is a signal worth alerting on; collapsing it into
+  `:not_found` silently disables replay detection.
+  """
+  @callback consume_agent_session(id :: raw(), nonce :: raw(), opts()) ::
+              {:ok, Agent.Session.t()}
+              | {:error, :not_found}
+              | {:error, :replayed}
+              | {:error, reason()}
+
+  @doc """
+  Claim an assertion's `jti` exactly once. Optional. **Must be atomic.**
+
+  A `SETNX`-shaped operation: `:ok` the first time, `{:error, :replayed}` every
+  time after, until `expires_at` passes and the row may be swept. Hash the `jti`.
+
+  This is the second replay guard, behind the session nonce, and it is what
+  catches a replay aimed at a session that is somehow still live. An adapter that
+  always returns `:ok` degrades to nonce-only protection — correct, but weaker
+  than advertised, so `supports?/2` is the honest way to opt out rather than a
+  no-op implementation.
+  """
+  @callback claim_assertion_jti(jti :: raw(), expires_at :: DateTime.t(), opts()) ::
+              :ok | {:error, :replayed} | {:error, reason()}
+
+  # ── human credentials ────────────────────────────────────────────────────
+
+  @doc """
+  Persist a password credential. Optional.
+
+  `password_hash` and `recovery_hashes` arrive **already hashed** — Argon2/PBKDF2
+  with a salt, like client secrets and unlike everything else here. Do not re-hash.
+
+  There is no email column and no reset flow: recovery codes are the only way back
+  into a human account, which is the cost of collecting no contact information.
+  """
+  @callback put_agent_credential(
+              account_id :: String.t(),
+              password_hash :: String.t(),
+              recovery_hashes :: [String.t()],
+              opts()
+            ) :: :ok | {:error, reason()}
+
+  @doc "Fetch the stored hashes for an account. Optional."
+  @callback get_agent_credential(account_id :: String.t(), opts()) ::
+              {:ok, %{password_hash: String.t(), recovery_hashes: [String.t()]}}
+              | {:error, :not_found}
+              | {:error, reason()}
+
+  # ── audit ────────────────────────────────────────────────────────────────
+
+  @doc """
+  Append one immutable audit row. Optional.
+
+  Every status change, key addition and key revocation goes through here. It is
+  append-only on purpose: the question an audit log has to answer is *"was this
+  key valid when that edit was signed"*, and a mutable log cannot answer it.
+  """
+  @callback put_agent_event(event :: map(), opts()) :: :ok | {:error, reason()}
+
+  @doc "Audit rows for one account, newest first. Optional."
+  @callback list_agent_events(account_id :: String.t(), opts()) ::
+              {:ok, [map()]} | {:error, reason()}
+
   @optional_callbacks delete_client: 2,
                       revoke_subject_tokens: 3,
                       put_access_token: 2,
                       access_token_revoked?: 2,
                       revoke_access_token: 2,
-                      purge_expired: 2
+                      purge_expired: 2,
+                      put_agent_account: 2,
+                      get_agent_account: 2,
+                      get_agent_account_by_handle: 2,
+                      list_agent_accounts: 2,
+                      put_agent_key: 2,
+                      get_agent_key: 2,
+                      list_agent_keys: 2,
+                      put_agent_session: 2,
+                      get_agent_session: 2,
+                      consume_agent_session: 3,
+                      claim_assertion_jti: 3,
+                      put_agent_credential: 4,
+                      get_agent_credential: 2,
+                      put_agent_event: 2,
+                      list_agent_events: 2
 
   @doc """
   Whether an adapter implements an optional callback.
