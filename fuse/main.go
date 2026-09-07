@@ -1,76 +1,48 @@
+//go:build unix
+
 // Package main implements mcp-fuse: a FUSE daemon that mounts a remote
 // MCP VFS (served over the unix-socket JSON-RPC transport described in
 // lib/noizu/mcp/transport/vfs_client.ex) as a local filesystem.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
-	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-const defaultRPCTimeout = 5 * time.Second
-
 func main() {
-	var (
-		server     = flag.String("server", "", "VFS socket URL, unix:/path/to.sock (required)")
-		mount      = flag.String("mount", "", "mountpoint, e.g. /Volumes/mcp (required)")
-		apiKey     = flag.String("apikey", "", "API key (falls back to $MCP_VFS_TOKEN)")
-		ro         = flag.Bool("ro", false, "read-only mount")
-		attrTTL    = flag.Duration("cache-ttl-attr", time.Second, "attribute cache TTL")
-		entryTTL   = flag.Duration("cache-ttl-entry", 2*time.Second, "directory-entry cache TTL")
-		rpcTimeout = flag.Duration("rpc-timeout", defaultRPCTimeout, "per-request timeout")
-		maxFile    = flag.Uint64("max-file-size", defaultMaxFileSize, "maximum buffered file size in bytes")
-		debug      = flag.Bool("debug", false, "verbose FUSE + RPC logging")
-	)
-	flag.Parse()
+	opt := parseFuseOpts()
 
-	if *server == "" || *mount == "" {
-		flag.Usage()
-		os.Exit(2)
-	}
-	sockPath := strings.TrimPrefix(*server, "unix:")
-	key := *apiKey
-	if key == "" {
-		key = os.Getenv("MCP_VFS_TOKEN")
-	}
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "mcp-fuse: no API key: pass --apikey or set MCP_VFS_TOKEN")
-		os.Exit(2)
-	}
-
-	client := NewClient(sockPath, key, *rpcTimeout, *debug)
+	client := NewClient(opt.sockPath, opt.apiKey, opt.rpcTimeout, opt.debug)
 	if errno := client.Ensure(); errno != 0 {
-		fmt.Fprintf(os.Stderr, "mcp-fuse: connect/auth to %s failed: %v\n", sockPath, errno)
+		fmt.Fprintf(os.Stderr, "mcp-fuse: connect/auth to %s failed: %v\n", opt.sockPath, errno)
 		os.Exit(1)
 	}
 
-	cache := NewCache(*attrTTL, *entryTTL)
-	root := newVFSRoot(client, cache, *ro)
-	root.maxFileSize = *maxFile
+	cache := NewCache(opt.attrTTL, opt.entryTTL)
+	root := newVFSRoot(client, cache, opt.ro)
+	root.maxFileSize = opt.maxFile
 	rawFS := fs.NewNodeFS(root, &fs.Options{
-		EntryTimeout: entryTTL,
-		AttrTimeout:  attrTTL,
+		EntryTimeout: &opt.entryTTL,
+		AttrTimeout:  &opt.attrTTL,
 	})
 
 	mountOpts := &fuse.MountOptions{
 		FsName:  "mcp-fuse",
-		Debug:   *debug,
+		Debug:   opt.debug,
 		Options: []string{},
 	}
-	if *ro {
+	if opt.ro {
 		mountOpts.Options = append(mountOpts.Options, "ro")
 	}
-	srv, err := fuse.NewServer(rawFS, *mount, mountOpts)
+	srv, err := fuse.NewServer(rawFS, opt.mount, mountOpts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mcp-fuse: mount %s failed: %v\n", *mount, err)
+		fmt.Fprintf(os.Stderr, "mcp-fuse: mount %s failed: %v\n", opt.mount, err)
 		os.Exit(1)
 	}
 
@@ -78,19 +50,19 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		s := <-sig
-		if *debug {
-			fmt.Fprintf(os.Stderr, "mcp-fuse: %v, unmounting %s\n", s, *mount)
+		if opt.debug {
+			fmt.Fprintf(os.Stderr, "mcp-fuse: %v, unmounting %s\n", s, opt.mount)
 		}
 		srv.Unmount()
 	}()
 
 	go srv.Serve()
 	if err := srv.WaitMount(); err != nil {
-		fmt.Fprintf(os.Stderr, "mcp-fuse: mount %s did not become ready: %v\n", *mount, err)
+		fmt.Fprintf(os.Stderr, "mcp-fuse: mount %s did not become ready: %v\n", opt.mount, err)
 		os.Exit(1)
 	}
-	if *debug {
-		fmt.Fprintf(os.Stderr, "mcp-fuse: mounted %s (%s)\n", *mount, sockPath)
+	if opt.debug {
+		fmt.Fprintf(os.Stderr, "mcp-fuse: mounted %s (%s)\n", opt.mount, opt.sockPath)
 	}
 	srv.Wait()
 }

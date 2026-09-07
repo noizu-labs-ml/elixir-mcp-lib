@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with explicit read/write/truncate semantics, reconnecting JSON-RPC client,
   cache coverage, race-tested unit tests, and an opt-in Linux kernel-mount
   smoke. The executable is source-built and remains outside the Hex archive.
+- Multi-arch `mcp-fuse` GitHub Release binaries (`mcp-fuse-{os}-{arch}[.exe]`):
+  linux amd64/arm64, darwin arm64, windows amd64/arm64. Windows uses cgofuse
+  with `CGO_ENABLED=0` (WinFsp demand-loaded at mount; no headers to compile).
+  Hex remains Elixir-only.
+- `mcp-mount --token` is optional; empty token still sends `vfs/auth` and is
+  accepted when the server has `auth: nil` or optional auth.
 
 ## [0.4.0]
 
