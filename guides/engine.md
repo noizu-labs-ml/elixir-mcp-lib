@@ -75,6 +75,12 @@ A row can be created before its secret exists; resolution happens at connect
 time and on every reconnect, and a failure shows up as
 `status = 'error'` with a detail that names the REFERENCE only.
 
+For HTTP upstreams, resolved `env:`, `secret:` and `infisical:` credentials
+are sent as an `Authorization: Bearer` header, including during initialization
+and catalog discovery. Updating a token source requires reconnecting the
+upstream so the engine resolves the new value. Rows without an `auth_ref`
+connect without credentials.
+
 ## Pass-through (opt-in)
 
 `auth_ref = 'passthrough'` forwards the CALLER's credential to the upstream

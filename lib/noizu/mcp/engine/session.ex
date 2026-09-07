@@ -335,8 +335,20 @@ defmodule Noizu.MCP.Engine.Session do
 
   @impl true
   def terminate(_reason, state) do
-    if state.client, do: Client.close(state.client)
+    if state.client do
+      try do
+        Client.close(state.client)
+      catch
+        :exit, _reason -> :ok
+      end
+    end
+
     :ok
+  end
+
+  @impl true
+  def format_status(status) do
+    Map.put(status, :state, %{upstream: status.state.name, status: status.state.status})
   end
 
   # ── connect ────────────────────────────────────────────────────────────────
@@ -382,7 +394,7 @@ defmodule Noizu.MCP.Engine.Session do
 
     case state.row["transport"] do
       "stdio" -> stdio_transport(state.row["command"], credential, passthrough?)
-      "http" -> http_transport(state.row["url"], credential, passthrough?)
+      "http" -> http_transport(state.row["url"], credential)
       _other -> {:error, "unknown transport"}
     end
   end
@@ -404,11 +416,11 @@ defmodule Noizu.MCP.Engine.Session do
     end
   end
 
-  defp http_transport(url, _credential, false) do
+  defp http_transport(url, nil) do
     {:ok, {:streamable_http, url: url, headers: []}}
   end
 
-  defp http_transport(url, credential, true) do
+  defp http_transport(url, credential) do
     {:ok, {:streamable_http, url: url, headers: [{"authorization", "Bearer " <> credential}]}}
   end
 
@@ -454,10 +466,10 @@ defmodule Noizu.MCP.Engine.Session do
   # ── catalog listing ────────────────────────────────────────────────────────
 
   defp list_surfaces(state) do
-    with {:ok, tools} <- Client.list_tools(state.client),
-         {:ok, prompts} <- Client.list_prompts(state.client),
-         {:ok, resources} <- Client.list_resources(state.client),
-         {:ok, templates} <- Client.list_resource_templates(state.client),
+    with {:ok, tools} <- optional_surface(Client.list_tools(state.client)),
+         {:ok, prompts} <- optional_surface(Client.list_prompts(state.client)),
+         {:ok, resources} <- optional_surface(Client.list_resources(state.client)),
+         {:ok, templates} <- optional_surface(Client.list_resource_templates(state.client)),
          {:ok, sql_relations} <- list_sql_relations(state) do
       {:ok,
        %{
@@ -470,6 +482,10 @@ defmodule Noizu.MCP.Engine.Session do
        }}
     end
   end
+
+  defp optional_surface({:error, %Noizu.MCP.Error{code: -32601}}), do: {:ok, []}
+  defp optional_surface({:error, %{"code" => -32601}}), do: {:ok, []}
+  defp optional_surface(result), do: result
 
   # An upstream advertising `experimental.sql` re-exports its relations
   # namespaced (FR-11.19). A failed schema call degrades to no relations.
@@ -577,6 +593,8 @@ defmodule Noizu.MCP.Engine.Session do
   end
 
   defp failed(state, detail) do
+    detail = if is_binary(detail), do: detail, else: "upstream catalog request failed"
+
     if state.client do
       Client.close(state.client)
     end
