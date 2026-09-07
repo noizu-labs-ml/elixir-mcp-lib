@@ -1,0 +1,202 @@
+databaseChangeLog:
+  # ---------------------------------------------------------------------------
+  # noizu_mcp_agent — anonymous keypair / human-credential authentication
+  # tables (Noizu.MCP.Auth.Server.Agent, the agent block of Store.Ecto).
+  #
+  # TEMPLATE, same rules as noizu_mcp_oauth.yaml: copy this file into your own
+  # changelog directory, renumber the changeSet ids to match your convention,
+  # set `author:` to your app, and add the include to your master changelog.
+  # It is shipped rather than applied because the library owns no database.
+  #
+  # This template is applied INDEPENDENTLY of noizu_mcp_oauth.yaml and shares
+  # no tables with it. All six tables here are OPTIONAL as a group: they back
+  # the agent block of `Noizu.MCP.Auth.Server.Store` (`put_agent_account/2`
+  # and friends), which `Store.supports?/2` lets a caller skip entirely. Apply
+  # this file only if you use anonymous keypair or human-password auth.
+  # `Store.Ecto.purge_expired/2` tolerates their absence — an undefined-table
+  # error while sweeping `mcp_agent_sessions` or `mcp_agent_assertion_jti` is
+  # treated as zero rows purged, not a crash — so skipping this file never
+  # breaks the OAuth purge sweep in `noizu_mcp_oauth.yaml`.
+  #
+  # `id`, `handle`, `fingerprint` and `public_key` are PUBLIC identifiers —
+  # plain columns, per the `Store` @doc for the agent block. Every other hash
+  # column holds SHA-256 hex (64 chars), the same convention as
+  # noizu_mcp_oauth.yaml. `password_hash` and each entry of `recovery_hashes`
+  # are PBKDF2/Argon2 strings the caller already hashed, like
+  # `clients.secret_hash` in the OAuth tables.
+  # ---------------------------------------------------------------------------
+
+  - changeSet:
+      id: noizu-mcp-agent-accounts
+      author: noizu_mcp
+      comment: >-
+        Anonymous-but-tracked accounts: an agent holding a keypair, or a human
+        holding a password. `id` and `handle` are public identifiers, never
+        hashed. Handle uniqueness is enforced case-insensitively via a
+        functional unique index on lower(handle) rather than the `citext`
+        type, so this template does not require enabling an extension the
+        host may not have (or may not have permission to enable, on a managed
+        Postgres).
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_agent_accounts (
+                id text PRIMARY KEY,
+                handle text NOT NULL,
+                kind varchar(10) NOT NULL DEFAULT 'agent'
+                  CHECK (kind IN ('agent','human')),
+                status varchar(10) NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','approved','rejected','suspended')),
+                display_name text,
+                profile jsonb NOT NULL DEFAULT '{}'::jsonb,
+                revocation_epoch integer NOT NULL DEFAULT 0,
+                status_reason text,
+                approved_at timestamptz,
+                approved_by text,
+                inserted_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE UNIQUE INDEX uq_mcp_agent_accounts_handle_ci
+                ON mcp_agent_accounts (lower(handle));
+              CREATE INDEX idx_mcp_agent_accounts_status
+                ON mcp_agent_accounts (status);
+      rollback:
+        - dropTable:
+            tableName: mcp_agent_accounts
+
+  - changeSet:
+      id: noizu-mcp-agent-account-keys
+      author: noizu_mcp
+      comment: >-
+        Ed25519 public keys bound to an account. `fingerprint` (the RFC 8037
+        JWK thumbprint) is the primary key and is globally unique, not unique
+        per account, so the same key can never authenticate as two different
+        accounts. Revoked keys are kept, never deleted — see the `Agent.Key`
+        @moduledoc.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_agent_account_keys (
+                fingerprint text PRIMARY KEY,
+                account_id text NOT NULL REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+                public_key bytea NOT NULL,
+                alg varchar(10) NOT NULL DEFAULT 'ed25519' CHECK (alg = 'ed25519'),
+                label text,
+                added_via text,
+                added_at timestamptz NOT NULL DEFAULT now(),
+                revoked_at timestamptz,
+                revoked_by text
+              );
+              CREATE INDEX idx_mcp_agent_account_keys_account
+                ON mcp_agent_account_keys (account_id);
+      rollback:
+        - dropTable:
+            tableName: mcp_agent_account_keys
+
+  - changeSet:
+      id: noizu-mcp-agent-credentials
+      author: noizu_mcp
+      comment: >-
+        Password credential for a human account. `password_hash` and each
+        entry of `recovery_hashes` arrive already hashed (Argon2/PBKDF2) and
+        are never re-hashed by the adapter. One row per account; there is no
+        email column and no reset flow, so recovery codes are the only way
+        back into a human account.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_agent_credentials (
+                account_id text PRIMARY KEY REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+                password_hash text NOT NULL,
+                recovery_hashes jsonb NOT NULL DEFAULT '[]'::jsonb,
+                inserted_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+      rollback:
+        - dropTable:
+            tableName: mcp_agent_credentials
+
+  - changeSet:
+      id: noizu-mcp-agent-sessions
+      author: noizu_mcp
+      comment: >-
+        Anonymous pre-auth sessions. `id` and `nonce` are credentials, hashed
+        with SHA-256 like every other secret in this library — unlike
+        `mcp_agent_accounts.id`, which is public. `consume_agent_session/3` is
+        one `UPDATE ... WHERE id_hash = $1 AND nonce_hash = $2 AND
+        consumed_at IS NULL RETURNING *`, so two concurrent assertions over
+        one captured nonce cannot both succeed.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_agent_sessions (
+                id_hash char(64) PRIMARY KEY,
+                nonce_hash char(64) NOT NULL,
+                level varchar(10) NOT NULL DEFAULT 'anonymous'
+                  CHECK (level IN ('anonymous','agent','human')),
+                account_id text REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+                key_fingerprint text,
+                public_key bytea,
+                client jsonb NOT NULL DEFAULT '{}'::jsonb,
+                ip_hash text,
+                issued_at timestamptz NOT NULL DEFAULT now(),
+                expires_at timestamptz NOT NULL,
+                consumed_at timestamptz,
+                revoked_at timestamptz
+              );
+              CREATE INDEX idx_mcp_agent_sessions_expiry
+                ON mcp_agent_sessions (expires_at);
+      rollback:
+        - dropTable:
+            tableName: mcp_agent_sessions
+
+  - changeSet:
+      id: noizu-mcp-agent-assertion-jti
+      author: noizu_mcp
+      comment: >-
+        SETNX-shaped replay guard for assertion `jti`s, behind the session
+        nonce. `claim_assertion_jti/3` is `INSERT ... ON CONFLICT (jti_hash)
+        DO NOTHING RETURNING jti_hash`: a returned row is the first claim, no
+        row is a replay.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_agent_assertion_jti (
+                jti_hash char(64) PRIMARY KEY,
+                expires_at timestamptz NOT NULL,
+                inserted_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_agent_assertion_jti_expiry
+                ON mcp_agent_assertion_jti (expires_at);
+      rollback:
+        - dropTable:
+            tableName: mcp_agent_assertion_jti
+
+  - changeSet:
+      id: noizu-mcp-agent-account-events
+      author: noizu_mcp
+      comment: >-
+        Append-only audit log: every status change, key addition and key
+        revocation. No update path is exposed by the adapter — the question
+        an audit log has to answer is "was this key valid when that edit was
+        signed", and a mutable log cannot answer it.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE mcp_agent_account_events (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                account_id text NOT NULL REFERENCES mcp_agent_accounts(id) ON DELETE CASCADE,
+                event jsonb NOT NULL,
+                inserted_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX idx_mcp_agent_account_events_account
+                ON mcp_agent_account_events (account_id, inserted_at DESC);
+      rollback:
+        - dropTable:
+            tableName: mcp_agent_account_events

@@ -37,6 +37,7 @@ if Code.ensure_loaded?(Plug.Conn) do
     require Logger
 
     alias Noizu.MCP.Auth.Server
+    alias Noizu.MCP.Auth.Server.Agent
     alias Noizu.MCP.Auth.Server.Client
     alias Noizu.MCP.Auth.Server.Config
     alias Noizu.MCP.Auth.Server.Errors
@@ -61,18 +62,50 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       with :ok <- PlugSupport.rate_limit(conn, config, :token),
            {:ok, conn, params} <- PlugSupport.read_params(conn),
+           :continue <- agent_grant(conn, params, config),
            {:ok, client} <- authenticate_client(conn, params, config),
            {:ok, grant_type} <- Params.fetch(params, "grant_type"),
            :ok <- check_grant(client, grant_type),
            {:ok, body} <- grant(grant_type, client, params, config) do
         PlugSupport.json(conn, 200, body)
       else
+        {:answered, status, body} -> PlugSupport.json(conn, status, body)
         {:error, %Errors{} = error} -> PlugSupport.error_json(conn, error)
         {:error, %Plug.Conn{} = rate_limited} -> rate_limited
       end
     end
 
     defp serve(conn, _config), do: PlugSupport.method_not_allowed(conn, "POST, OPTIONS")
+
+    # ── RFC 7523 jwt-bearer, for anonymous agents ──────────────────────────
+
+    # Intercepted before `authenticate_client/3`, and that ordering is the whole
+    # trick. An anonymous agent has no `oauth_clients` row and never will — it
+    # authenticates as an *account* holding a keypair, not as a registered piece
+    # of software. Running it through client authentication would reject every
+    # agent with `invalid_client`, which reads like a credential problem and is
+    # not one.
+    #
+    # `:continue` means "not my grant, carry on"; every other return short-circuits
+    # the pipeline above.
+    @agent_grant "urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+    defp agent_grant(conn, params, config) do
+      if Map.get(params, "grant_type") == @agent_grant do
+        if Agent.supported?(config) do
+          case Agent.authenticate(config, Map.get(params, "assertion"), params,
+                 remote_ip: conn.remote_ip
+               ) do
+            {:ok, body} -> {:answered, 200, body}
+            {:error, code} -> {:answered, elem(Agent.error(code), 0), elem(Agent.error(code), 1)}
+          end
+        else
+          {:error, Errors.new(:unsupported_grant_type, reason: {:grant, @agent_grant})}
+        end
+      else
+        :continue
+      end
+    end
 
     # ── client authentication ──────────────────────────────────────────────
 
