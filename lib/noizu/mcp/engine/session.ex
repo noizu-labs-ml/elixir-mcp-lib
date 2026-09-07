@@ -187,6 +187,10 @@ defmodule Noizu.MCP.Engine.Session do
   def sql_scan(pid, relation, wire_opts),
     do: GenServer.call(pid, {:sql_scan, relation, wire_opts})
 
+  @doc "Proxies only negotiated sync/version 1 methods on a principal-bound session."
+  def sync_request(pid, method, params),
+    do: GenServer.call(pid, {:sync_request, method, params}, 30_000)
+
   @doc "Force a full re-list (engine.refresh, FR-11.13)."
   @spec refresh(pid()) :: map()
   def refresh(pid), do: GenServer.call(pid, :refresh)
@@ -248,6 +252,25 @@ defmodule Noizu.MCP.Engine.Session do
 
   def handle_call({:sql_scan, relation, wire_opts}, _from, state) do
     {:reply, Client.request(state.client, "sql/scan", wire_params(relation, wire_opts)), state}
+  end
+
+  def handle_call({:sync_request, _method, _params}, _from, %{client: nil} = state) do
+    {:reply, {:error, Noizu.MCP.Sync.Protocol.error("unknown")}, state}
+  end
+
+  def handle_call({:sync_request, method, params}, _from, state) do
+    result =
+      with :ok <- Noizu.MCP.Sync.Protocol.validate(method, params),
+           true <- state.row["auth_ref"] == "passthrough" and not is_nil(state.principal),
+           %{"version" => 1} <-
+             get_in(Client.server_capabilities(state.client), ["experimental", "sync"]) do
+        Client.request(state.client, method, params)
+      else
+        {:error, _} = error -> error
+        _ -> {:error, Noizu.MCP.Sync.Protocol.error("unsupported_consistency")}
+      end
+
+    {:reply, result, state}
   end
 
   def handle_call(:refresh, _from, %{client: nil} = state) do
