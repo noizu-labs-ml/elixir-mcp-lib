@@ -1,0 +1,145 @@
+name: release
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - "daemon/mcp_mount/**"
+      - "fuse/**"
+      - ".github/workflows/release.yml"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  escript:
+    name: mcp-mount escript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.1-otp-29"
+          otp-version: "29.0.2"
+      - name: Build escript
+        working-directory: daemon/mcp_mount
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          MIX_ENV=prod mix escript.build
+      # Built with the repo-pinned toolchain (.tool-versions): elixir
+      # 1.20.1-otp-29 / OTP 29.0.2. Run with OTP 29 or newer via escript.
+      # Native filesystem watcher requirements still apply (see INSTALL.md).
+      - name: Package
+        run: |
+          dir="mcp-mount"
+          mkdir -p "$dir"
+          cp daemon/mcp_mount/mcp-mount "$dir/"
+          cat > "$dir/INSTALL.md" <<'EOF'
+          # Prebuilt mcp-mount
+
+          Requires Erlang/OTP 29 or newer, including `escript` on PATH.
+          Extract the archive and run `./mcp-mount` with the flags below;
+          no Elixir compiler or `mix escript.build` step is needed.
+          Linux write-back requires `inotifywait` (Debian/Ubuntu: inotify-tools).
+          On macOS this archive runs pull-only; see the platform notes below.
+
+          EOF
+          cat daemon/mcp_mount/README.md >> "$dir/INSTALL.md"
+          tar -czf mcp-mount.tar.gz "$dir"
+          sha256sum mcp-mount.tar.gz > mcp-mount.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-mount
+          path: |
+            mcp-mount.tar.gz
+            mcp-mount.tar.gz.sha256
+          if-no-files-found: error
+
+  fuse:
+    name: mcp-fuse ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64 }
+          - { os: linux, arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache-dependency-path: fuse/go.sum
+      - name: Cross-compile (CGO_ENABLED=0, pure-Go go-fuse)
+        working-directory: fuse
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
+            go build -trimpath -ldflags="-s -w" -o mcp-fuse .
+      - name: Package
+        run: |
+          dir="mcp-fuse-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$dir"
+          cp fuse/mcp-fuse "$dir/"
+          cat > "$dir/INSTALL.md" <<'EOF'
+          # mcp-fuse install
+
+          1. Extract: `tar -xzf mcp-fuse-<os>-<arch>.tar.gz`
+          2. Prerequisite FUSE runtime:
+             - Linux: fuse3 + fusermount3
+               (Debian/Ubuntu: `apt-get install -y fuse3`; Fedora: `dnf install -y fuse3`)
+             - macOS: install macFUSE (https://osxfuse.github.io/), not bundled here.
+          3. Mount:
+             Start an MCP VFS Unix-socket server, then create the mountpoint:
+             `mkdir -p ~/mcp`
+             `./mcp-fuse --server unix:/path/to/vfs.sock --apikey TOKEN --mount ~/mcp`
+             (run `./mcp-fuse --help` for all flags; `--ro` for read-only)
+          4. Unmount:
+             - Linux: `fusermount3 -u ~/mcp`
+             - macOS: `diskutil unmount ~/mcp`
+          EOF
+          tar -czf "${dir}.tar.gz" "$dir"
+          sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-fuse-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            mcp-fuse-*.tar.gz
+            mcp-fuse-*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    permissions:
+      contents: write
+    needs: [escript, fuse]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach packages to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # fuse.yml may create the same release concurrently. Only tolerate a
+          # failed create when the release now exists; preserve other failures.
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "$GITHUB_REF_NAME" --generate-notes ||
+              gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --clobber

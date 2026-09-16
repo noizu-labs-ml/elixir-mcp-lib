@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -231,7 +233,7 @@ func TestAuthSuccess(t *testing.T) {
 func TestAuthFailure(t *testing.T) {
 	s := startFakeServer(t, &fakeServer{apiKey: "sekrit"})
 	c := NewClient(s.Path(), "wrong-key", time.Second, false)
-	if errno := c.Ensure(); errno != syscall.EACCES {
+	if errno := c.Ensure(); errno != vfsEACCES {
 		t.Fatalf("want EACCES, got %v", errno)
 	}
 }
@@ -267,22 +269,22 @@ func TestErrnoMapping(t *testing.T) {
 	cases := []struct {
 		code int
 		atom string
-		want syscall.Errno
+		want vfsErrno
 	}{
-		{codeNotFound, "enoent", syscall.ENOENT},
-		{codeAccess, "eacces", syscall.EACCES},
-		{codeExists, "eexist", syscall.EEXIST},
-		{codeReadOnly, "erofs", syscall.EROFS},
-		{codeIsDir, "eisdir", syscall.EISDIR},
-		{codeNotDir, "enotdir", syscall.ENOTDIR},
-		{codeNotEmpty, "enotempty", syscall.ENOTEMPTY},
-		{codeNoSys, "enosys", syscall.ENOSYS},
+		{codeNotFound, "enoent", vfsENOENT},
+		{codeAccess, "eacces", vfsEACCES},
+		{codeExists, "eexist", vfsEEXIST},
+		{codeReadOnly, "erofs", vfsEROFS},
+		{codeIsDir, "eisdir", vfsEISDIR},
+		{codeNotDir, "enotdir", vfsENOTDIR},
+		{codeNotEmpty, "enotempty", vfsENOTEMPTY},
+		{codeNoSys, "enosys", vfsENOSYS},
 		// errno_atom wins over the code when they disagree
-		{codeNotFound, "eisdir", syscall.EISDIR},
+		{codeNotFound, "eisdir", vfsEISDIR},
 		// code fallback when atom is unknown
-		{-99999, "weird", syscall.EIO},
+		{-99999, "weird", vfsEIO},
 		// code fallback when atom is absent
-		{codeReadOnly, "", syscall.EROFS},
+		{codeReadOnly, "", vfsEROFS},
 	}
 	for _, tc := range cases {
 		var data map[string]any
@@ -386,7 +388,7 @@ func TestTimeoutMapsToEstale(t *testing.T) {
 	if errno := c.Ensure(); errno != 0 {
 		t.Fatalf("auth: %v", errno)
 	}
-	if _, errno := c.Stat("/"); errno != syscall.ESTALE {
+	if _, errno := c.Stat("/"); errno != vfsESTALE {
 		t.Fatalf("want ESTALE on timeout, got %v", errno)
 	}
 }
@@ -692,10 +694,10 @@ func TestOversizedWriteAndTruncateFailWithoutAllocation(t *testing.T) {
 	if _, errno := h.Write(nil, []byte("x"), 4); errno != syscall.EFBIG {
 		t.Fatalf("oversized offset write returned %v", errno)
 	}
-	if _, errno := resizeContent(nil, 5, root.maxFileSize); errno != syscall.EFBIG {
+	if _, errno := resizeContent(nil, 5, root.maxFileSize); errno != vfsEFBIG {
 		t.Fatalf("oversized truncate returned %v", errno)
 	}
-	if _, errno := applyFileOps([]byte("oversized"), []fileOp{{kind: opWrite, off: 0, data: []byte("x")}}, 4); errno != syscall.EFBIG {
+	if _, errno := applyFileOps([]byte("oversized"), []fileOp{{kind: opWrite, off: 0, data: []byte("x")}}, 4); errno != vfsEFBIG {
 		t.Fatalf("write against oversized base returned %v", errno)
 	}
 	got, errno := applyFileOps([]byte("oversized"), []fileOp{

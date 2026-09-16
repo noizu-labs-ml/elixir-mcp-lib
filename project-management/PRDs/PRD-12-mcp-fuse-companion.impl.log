@@ -1,0 +1,23 @@
+# Implementation Log: PRD-12 multi-arch VFS runtime
+PRD: project-management/PRDs/PRD-12-mcp-fuse-companion.md
+Started: 2026-09-07
+Agent: npl-tdd-coder
+Worktree: .claude/worktrees/feature-vfs-multiarch
+
+## Progress
+
+### Planning
+- Unix kernel FUSE stays on hanwen/go-fuse v2 (`//go:build unix`).
+- Shared POSIX `vfsErrno` in `fuse/errno.go` for client.go on every GOOS.
+- Windows driver: winfsp/cgofuse, `CGO_ENABLED=0` (WinFsp demand-loaded).
+- GHA: PR compile-only darwin-arm64 + windows-amd64; tag `v*` / workflow_dispatch release matrix.
+- `mcp-mount --token` optional; still sends `vfs/auth`.
+
+### Implementation
+- fuse/errno.go, errno_unix.go, handle.go, flags.go
+- fuse/client.go returns vfsErrno
+- fuse/main.go + fs.go tagged unix
+- fuse/main_windows.go + fs_windows.go
+- Makefile fuse-cross targets
+- .github/workflows/fuse.yml
+- Docs: fuse/README.md, MCP-VFS-MOUNTING.md, CHANGELOG, ADR-008, README platform matrix

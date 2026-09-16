@@ -3,12 +3,12 @@ package main
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -91,7 +91,7 @@ func NewClient(sock, apiKey string, timeout time.Duration, debug bool) *Client {
 }
 
 // Ensure dials and authenticates if needed; used to fail fast before mount.
-func (c *Client) Ensure() syscall.Errno {
+func (c *Client) Ensure() vfsErrno {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn != nil {
@@ -110,8 +110,8 @@ func (c *Client) logf(format string, args ...any) {
 }
 
 // Call performs one RPC. method + params in, decoded result into out
-// (may be nil). Returns 0 on success or a syscall.Errno.
-func (c *Client) Call(method string, params map[string]any, out any) syscall.Errno {
+// (may be nil). Returns 0 on success or a vfsErrno.
+func (c *Client) Call(method string, params map[string]any, out any) vfsErrno {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -130,11 +130,11 @@ func (c *Client) Call(method string, params map[string]any, out any) syscall.Err
 			if out != nil && len(resp.Result) > 0 {
 				if err := json.Unmarshal(resp.Result, out); err != nil {
 					c.logf("%s: bad result payload: %v", method, err)
-					return syscall.EIO
+					return vfsEIO
 				}
 			}
 			return 0
-		case errno == syscall.ESTALE || errno == syscall.EFBIG:
+		case errno == vfsESTALE || errno == vfsEFBIG:
 			// Local limits and timeouts are not transport failures; surface them.
 			return errno
 		default:
@@ -152,8 +152,8 @@ func (c *Client) Call(method string, params map[string]any, out any) syscall.Err
 
 // dial establishes the connection and runs the vfs/auth handshake.
 // Caller holds c.mu.
-func (c *Client) dial() syscall.Errno {
-	var lastErrno syscall.Errno
+func (c *Client) dial() vfsErrno {
+	var lastErrno vfsErrno
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
@@ -175,10 +175,10 @@ func (c *Client) dial() syscall.Errno {
 	return lastErrno
 }
 
-func (c *Client) auth() syscall.Errno {
+func (c *Client) auth() vfsErrno {
 	resp, errno := c.roundTrip("vfs/auth", map[string]any{"api_key": c.apiKey})
 	if errno != 0 {
-		return syscall.EACCES
+		return vfsEACCES
 	}
 	if resp.Error != nil {
 		return errnoFromRPC(resp.Error)
@@ -188,14 +188,14 @@ func (c *Client) auth() syscall.Errno {
 		SessionID     string `json:"session_id"`
 	}
 	if err := json.Unmarshal(resp.Result, &ok); err != nil || !ok.Authenticated {
-		return syscall.EACCES
+		return vfsEACCES
 	}
 	return 0
 }
 
 // roundTrip sends one framed request and awaits the matching response.
 // Caller holds c.mu.
-func (c *Client) roundTrip(method string, params map[string]any) (*rpcResponse, syscall.Errno) {
+func (c *Client) roundTrip(method string, params map[string]any) (*rpcResponse, vfsErrno) {
 	c.nextID++
 	id := c.nextID
 
@@ -207,10 +207,10 @@ func (c *Client) roundTrip(method string, params map[string]any) (*rpcResponse, 
 	}{"2.0", id, method, params}
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, syscall.EIO
+		return nil, vfsEIO
 	}
 	if len(body) > maxFrameSize {
-		return nil, syscall.EFBIG
+		return nil, vfsEFBIG
 	}
 
 	frame := make([]byte, 4+len(body))
@@ -236,14 +236,14 @@ func (c *Client) roundTrip(method string, params map[string]any) (*rpcResponse, 
 	}
 }
 
-func (c *Client) readFrame() (*rpcResponse, syscall.Errno) {
+func (c *Client) readFrame() (*rpcResponse, vfsErrno) {
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(c.conn, lenBuf[:]); err != nil {
 		return nil, errnoFromTransport(err)
 	}
 	size := binary.BigEndian.Uint32(lenBuf[:])
 	if size == 0 || size > maxFrameSize {
-		return nil, syscall.EIO
+		return nil, vfsEIO
 	}
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(c.conn, buf); err != nil {
@@ -251,7 +251,7 @@ func (c *Client) readFrame() (*rpcResponse, syscall.Errno) {
 	}
 	var resp rpcResponse
 	if err := json.Unmarshal(buf, &resp); err != nil {
-		return nil, syscall.EIO
+		return nil, vfsEIO
 	}
 	return &resp, 0
 }
@@ -272,7 +272,7 @@ func (c *Client) Close() {
 
 // ── typed VFS operations ──────────────────────────────────────────────────
 
-func (c *Client) Stat(path string) (*Node, syscall.Errno) {
+func (c *Client) Stat(path string) (*Node, vfsErrno) {
 	var node Node
 	if errno := c.Call("vfs/stat", map[string]any{"path": path}, &node); errno != 0 {
 		return nil, errno
@@ -280,7 +280,7 @@ func (c *Client) Stat(path string) (*Node, syscall.Errno) {
 	return &node, 0
 }
 
-func (c *Client) List(path, cursor string) ([]Entry, string, syscall.Errno) {
+func (c *Client) List(path, cursor string) ([]Entry, string, vfsErrno) {
 	params := map[string]any{"path": path}
 	if cursor != "" {
 		params["cursor"] = cursor
@@ -295,7 +295,7 @@ func (c *Client) List(path, cursor string) ([]Entry, string, syscall.Errno) {
 	return out.Entries, out.NextCursor, 0
 }
 
-func (c *Client) Read(path string) ([]byte, int64, syscall.Errno) {
+func (c *Client) Read(path string) ([]byte, int64, vfsErrno) {
 	var res ReadResult
 	if errno := c.Call("vfs/read", map[string]any{"path": path}, &res); errno != 0 {
 		return nil, 0, errno
@@ -303,7 +303,7 @@ func (c *Client) Read(path string) ([]byte, int64, syscall.Errno) {
 	return []byte(res.Content), res.Version, 0
 }
 
-func (c *Client) Write(path string, data []byte) (*Node, syscall.Errno) {
+func (c *Client) Write(path string, data []byte) (*Node, vfsErrno) {
 	var node Node
 	params := map[string]any{"path": path, "data": string(data)}
 	if errno := c.Call("vfs/write", params, &node); errno != 0 {
@@ -312,7 +312,7 @@ func (c *Client) Write(path string, data []byte) (*Node, syscall.Errno) {
 	return &node, 0
 }
 
-func (c *Client) Create(path string, data []byte) (*Node, syscall.Errno) {
+func (c *Client) Create(path string, data []byte) (*Node, vfsErrno) {
 	var node Node
 	params := map[string]any{"path": path, "data": string(data)}
 	if errno := c.Call("vfs/create", params, &node); errno != 0 {
@@ -321,39 +321,39 @@ func (c *Client) Create(path string, data []byte) (*Node, syscall.Errno) {
 	return &node, 0
 }
 
-func (c *Client) Remove(path string) syscall.Errno {
+func (c *Client) Remove(path string) vfsErrno {
 	return c.Call("vfs/remove", map[string]any{"path": path}, nil)
 }
 
 // ── errno translation ─────────────────────────────────────────────────────
 
-var errnoByAtom = map[string]syscall.Errno{
-	"enoent":    syscall.ENOENT,
-	"eacces":    syscall.EACCES,
-	"eperm":     syscall.EACCES,
-	"eexist":    syscall.EEXIST,
-	"erofs":     syscall.EROFS,
-	"eisdir":    syscall.EISDIR,
-	"enotdir":   syscall.ENOTDIR,
-	"enotempty": syscall.ENOTEMPTY,
-	"enosys":    syscall.ENOSYS,
-	"enotsup":   syscall.EOPNOTSUPP,
-	"eio":       syscall.EIO,
+var errnoByAtom = map[string]vfsErrno{
+	"enoent":    vfsENOENT,
+	"eacces":    vfsEACCES,
+	"eperm":     vfsEACCES,
+	"eexist":    vfsEEXIST,
+	"erofs":     vfsEROFS,
+	"eisdir":    vfsEISDIR,
+	"enotdir":   vfsENOTDIR,
+	"enotempty": vfsENOTEMPTY,
+	"enosys":    vfsENOSYS,
+	"enotsup":   vfsEOPNOTSUPP,
+	"eio":       vfsEIO,
 }
 
-var errnoByCode = map[int]syscall.Errno{
-	codeNotFound:   syscall.ENOENT,
-	codeAccess:     syscall.EACCES,
-	codeExists:     syscall.EEXIST,
-	codeReadOnly:   syscall.EROFS,
-	codeIsDir:      syscall.EISDIR,
-	codeNotDir:     syscall.ENOTDIR,
-	codeNotEmpty:   syscall.ENOTEMPTY,
-	codeNoSys:      syscall.ENOSYS,
-	codeAuthFailed: syscall.EACCES,
+var errnoByCode = map[int]vfsErrno{
+	codeNotFound:   vfsENOENT,
+	codeAccess:     vfsEACCES,
+	codeExists:     vfsEEXIST,
+	codeReadOnly:   vfsEROFS,
+	codeIsDir:      vfsEISDIR,
+	codeNotDir:     vfsENOTDIR,
+	codeNotEmpty:   vfsENOTEMPTY,
+	codeNoSys:      vfsENOSYS,
+	codeAuthFailed: vfsEACCES,
 }
 
-func errnoFromRPC(err *rpcError) syscall.Errno {
+func errnoFromRPC(err *rpcError) vfsErrno {
 	if err == nil {
 		return 0
 	}
@@ -365,38 +365,18 @@ func errnoFromRPC(err *rpcError) syscall.Errno {
 	if errno, ok := errnoByCode[err.Code]; ok {
 		return errno
 	}
-	return syscall.EIO
+	return vfsEIO
 }
 
-func errnoFromTransport(err error) syscall.Errno {
+func errnoFromTransport(err error) vfsErrno {
 	if err == nil {
 		return 0
 	}
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-		return syscall.ESTALE
+		return vfsESTALE
 	}
-	if err == io.EOF || err == io.ErrUnexpectedEOF {
-		return syscall.ECONNRESET
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return vfsECONNRESET
 	}
-	var se syscall.Errno
-	if errorsAs(err, &se) {
-		return se
-	}
-	return syscall.EIO
-}
-
-// errorsAs avoids importing errors just for one unwrapping call site.
-func errorsAs(err error, target *syscall.Errno) bool {
-	for err != nil {
-		if e, ok := err.(syscall.Errno); ok {
-			*target = e
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
+	return vfsEIO
 }
