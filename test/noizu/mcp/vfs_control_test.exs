@@ -197,6 +197,8 @@ defmodule Noizu.MCP.VFS.ControlTest do
 
     assert {:ok, runtime, nil} = VFS.list(@wrapper, "/etc/dev/runtime", nil, ctx)
     assert Enum.map(runtime, & &1.name) == ["sessions", "status"]
+    assert %{name: "sessions", type: :dir} = Enum.find(runtime, &(&1.name == "sessions"))
+    assert %{name: "status", type: :control} = Enum.find(runtime, &(&1.name == "status"))
 
     assert {:ok, cache, nil} = VFS.list(@wrapper, "/etc/dev/cache", nil, ctx)
     assert Enum.map(cache, & &1.name) == ["flush", "stats"]
@@ -309,6 +311,17 @@ defmodule Noizu.MCP.VFS.ControlTest do
   end
 
   # ── runtime status + sessions ─────────────────────────────────────────────
+
+  test "status: stat and list agree it is a file-shaped control node", %{ctx: ctx} do
+    assert {:ok, %Noizu.MCP.VFS{type: :control, writable: false}} =
+             VFS.stat(@wrapper, "/etc/dev/runtime/status", ctx)
+
+    assert {:ok, runtime, nil} = VFS.list(@wrapper, "/etc/dev/runtime", nil, ctx)
+
+    assert %{name: "status", type: :control} = Enum.find(runtime, &(&1.name == "status"))
+
+    assert {:error, :enotdir} = VFS.list(@wrapper, "/etc/dev/runtime/status", nil, ctx)
+  end
 
   test "status reports server info, capabilities, transports and uptime", %{ctx: ctx} do
     assert {:ok, body, _} = VFS.read(@wrapper, "/etc/dev/runtime/status", ctx)
