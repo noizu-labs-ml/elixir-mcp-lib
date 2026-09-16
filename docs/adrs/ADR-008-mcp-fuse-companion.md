@@ -23,8 +23,9 @@ truncate or sparse write to exhaust the daemon before the server can reject it.
 
 - Add `fuse/mcp-fuse`, a Go/go-fuse v2 companion speaking the canonical
   `Noizu.MCP.Transport.VFSSocket` contract.
-- Keep it a separately built source artifact. The `noizu_mcp` Hex archive
-  remains Elixir-only; no prebuilt FUSE binary is published by this decision.
+- Keep it a separately built companion artifact. The `noizu_mcp` Hex archive
+  remains Elixir-only. Prebuilt `mcp-fuse` binaries are published on GitHub
+  Releases (`mcp-fuse-{os}-{arch}[.exe]`); they are never packed into Hex.
 - Expose the remote root through the actual root `InodeEmbedder`, and preserve
   per-handle write/truncate call order. Successful `fsync` starts a new batch;
   later writes must not be discarded.
@@ -52,15 +53,21 @@ Positive:
 - Local callers cannot request unbounded daemon allocations through offsets or
   truncation.
 - Hex consumers do not inherit a platform-specific binary payload.
+- Prebuilt companions for linux/darwin/windows ship on GitHub Releases.
 
 Negative / risks:
 
 - Writes remain full-content, last-writer-wins operations; large files are not
   a fit until the VFS protocol gains ranged I/O or streaming.
-- Operators must install FUSE and build/distribute the companion separately.
+- Operators must install a FUSE runtime (Linux FUSE 3, macFUSE/fuse-t, or
+  WinFsp). Windows binaries are `CGO_ENABLED=0` and demand-load WinFsp at
+  mount; compiling does not need WinFsp headers. Remote `wss://` browse should
+  use `mcp-mount` (no driver) rather than `mcp-fuse`.
 - Hosted CI without `/dev/fuse` can compile and unit-test the boundary but
   cannot perform the kernel mount smoke; release validation needs a capable
-  Linux runner or a documented manual run.
+  Linux runner or a documented manual run. The `windows-11-arm` release job is
+  best-effort (`continue-on-error`); amd64 still ships if that runner cannot
+  schedule.
 
 ## Alternatives considered
 

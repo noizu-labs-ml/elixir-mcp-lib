@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Multi-arch `mcp-fuse` GitHub Release binaries (`mcp-fuse-{os}-{arch}[.exe]`):
+  linux amd64/arm64, darwin arm64, windows amd64/arm64. Windows uses cgofuse
+  with `CGO_ENABLED=0` (WinFsp demand-loaded at mount; no headers to compile).
+  Hex remains Elixir-only.
+- `mcp-mount --token` is optional; empty token still sends `vfs/auth` and is
+  accepted when the server has `auth: nil` or optional auth.
+
 ## [0.4.1] — 2026-09-16
 
 Changes since the published 0.4.0 package. The version bump originated in

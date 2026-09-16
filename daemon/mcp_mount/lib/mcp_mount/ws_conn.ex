@@ -65,7 +65,7 @@ defmodule McpMount.WSConn do
   @impl GenServer
   def init(opts) do
     url = Keyword.fetch!(opts, :url)
-    token = Keyword.fetch!(opts, :token)
+    token = Keyword.get(opts, :token, "") || ""
     owner = Keyword.fetch!(opts, :owner)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
@@ -115,7 +115,12 @@ defmodule McpMount.WSConn do
   end
 
   defp handshake(parts, timeout) do
-    headers = [{"authorization", "Bearer " <> parts.token}]
+    headers =
+      if is_binary(parts.token) and parts.token != "" do
+        [{"authorization", "Bearer " <> parts.token}]
+      else
+        []
+      end
 
     # Pin HTTP/1.1: mint_web_socket upgrades over h1 only, and on TLS
     # endpoints mint's ALPN otherwise negotiates h2 → the upgrade fails with
@@ -171,7 +176,8 @@ defmodule McpMount.WSConn do
     end
   end
 
-  # The handshake MUST be vfs/auth; a non-ok result aborts startup.
+  # The handshake MUST be vfs/auth (empty token is OK when the server has
+  # auth: nil / optional); a non-ok result aborts startup.
   defp auth(conn, ref, websocket, token, _owner, timeout) do
     id = 1
 

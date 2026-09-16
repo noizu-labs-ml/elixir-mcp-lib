@@ -273,7 +273,13 @@ Two standalone mounters live outside the Hex archive: `daemon/mcp_mount/`
 materializes and synchronizes a tree over WebSocket, while [`fuse/`](fuse/)
 builds the Go `mcp-fuse` kernel mount client for the unix-socket transport.
 The latter requires a local FUSE runtime and is built separately with
-`make fuse-build`.
+`make fuse-build` (or downloaded from GitHub Releases). Hex stays Elixir-only.
+
+| Platform | Kernel mount (`mcp-fuse`) | No-driver (`mcp-mount`) |
+|---|---|---|
+| linux amd64 / arm64 | yes (FUSE 3) | yes — preferred for remote `wss://` |
+| darwin arm64 | yes (macFUSE or fuse-t) | yes — preferred for remote `wss://` |
+| windows amd64 / arm64 | yes (WinFsp, demand-loaded; `CGO_ENABLED=0`) | yes — preferred for remote `wss://`; no kernel driver |
 
 ### Backends (behaviour + DSL)
 
@@ -540,7 +546,7 @@ mix test    # unit (FakeConn) + integration (in-repo bandit WS fixture)
 | Flag | Meaning |
 |---|---|
 | `--url` | VFS WebSocket endpoint (`ws://`/`wss://`, path usually `/vfs`) |
-| `--token` | bearer token (falls back to `MCP_MOUNT_TOKEN`); rides the WS upgrade request |
+| `--token` | optional bearer token (falls back to `MCP_MOUNT_TOKEN`, else empty); rides the WS upgrade request when non-empty. `vfs/auth` is always sent; empty token is OK when the server has `auth: nil` |
 | `--mount` | local directory to materialize the tree into (created if missing) |
 | `--ro` | read-only: no watcher, never pushes local edits |
 

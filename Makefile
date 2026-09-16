@@ -1,11 +1,28 @@
 # Go FUSE daemon (fuse/) — build with: make fuse-build
-.PHONY: fuse-build fuse-build-linux
+# Cross companions: make fuse-cross  (linux/amd64 linux/arm64 darwin/arm64 windows/amd64 windows/arm64)
+.PHONY: fuse-build fuse-cross fuse-linux-amd64 fuse-linux-arm64 fuse-darwin-arm64 fuse-windows-amd64 fuse-windows-arm64
 
 fuse-build:
 	cd fuse && go build -o ../bin/mcp-fuse .
 
-# Cross-compiled Linux binaries (amd64 + arm64). hanwen/go-fuse is pure Go,
-# so CGO can stay disabled; fusermount3 is required at runtime on the target.
-fuse-build-linux:
-	cd fuse && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o ../bin/mcp-fuse-linux-amd64 .
-	cd fuse && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o ../bin/mcp-fuse-linux-arm64 .
+fuse-linux-amd64:
+	cd fuse && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../bin/mcp-fuse-linux-amd64 .
+
+fuse-linux-arm64:
+	cd fuse && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../bin/mcp-fuse-linux-arm64 .
+
+fuse-darwin-arm64:
+	cd fuse && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o ../bin/mcp-fuse-darwin-arm64 .
+
+# Windows uses CGO_ENABLED=0 (cgofuse nocgo): WinFsp is demand-loaded at mount
+# time, so the binary does not need WinFsp headers to compile.
+fuse-windows-amd64:
+	cd fuse && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o ../bin/mcp-fuse-windows-amd64.exe .
+
+fuse-windows-arm64:
+	cd fuse && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o ../bin/mcp-fuse-windows-arm64.exe .
+
+fuse-cross: fuse-linux-amd64 fuse-linux-arm64 fuse-darwin-arm64 fuse-windows-amd64 fuse-windows-arm64
+
+.PHONY: fuse-build-linux
+fuse-build-linux: fuse-linux-amd64 fuse-linux-arm64
