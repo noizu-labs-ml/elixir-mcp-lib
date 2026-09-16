@@ -15,11 +15,12 @@ defmodule Noizu.MCP.Server.Features.VFS do
       `__mcp__(:vfs)`), returning wire-shaped maps or `Noizu.MCP.Error` structs.
 
   Every mount also serves a generated, read-only `/README.md`
-  (`Noizu.MCP.VFS.Readme`) at its root, backend-wins: paths the backend
-  answers `:enoent` fall back to the generated document, first-page root
-  listings gain a `README.md` entry when the backend does not list one, and
-  writes to the reserved path are `:erofs` unless the backend owns a writable
-  node there.
+  (`Noizu.MCP.VFS.Readme`) at its root, backend-wins: a backend that answers
+  the reserved path successfully wins, while read errors of any errno fall
+  back to the generated document (`stat` falls back on `:enoent`), first-page
+  root listings gain a `README.md` entry when the backend does not list one,
+  and writes to the reserved path are `:erofs` unless the backend owns a
+  writable node there.
   """
 
   alias Noizu.MCP.Ctx
@@ -118,11 +119,12 @@ defmodule Noizu.MCP.Server.Features.VFS do
             Cache.put(backend, :read, path, result, ttl())
             {:ok, content, version + Cache.generation(backend)}
 
-          {:error, :enoent} = error ->
-            if Readme.path?(path), do: readme_read(backend, path, ctx), else: error
-
+          # /README.md is reserved and advertised by the dispatcher itself —
+          # the backend never wins a read error for it. Any errno (:eisdir,
+          # :eacces, ...) falls back to the generated document; only success
+          # (backend-wins) takes the backend's content.
           {:error, _} = error ->
-            error
+            if Readme.path?(path), do: readme_read(backend, path, ctx), else: error
         end
 
       {:ok, content, version} ->

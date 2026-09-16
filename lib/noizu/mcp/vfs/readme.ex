@@ -6,8 +6,9 @@ defmodule Noizu.MCP.VFS.Readme do
   transport (`vfs_socket`, `vfs_ws`) dispatches through — serves the node
   whenever the registered backend does not provide one itself:
 
-    * `stat` / `read` fall back to the generated document on `:enoent`
-      (backend-wins: a backend that serves its own `/README.md` is untouched)
+    * `stat` falls back to the generated document on `:enoent`; `read` falls
+      back on any error — a backend that cannot answer the reserved path
+      never breaks the mount (backend-wins on success)
     * first-page root listings gain a `README.md` entry when the backend does
       not list one
     * `write` / `create` / `remove` on the reserved path are `:erofs` unless
