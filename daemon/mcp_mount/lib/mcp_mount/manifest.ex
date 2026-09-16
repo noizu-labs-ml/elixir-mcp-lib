@@ -28,12 +28,10 @@ defmodule McpMount.Manifest do
         case Jason.decode(body) do
           {:ok, map} ->
             Map.new(map, fn {path, entry} ->
-              {path,
-               %{
-                 version: entry["version"],
-                 mode: entry["mode"],
-                 size: entry["size"]
-               }}
+              base = %{version: entry["version"], mode: entry["mode"], size: entry["size"]}
+              base = if entry["hash"], do: Map.put(base, :hash, entry["hash"]), else: base
+              base = if entry["unconfirmed"], do: Map.put(base, :unconfirmed, true), else: base
+              {path, base}
             end)
 
           {:error, _} ->
@@ -49,7 +47,10 @@ defmodule McpMount.Manifest do
   def write(mount, entries) when is_map(entries) do
     entries =
       Map.new(entries, fn {path, e} ->
-        {path, %{"version" => e.version, "mode" => e.mode, "size" => e.size}}
+        base = %{"version" => e.version, "mode" => e.mode, "size" => e.size}
+        base = if Map.get(e, :hash), do: Map.put(base, "hash", e.hash), else: base
+        base = if Map.get(e, :unconfirmed), do: Map.put(base, "unconfirmed", true), else: base
+        {path, base}
       end)
 
     body = Jason.encode!(entries)

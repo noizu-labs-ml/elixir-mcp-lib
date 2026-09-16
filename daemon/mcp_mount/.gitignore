@@ -1,0 +1,4 @@
+/deps/
+/_build/
+/mcp-mount
+/erl_crash.dump

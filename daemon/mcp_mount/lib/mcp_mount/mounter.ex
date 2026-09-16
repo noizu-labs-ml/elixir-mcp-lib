@@ -32,6 +32,10 @@ defmodule McpMount.Mounter do
   @backoff_max 30_000
   @debounce_ms 250
   @call_timeout 5_000
+  # initial push + this many retries, then the path is parked (see park/4)
+  @max_push_attempts 4
+  # retry cadence for write-backs that raised mid-flush
+  @flush_retry_ms 2_000
 
   defstruct [
     :conn_mod,
@@ -50,7 +54,15 @@ defmodule McpMount.Mounter do
     backoff_ms: @backoff_start,
     watcher: nil,
     pending: MapSet.new(),
-    timer: nil
+    timer: nil,
+    # rel => attempts this debounce cycle (capped at @max_push_attempts)
+    push_attempts: %{},
+    # rel => content hash; parked paths are never re-pushed until the local
+    # file changes (user modification)
+    parked: %{},
+    # rels whose last create/write was acked by the server but not yet
+    # confirmed by a read-back (self-echo tolerance)
+    pushed_ack: MapSet.new()
   ]
 
   # ── API ───────────────────────────────────────────────────────────────────
@@ -162,7 +174,7 @@ defmodule McpMount.Mounter do
   def handle_info({:file_event, _watcher, {path, _events}}, s) do
     rel = relative(s, path)
 
-    if rel != nil and !Manifest.ignored?(rel) and s.state == :live do
+    if rel != nil and !Manifest.ignored?(rel) and !control_path?(rel) and s.state == :live do
       timer = start_debounce(s.timer)
       {:noreply, %{s | pending: MapSet.put(s.pending, rel), timer: timer}}
     else
@@ -170,13 +182,40 @@ defmodule McpMount.Mounter do
     end
   end
 
-  def handle_info(:flush, %__MODULE__{pending: pending} = s) do
-    pending
-    |> Enum.sort()
-    |> Enum.each(&writeback(s, &1))
+  # Write-backs only run against a live connection; a flush that arrives while
+  # disconnected is deferred — pending is preserved and flushed after the
+  # reconnect resync (see go_live/1). Write-back itself is failure-isolated:
+  # a raising push must never take the daemon down out of handle_info.
+  def handle_info(:flush, %__MODULE__{state: :live, conn: conn} = s) when conn != nil do
+    {s, deferred} =
+      s.pending
+      |> Enum.sort()
+      |> Enum.reduce({s, MapSet.new()}, fn rel, {st, acc} ->
+        try do
+          {writeback(st, rel), acc}
+        rescue
+          e ->
+            Logger.error(
+              "mcp-mount[#{st.name}]: write-back #{rel} raised, deferring: " <>
+                Exception.format(:error, e, [])
+            )
 
-    {:noreply, %{s | pending: MapSet.new(), timer: nil}}
+            {st, MapSet.put(acc, rel)}
+        end
+      end)
+
+    s = %{s | pending: deferred, timer: nil}
+
+    if MapSet.size(deferred) > 0 do
+      Process.send_after(self(), :flush, @flush_retry_ms)
+      {:noreply, s}
+    else
+      {:noreply, s}
+    end
   end
+
+  # Disconnected (or mid-resync): defer, pending flushes after reconnect resync.
+  def handle_info(:flush, s), do: {:noreply, s}
 
   # ── sync ──────────────────────────────────────────────────────────────────
 
@@ -293,7 +332,7 @@ defmodule McpMount.Mounter do
                call(s.conn, "vfs/read", %{"path" => path}, @call_timeout) do
           mode = if listed_stat["executable"], do: 0o755, else: 0o644
           write_local(s, rel, content, mode)
-          {:ok, rel, %{version: version, mode: mode, size: byte_size(content)}}
+          {:ok, rel, entry(content, version, mode)}
         end
     end
   end
@@ -302,6 +341,10 @@ defmodule McpMount.Mounter do
     with :ok <- subscribe(s.conn, ["/"], :infinity) do
       {watcher, watcher_mon} = if s.ro, do: {nil, nil}, else: watcher_pair(s.mount)
       Logger.info("mcp-mount[#{s.name}]: live (#{map_size(s.manifest)} files, ro=#{s.ro})")
+
+      # write-backs deferred while disconnected flush now, after the resync
+      if MapSet.size(s.pending) > 0, do: Process.send_after(self(), :flush, @debounce_ms)
+
       %{s | state: :live, backoff_ms: @backoff_start, watcher: watcher, watcher_mon: watcher_mon}
     else
       error ->
@@ -324,14 +367,29 @@ defmodule McpMount.Mounter do
           mode = event_mode(s.conn, path, s.manifest[rel])
           write_local(s, rel, content, mode)
 
+          # a successful read-back confirms any earlier unconfirmed push
+          s = %{s | pushed_ack: MapSet.delete(s.pushed_ack, rel)}
+
           save_manifest(
             s,
-            Map.put(s.manifest, rel, %{version: v, mode: mode, size: byte_size(content)})
+            Map.put(s.manifest, rel, entry(content, v, mode))
           )
 
         {:error, %{errno: :eisdir}} ->
           File.mkdir_p!(Path.join(s.mount, rel))
           s
+
+        {:error, %{errno: :enoent}} ->
+          if MapSet.member?(s.pushed_ack, rel) do
+            # self-echo for a path we just pushed acked, but the server no
+            # longer has it at the requested path (canonicalized elsewhere?):
+            # stranded — park instead of re-pushing (an unconditional re-push
+            # here duplicated server-side resources unboundedly; seen live).
+            park(s, rel, Path.join(s.mount, rel), "echo for acked push, path missing on server")
+          else
+            Logger.warning("mcp-mount[#{s.name}]: pull failed for #{path}: enoent")
+            s
+          end
 
         {:error, reason} ->
           Logger.warning("mcp-mount[#{s.name}]: pull failed for #{path}: #{inspect(reason)}")
@@ -388,79 +446,113 @@ defmodule McpMount.Mounter do
     Process.send_after(self(), :flush, @debounce_ms)
   end
 
+  # Returns the (possibly updated) state. The flush loop threads it through,
+  # so ack-as-synced manifest updates stick in memory — dropping them here is
+  # what made every later writeback see a stale version and churn.
   defp writeback(s, rel) do
     abs = Path.join(s.mount, rel)
 
     cond do
+      # control tree (/etc/**) is a server-side configuration surface: never
+      # pushed, local edits are a documented no-op (still materialized/readable)
+      control_path?(rel) ->
+        s
+
       s.ro ->
         Logger.warning("mcp-mount[#{s.name}]: ro mount, refusing write-back for #{rel}")
-
-      File.dir?(abs) ->
-        :ok
-
-      File.regular?(abs) ->
-        push_local(s, rel, abs)
+        s
 
       true ->
-        :ok
+        s = unpark_if_changed(s, rel, abs)
+
+        cond do
+          parked?(s, rel, abs) -> s
+          File.dir?(abs) -> s
+          File.regular?(abs) -> capped_push(s, rel, abs)
+          true -> s
+        end
+    end
+  end
+
+  # Per-path retry cap: a push that keeps failing or going unconfirmed is
+  # attempted at most @max_push_attempts times, then parked — it is never
+  # re-pushed until the local file changes (user modification).
+  defp capped_push(s, rel, abs) do
+    n = Map.get(s.push_attempts, rel, 0)
+
+    if n >= @max_push_attempts do
+      park(s, rel, abs, "no confirmed push after #{n} attempts")
+    else
+      push_local(%{s | push_attempts: Map.put(s.push_attempts, rel, n + 1)}, rel, abs)
     end
   end
 
   defp push_local(s, rel, abs) do
     path = "/" <> rel
+    local = s.manifest[rel]
+    local_hash = file_hash(abs)
 
     case call(s.conn, "vfs/stat", %{"path" => path}, @call_timeout) do
-      {:error, %{errno: :enoent}} ->
-        # locally created file — create it on the server
-        {:ok, content} = File.read(abs)
-
-        case call(s.conn, "vfs/create", %{"path" => path, "data" => content}, @call_timeout) do
-          {:ok, node} ->
-            mode = mode_from_node(node)
-            File.chmod(abs, mode)
-
-            save_manifest(
-              s,
-              Map.put(s.manifest, rel, %{
-                version: node["version"],
-                mode: mode,
-                size: byte_size(content)
-              })
-            )
-
-          {:error, reason} ->
-            Logger.warning("mcp-mount[#{s.name}]: create failed for #{path}: #{inspect(reason)}")
-            s
-        end
-
-      {:ok, stat} ->
-        local = s.manifest[rel]
-
+      {:ok, %{"version" => v}} ->
         cond do
-          local != nil and local.version == stat["version"] ->
-            {:ok, content} = File.read(abs)
+          # already synced: the server holds the version we recorded and the
+          # local content is unchanged since then — watcher noise (chmod/touch
+          # refires), not an edit. Pushing would bump the server version for
+          # no change.
+          local != nil and v == local.version and Map.get(local, :unconfirmed) == nil and
+            local_hash != nil and local_hash == local.hash ->
+            s
 
-            case call(s.conn, "vfs/write", %{"path" => path, "data" => content}, @call_timeout) do
-              {:ok, node} ->
-                save_manifest(
-                  s,
-                  Map.put(s.manifest, rel, %{
-                    version: node["version"],
-                    mode: local.mode,
-                    size: byte_size(content)
-                  })
-                )
+          local != nil and local.version == v ->
+            with {:ok, content} <- File.read(abs) do
+              case call(s.conn, "vfs/write", %{"path" => path, "data" => content}, @call_timeout) do
+                {:ok, node} ->
+                  acked_sync(s, rel, content, local.mode, node["version"], local.version)
 
-              {:error, reason} ->
-                Logger.warning(
-                  "mcp-mount[#{s.name}]: write failed for #{path}: #{inspect(reason)}"
-                )
+                {:error, reason} ->
+                  Logger.warning(
+                    "mcp-mount[#{s.name}]: write failed for #{path}: #{inspect(reason)}"
+                  )
 
-                s
+                  s
+              end
+            else
+              _ -> s
             end
 
           true ->
             conflict(s, rel, abs)
+        end
+
+      {:error, %{errno: :enoent}} ->
+        cond do
+          # stranded: we hold an ack for exactly this content but the server
+          # no longer has the requested path (canonicalized elsewhere). Do not
+          # re-create — that duplicates server-side resources.
+          local != nil and MapSet.member?(s.pushed_ack, rel) and
+            local_hash != nil and local_hash == local.hash ->
+            park(s, rel, abs, "push acked but path missing on server")
+
+          true ->
+            # locally created file — create it on the server
+            with {:ok, content} <- File.read(abs),
+                 {:ok, node} <-
+                   call(s.conn, "vfs/create", %{"path" => path, "data" => content}, @call_timeout) do
+              mode = mode_from_node(node)
+              File.chmod(abs, mode)
+
+              # ack-as-synced: a successful ack always marks the path synced.
+              # An ack without a version records the pre-push version flagged
+              # unconfirmed until a read-back confirms it.
+              acked_sync(s, rel, content, mode, node["version"], local && local.version)
+            else
+              {:error, reason} ->
+                Logger.warning(
+                  "mcp-mount[#{s.name}]: create failed for #{path}: #{inspect(reason)}"
+                )
+
+                s
+            end
         end
 
       {:error, reason} ->
@@ -469,9 +561,78 @@ defmodule McpMount.Mounter do
     end
   end
 
+  # A successful create/write ack marks the path synced immediately — the
+  # daemon never leaves an acked path in "pending re-push". The content hash
+  # recorded with the entry lets later flushes recognize unchanged content.
+  defp acked_sync(s, rel, content, mode, acked_version, pre_version) do
+    {version, unconfirmed} =
+      if is_integer(acked_version) do
+        {acked_version, false}
+      else
+        Logger.warning(
+          "mcp-mount[#{s.name}]: ack for #{rel} carried no version; marked unconfirmed"
+        )
+
+        {pre_version, true}
+      end
+
+    e = entry(content, version, mode)
+    e = if unconfirmed, do: Map.put(e, :unconfirmed, true), else: e
+
+    s = %{s | pushed_ack: MapSet.put(s.pushed_ack, rel)}
+    save_manifest(s, Map.put(s.manifest, rel, e))
+  end
+
+  # Park a problem path: one-time warning, a `.conflict-<ts>` copy of the
+  # local content (the file itself stays in place), and no further pushes
+  # until the local file changes.
+  defp park(s, rel, abs, reason) do
+    Logger.warning(
+      "mcp-mount[#{s.name}]: parking #{rel} (#{reason}); will not re-push until edited"
+    )
+
+    backup = abs <> ".conflict-" <> ts()
+
+    case File.copy(abs, backup) do
+      {:ok, _} ->
+        Logger.warning("mcp-mount[#{s.name}]: parked copy of #{rel} saved to #{backup}")
+
+      _ ->
+        :ok
+    end
+
+    %{
+      s
+      | parked: Map.put(s.parked, rel, file_hash(abs)),
+        push_attempts: Map.delete(s.push_attempts, rel),
+        pushed_ack: MapSet.delete(s.pushed_ack, rel)
+    }
+  end
+
+  defp parked?(s, rel, abs), do: s.parked[rel] != nil and s.parked[rel] == file_hash(abs)
+
+  defp unpark_if_changed(s, rel, abs) do
+    case s.parked[rel] do
+      nil ->
+        s
+
+      h ->
+        if h == file_hash(abs) do
+          s
+        else
+          Logger.info("mcp-mount[#{s.name}]: #{rel} changed since park; re-enabling write-back")
+
+          %{
+            s
+            | parked: Map.delete(s.parked, rel),
+              push_attempts: Map.delete(s.push_attempts, rel)
+          }
+        end
+    end
+  end
+
   defp conflict(s, rel, abs) do
-    ts = DateTime.utc_now() |> DateTime.to_iso8601() |> String.replace(":", "-")
-    backup = abs <> ".conflict-" <> ts
+    backup = abs <> ".conflict-" <> ts()
 
     with :ok <- File.rename(abs, backup),
          {:ok, %{"content" => content, "version" => version}} <-
@@ -485,7 +646,7 @@ defmodule McpMount.Mounter do
 
       save_manifest(
         s,
-        Map.put(s.manifest, rel, %{version: version, mode: mode, size: byte_size(content)})
+        Map.put(s.manifest, rel, entry(content, version, mode))
       )
     else
       error ->
@@ -578,6 +739,28 @@ defmodule McpMount.Mounter do
 
   defp mode_from_node(%{"executable" => true}), do: 0o755
   defp mode_from_node(_), do: 0o644
+
+  # Manifest entry with a stable content hash — lets flushes tell real edits
+  # from watcher noise (chmod/touch refires of unchanged content).
+  defp entry(content, version, mode) do
+    %{version: version, mode: mode, size: byte_size(content), hash: content_hash(content)}
+  end
+
+  defp content_hash(content), do: Base.encode16(:crypto.hash(:sha256, content), case: :lower)
+
+  defp file_hash(abs) do
+    case File.read(abs) do
+      {:ok, content} -> content_hash(content)
+      _ -> nil
+    end
+  end
+
+  # Control tree: server-side configuration surfaces. Local edits via the
+  # mount are a documented no-op — never watched, never pushed.
+  defp control_path?("etc"), do: true
+  defp control_path?(rel), do: String.starts_with?(rel, "etc/")
+
+  defp ts, do: DateTime.utc_now() |> DateTime.to_iso8601() |> String.replace(":", "-")
 
   defp join_path("/", name), do: "/" <> name
   defp join_path(dir, name), do: dir <> "/" <> name
