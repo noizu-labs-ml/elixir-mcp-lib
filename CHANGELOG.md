@@ -7,14 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-09-16
+
+Changes since 0.4.1 was published on 2026-09-16, covering
+`c6d947f..6975b31` (PRs #23–#25 and #18). The published Hex archive matches
+all 216 packaged files at `c6d947f`; the later `v0.4.1` tag is not the
+publication boundary. These changes concern companion executables, release
+workflows and documentation; the Hex library's runtime code is unchanged.
+
 ### Added
 
-- Multi-arch `mcp-fuse` GitHub Release binaries (`mcp-fuse-{os}-{arch}[.exe]`):
-  linux amd64/arm64, darwin arm64, windows amd64/arm64. Windows uses cgofuse
-  with `CGO_ENABLED=0` (WinFsp demand-loaded at mount; no headers to compile).
-  Hex remains Elixir-only.
-- `mcp-mount --token` is optional; empty token still sends `vfs/auth` and is
-  accepted when the server has `auth: nil` or optional auth.
+- **Linux companion builds and installation guidance:** `make fuse-build-linux`
+  produces amd64 and arm64 binaries, and CI uploads both architectures.
+  Documentation covers FUSE 3 prerequisites, mount permissions, unmounting and
+  service setup.
+- **Multi-platform `mcp-fuse` builds:** targets and release jobs for Linux
+  amd64/arm64, macOS arm64 and Windows amd64/arm64. Windows uses cgofuse with
+  `CGO_ENABLED=0` and loads WinFsp at mount time; the Windows arm64 release job
+  is optional. Companions remain outside the Hex package.
+- **Tag-triggered release packaging:** portable `mcp-mount` escript archives
+  and Linux/macOS amd64/arm64 `mcp-fuse` archives with installation instructions
+  and SHA-256 checksums. Pull requests validate these builds; publishing is
+  restricted to version-tag pushes. Release creation and artifact uploads
+  tolerate concurrent publishers. The escript build uses the repository's
+  Elixir 1.20.1 / OTP 29 toolchain.
+
+### Changed
+
+- **Optional `mcp-mount --token`:** an empty token still sends `vfs/auth`,
+  allowing mounts against servers configured with no or optional
+  authentication. Authenticated servers continue to enforce their policy.
+- Clarified the distinction between the WebSocket `mcp-mount` file-sync client
+  and the local Unix-socket `mcp-fuse` kernel filesystem, including Windows
+  runtime requirements and platform-specific build instructions.
+- Completed the 0.4.1 changelog from the verified 0.4.0 publication boundary.
+
+### Fixed
+
+- **Windows append and cross-handle consistency:** writes and truncates now
+  persist before reporting success, with serialized mutations so consecutive
+  appends use the current file size and one handle cannot overwrite another
+  handle's pending changes. Failed or denied mutations leave remote data intact.
+- Windows directory listings now use authoritative attributes instead of
+  advertising every entry as writable.
+- Release installation examples now use the supported Unix-socket flags, and
+  release publishing has write permission only in its publishing job.
+
+### Validation
+
+- Added Windows regression tests for consecutive appends, cross-handle
+  visibility, truncation, read-only listings and rejected mutations. Windows
+  CI executes these tests; Go unit/race checks and Linux/macOS/Windows build
+  checks passed for the merged changes.
 
 ## [0.4.1] — 2026-09-16
 
