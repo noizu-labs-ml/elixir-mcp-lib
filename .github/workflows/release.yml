@@ -23,8 +23,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.18"
-          otp-version: "27"
+          elixir-version: "1.20.1-otp-29"
+          otp-version: "29.0.2"
       - name: Build escript
         working-directory: daemon/mcp_mount
         run: |
@@ -32,7 +32,8 @@ jobs:
           mix local.rebar --force
           mix deps.get
           MIX_ENV=prod mix escript.build
-      # Built with OTP 27; run with OTP 27 or newer via escript.
+      # Built with the repo-pinned toolchain (.tool-versions): elixir
+      # 1.20.1-otp-29 / OTP 29.0.2. Run with OTP 29 or newer via escript.
       # Native filesystem watcher requirements still apply (see INSTALL.md).
       - name: Package
         run: |
@@ -42,7 +43,7 @@ jobs:
           cat > "$dir/INSTALL.md" <<'EOF'
           # Prebuilt mcp-mount
 
-          Requires Erlang/OTP 27 or newer, including `escript` on PATH.
+          Requires Erlang/OTP 29 or newer, including `escript` on PATH.
           Extract the archive and run `./mcp-mount` with the flags below;
           no Elixir compiler or `mix escript.build` step is needed.
           Linux write-back requires `inotifywait` (Debian/Ubuntu: inotify-tools).
@@ -102,7 +103,7 @@ jobs:
              (run `./mcp-fuse --help` for all flags; `--ro` for read-only)
           4. Unmount:
              - Linux: `fusermount3 -u ~/mcp`
-             - macOS: `umount ~/mcp`
+             - macOS: `diskutil unmount ~/mcp`
           EOF
           tar -czf "${dir}.tar.gz" "$dir"
           sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
