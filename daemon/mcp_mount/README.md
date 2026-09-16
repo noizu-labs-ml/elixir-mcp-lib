@@ -14,6 +14,24 @@ snapshots the tree into a real directory, then keeps it in sync both ways:
 
 Result: `grep`, `cat`, `tail -f`, pipes and cron all work on your MCP data.
 
+### Write-back safety
+
+- **Control tree** — `/etc/**` is a server-side configuration surface. It is
+  materialized and readable, but local edits via the mount are a **no-op**: the
+  watcher never queues it and the daemon never pushes or conflict-saves it.
+- **Ack-as-synced** — a successful `vfs/create`/`vfs/write` ack immediately
+  marks the path synced (an ack without a version is recorded unconfirmed
+  until a read-back confirms it); unchanged content is never re-pushed on
+  watcher noise.
+- **Retry cap** — a path that keeps failing (or going unconfirmed, e.g. the
+  server canonicalized a created page elsewhere and read-backs 404) is
+  attempted at most 4 times, then **parked** with a one-time warning and a
+  `.conflict-<ts>` copy of the local content. A parked path is never re-pushed
+  until the local file is edited.
+- **Disconnected flushes** — write-backs are skipped (never raised on) while
+  the connection is down; pending edits flush automatically after the
+  reconnect resync.
+
 ## Usage
 
 ```bash
@@ -28,10 +46,10 @@ mix escript.build
 | `--mount` | local directory to materialize the tree into (created if missing) |
 | `--ro` | read-only: no watcher, never pushes local edits |
 
-A `.mcp-mount/manifest.json` inside the mount dir tracks `{path → version,
-mode, size}`; reconnects are a version-compare resync against it (no event
-log). Server deletions are mirrored; `.mcp-mount/` and `*.conflict-*` are never
-pushed.
+A `.mcp-mount/manifest.json` inside the mount dir tracks
+`{path → version, mode, size, content-hash}`; reconnects are a version-compare
+resync against it (no event log). Server deletions are mirrored; `.mcp-mount/`
+and `*.conflict-*` are never pushed.
 
 ## State machine
 
