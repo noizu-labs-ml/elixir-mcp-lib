@@ -357,7 +357,10 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   defp control_list(_backend, @mount <> "/runtime", _cursor, _ctx) do
-    {:ok, [dir_entry("sessions"), dir_entry("status")], nil}
+    # status is a file-shaped control node (see control_stat/2) — like the
+    # cache entries below, the LIST view must agree or walker clients queue
+    # it as a dir and crash-loop on the enotdir.
+    {:ok, [dir_entry("sessions"), control_entry("status")], nil}
   end
 
   defp control_list(backend, @mount <> "/runtime/sessions", cursor, _ctx) do

@@ -85,6 +85,24 @@ defmodule Noizu.MCP.VFS.ReadmeTest.OwnReadme do
   def write(_path, _data, _ctx), do: {:error, :enoent}
 end
 
+defmodule Noizu.MCP.VFS.ReadmeTest.EisdirReadme do
+  @moduledoc false
+  # A backend whose /README.md read fails with a non-:enoent errno (observed
+  # in the wild: :eisdir from a real consumer) — the generated node must
+  # still win; the propagated error used to kill daemon sync clients.
+  use Noizu.MCP.VFS
+
+  @impl true
+  def stat(_path, _ctx), do: {:error, :eisdir}
+
+  @impl true
+  def list("/", _cursor, _ctx), do: {:ok, [], nil}
+  def list(_path, _cursor, _ctx), do: {:error, :eisdir}
+
+  @impl true
+  def read(_path, _ctx), do: {:error, :eisdir}
+end
+
 defmodule Noizu.MCP.VFS.ReadmeTest.Described do
   @moduledoc false
   use Noizu.MCP.VFS
@@ -121,7 +139,15 @@ defmodule Noizu.MCP.VFS.ReadmeTest do
 
   setup context do
     on_exit(fn ->
-      for backend <- [@plain, @wrapper, @standalone, @static, @dynamic] do
+      for backend <- [
+            @plain,
+            @wrapper,
+            @standalone,
+            @static,
+            @dynamic,
+            Noizu.MCP.VFS.ReadmeTest.OwnReadme,
+            Noizu.MCP.VFS.ReadmeTest.EisdirReadme
+          ] do
         Cache.purge(backend)
       end
     end)
@@ -197,6 +223,25 @@ defmodule Noizu.MCP.VFS.ReadmeTest do
     assert {:ok, entries, nil} = VFS.list(backend, "/", nil, ctx)
     assert length(entries) == 1
     assert {:ok, _} = VFS.write(backend, "/README.md", "x", ctx)
+  end
+
+  test "a backend read error other than :enoent still serves the generated node", %{ctx: ctx} do
+    backend = Noizu.MCP.VFS.ReadmeTest.EisdirReadme
+
+    assert {:ok, content, version} = VFS.read(backend, "/README.md", ctx)
+    assert is_integer(version) and version > 0
+    assert content =~ "virtual filesystem"
+  end
+
+  test "root listing shows README.md as a file even when the backend errors on the read", %{
+    ctx: ctx
+  } do
+    backend = Noizu.MCP.VFS.ReadmeTest.EisdirReadme
+
+    assert {:ok, entries, nil} = VFS.list(backend, "/", nil, ctx)
+
+    assert %{name: "README.md", type: :file} =
+             Enum.find(entries, &(&1.name == "README.md"))
   end
 
   # ── composed mounts ───────────────────────────────────────────────────────
