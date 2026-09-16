@@ -82,6 +82,8 @@ jobs:
         with:
           go-version: "1.25.8"
           cache-dependency-path: fuse/go.sum
+      - name: Windows adapter regression tests (nocgo)
+        run: go test ./...
       - name: Compile windows/amd64 (nocgo)
         run: go build -o mcp-fuse-windows-amd64.exe .
 
@@ -152,6 +154,6 @@ jobs:
           fi
           ls -l dist
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$GITHUB_REF_NAME" --generate-notes || gh release view "$GITHUB_REF_NAME"
           fi
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

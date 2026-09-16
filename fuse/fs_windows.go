@@ -20,18 +20,16 @@ type winFS struct {
 	ro          bool
 	maxFileSize uint64
 
+	// ioMu serializes whole-file read/modify/write operations across handles.
+	ioMu  sync.Mutex
 	mu    sync.Mutex
 	next  uint64
 	files map[uint64]*winHandle
 }
 
 type winHandle struct {
-	path       string
-	mu         sync.Mutex
-	ops        []fileOp
-	startTrunc bool
-	dirty      bool
-	flushed    bool
+	path     string
+	writable bool
 }
 
 func newWinFS(client *Client, cache *Cache, ro bool, maxFile uint64) *winFS {
@@ -157,6 +155,11 @@ func (fs *winFS) take(fh uint64) *winHandle {
 }
 
 func (fs *winFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
+	if h := fs.get(fh); h != nil {
+		path = h.path
+	}
 	path = fusePath(path)
 	node, errno := statCached(fs.client, fs.cache, path)
 	if errno != 0 {
@@ -167,6 +170,8 @@ func (fs *winFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 func (fs *winFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	path = fusePath(path)
 	entries, errno := listAll(fs.client, fs.cache, path)
 	if errno != 0 {
@@ -176,7 +181,11 @@ func (fs *winFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, 
 	fill("..", nil, 0)
 	for _, e := range entries {
 		st := fuse.Stat_t{}
-		fillStat(&Node{Type: e.Type, Size: e.Size, Mtime: e.Mtime, Writable: true}, &st)
+		node, errno := statCached(fs.client, fs.cache, childPath(path, e.Name))
+		if errno != 0 {
+			return fuseErr(errno)
+		}
+		fillStat(node, &st)
 		if !fill(e.Name, &st, 0) {
 			break
 		}
@@ -185,6 +194,8 @@ func (fs *winFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, 
 }
 
 func (fs *winFS) Open(path string, flags int) (int, uint64) {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	path = fusePath(path)
 	accmode := flags & fuse.O_ACCMODE
 	truncate := flags&fuse.O_TRUNC != 0
@@ -200,10 +211,17 @@ func (fs *winFS) Open(path string, flags int) (int, uint64) {
 			return fuseErr(vfsEACCES), ^uint64(0)
 		}
 	}
-	return 0, fs.alloc(&winHandle{path: path, startTrunc: truncate, dirty: truncate})
+	if truncate {
+		if _, _, errno := flushBuffer(fs.client, fs.cache, path, fs.ro, fs.maxFileSize, true, nil); errno != 0 {
+			return fuseErr(errno), ^uint64(0)
+		}
+	}
+	return 0, fs.alloc(&winHandle{path: path, writable: accmode != fuse.O_RDONLY})
 }
 
 func (fs *winFS) Create(path string, flags int, mode uint32) (int, uint64) {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	path = fusePath(path)
 	if fs.ro {
 		return fuseErr(vfsEROFS), ^uint64(0)
@@ -214,10 +232,12 @@ func (fs *winFS) Create(path string, flags int, mode uint32) (int, uint64) {
 	}
 	fs.cache.Invalidate(path)
 	fs.cache.PutAttr(path, node)
-	return 0, fs.alloc(&winHandle{path: path, startTrunc: true})
+	return 0, fs.alloc(&winHandle{path: path, writable: flags&fuse.O_ACCMODE != fuse.O_RDONLY})
 }
 
 func (fs *winFS) Unlink(path string) int {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	if fs.ro {
 		return fuseErr(vfsEROFS)
 	}
@@ -230,6 +250,8 @@ func (fs *winFS) Unlink(path string) int {
 }
 
 func (fs *winFS) Truncate(path string, size int64, fh uint64) int {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	if size < 0 {
 		return fuseErr(vfsEINVAL)
 	}
@@ -241,12 +263,10 @@ func (fs *winFS) Truncate(path string, size int64, fh uint64) int {
 	}
 	path = fusePath(path)
 	if h := fs.get(fh); h != nil {
-		h.mu.Lock()
-		h.ops = append(h.ops, fileOp{kind: opTruncate, size: uint64(size)})
-		h.dirty = true
-		h.flushed = false
-		h.mu.Unlock()
-		return fuseErr(fs.flushHandle(h))
+		if !h.writable {
+			return fuseErr(vfsEBADF)
+		}
+		path = h.path
 	}
 	node, errno := statCached(fs.client, fs.cache, path)
 	if errno != 0 {
@@ -262,14 +282,10 @@ func (fs *winFS) Truncate(path string, size int64, fh uint64) int {
 }
 
 func (fs *winFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	if h := fs.get(fh); h != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		data, errno := fs.materializeLocked(h)
-		if errno != 0 {
-			return fuseErr(errno)
-		}
-		return copyAt(data, buff, ofst)
+		path = h.path
 	}
 	data, errno := contentReader(fs.client, fs.cache, fusePath(path))
 	if errno != 0 {
@@ -289,11 +305,13 @@ func copyAt(data, buff []byte, ofst int64) int {
 }
 
 func (fs *winFS) Write(path string, buff []byte, ofst int64, fh uint64) int {
+	fs.ioMu.Lock()
+	defer fs.ioMu.Unlock()
 	if fs.ro {
 		return fuseErr(vfsEROFS)
 	}
 	h := fs.get(fh)
-	if h == nil {
+	if h == nil || !h.writable {
 		return fuseErr(vfsEBADF)
 	}
 	if ofst < 0 {
@@ -302,30 +320,22 @@ func (fs *winFS) Write(path string, buff []byte, ofst int64, fh uint64) int {
 	if uint64(ofst) > fs.maxFileSize || uint64(len(buff)) > fs.maxFileSize-uint64(ofst) {
 		return fuseErr(vfsEFBIG)
 	}
-	buf := make([]byte, len(buff))
-	copy(buf, buff)
-	h.mu.Lock()
-	h.ops = append(h.ops, fileOp{kind: opWrite, off: ofst, data: buf})
-	h.dirty = true
-	h.flushed = false
-	h.mu.Unlock()
+	// WinFsp queries Getattr for EOF before append writes. Publish content
+	// and metadata before reporting success, including across open handles.
+	_, _, errno := flushBuffer(fs.client, fs.cache, h.path, fs.ro, fs.maxFileSize, false,
+		[]fileOp{{kind: opWrite, off: ofst, data: buff}})
+	if errno != 0 {
+		return fuseErr(errno)
+	}
 	return len(buff)
 }
 
-func (fs *winFS) Flush(path string, fh uint64) int {
-	h := fs.get(fh)
-	if h == nil {
-		return 0
-	}
-	return fuseErr(fs.flushHandle(h))
-}
+// Writes and truncates are committed synchronously; close has no pending data.
+func (fs *winFS) Flush(path string, fh uint64) int { return 0 }
 
 func (fs *winFS) Release(path string, fh uint64) int {
-	h := fs.take(fh)
-	if h == nil {
-		return 0
-	}
-	return fuseErr(fs.flushHandle(h))
+	fs.take(fh)
+	return 0
 }
 
 func (fs *winFS) Fsync(path string, datasync bool, fh uint64) int {
@@ -337,35 +347,3 @@ func (fs *winFS) Chmod(path string, mode uint32) int { return fuseErr(vfsEOPNOTS
 func (fs *winFS) Chown(path string, uid uint32, gid uint32) int { return fuseErr(vfsEOPNOTSUPP) }
 
 func (fs *winFS) Utimens(path string, tmsp []fuse.Timespec) int { return fuseErr(vfsEOPNOTSUPP) }
-
-func (fs *winFS) flushHandle(h *winHandle) vfsErrno {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.dirty || h.flushed {
-		return 0
-	}
-	_, _, errno := flushBuffer(fs.client, fs.cache, h.path, fs.ro, fs.maxFileSize, h.startTrunc, h.ops)
-	if errno != 0 {
-		return errno
-	}
-	h.ops = nil
-	h.startTrunc = false
-	h.dirty = false
-	h.flushed = true
-	return 0
-}
-
-func (fs *winFS) materializeLocked(h *winHandle) ([]byte, vfsErrno) {
-	if !h.dirty {
-		return contentReader(fs.client, fs.cache, h.path)
-	}
-	var base []byte
-	if !h.startTrunc {
-		data, errno := contentReader(fs.client, fs.cache, h.path)
-		if errno != 0 {
-			return nil, errno
-		}
-		base = data
-	}
-	return applyFileOps(base, h.ops, fs.maxFileSize)
-}
