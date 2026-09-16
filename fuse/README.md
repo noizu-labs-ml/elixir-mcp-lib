@@ -14,6 +14,7 @@ Requirements: Go 1.22+. Repository development and CI pin Go 1.25.8 in
 
 ```bash
 make fuse-build        # from repo root; binary at bin/mcp-fuse
+make fuse-build-linux  # cross-compiled: bin/mcp-fuse-linux-{amd64,arm64}
 # or directly:
 cd fuse && go build -o ../bin/mcp-fuse .
 ```
@@ -26,7 +27,18 @@ Elixir-only package; build or distribute the Go binary separately.
 
 * **macOS** — [macFUSE](https://osxfuse.github.io/) or
   [fuse-t](https://www.fuse-t.app/) must be installed.
-* **Linux** — FUSE 3 (`fusermount3`) must be available.
+* **Linux** — FUSE 3 runtime must be available. On Debian/Ubuntu:
+  `sudo apt-get install fuse3`; on Fedora/RHEL: `sudo dnf install fuse3`.
+  `fusermount3` must be on `PATH`, and unprivileged mounts require either
+  `user_allow_other`-free default policy (fine for single-user mounts) or
+  membership in the `fuse` group on some distributions. Verify with
+  `fusermount3 --version`.
+
+The daemon itself is platform-neutral Go (pure-Go FUSE via
+`hanwen/go-fuse`; no CGO), so Linux binaries are plain cross-compiles —
+`make fuse-build-linux` produces statically linked `linux/amd64` and
+`linux/arm64` binaries. CI builds and uploads both as artifacts
+(`mcp-fuse-linux`) on every `fuse/**` change.
 
 ## Usage
 
@@ -40,7 +52,8 @@ bin/mcp-fuse --server unix:/run/mcp/vfs.sock --mount /Volumes/mcp --ro
 bin/mcp-fuse --server unix:/run/mcp/vfs.sock --mount /Volumes/mcp
 
 # unmount: Ctrl-C (SIGINT/SIGTERM trigger graceful unmount), or
-fusermount -u /Volumes/mcp        # macOS: diskutil unmount /Volumes/mcp
+fusermount3 -u /mnt/mcp            # Linux
+diskutil unmount /Volumes/mcp      # macOS
 ```
 
 ### Flags
@@ -102,3 +115,39 @@ On Linux with FUSE available, the opt-in kernel mount smoke is:
 ```bash
 MCP_FUSE_MOUNT_TEST=1 go test -run TestMountedRootIntegration -v .
 ```
+
+CI runs this automatically whenever the hosted runner exposes `/dev/fuse`;
+otherwise it is skipped (GitHub-hosted Ubuntu runners currently do not).
+
+## Linux notes
+
+* **Kernel mounts** (`mcp-fuse`) — the same binary semantics as macOS; the
+  kernel-side differences (fusermount3 unmount helper, `/dev/fuse`) are
+  handled by `hanwen/go-fuse` + the OS FUSE 3 runtime. There is no
+  Linux-specific code path in this daemon; `mount_linux_test.go` covers the
+  kernel-mount smoke when `/dev/fuse` is present.
+* **Boot persistence** — a minimal systemd unit (adjust paths/key):
+
+  ```ini
+  # /etc/systemd/system/mcp-fuse.service
+  [Unit]
+  Description=MCP VFS FUSE mount
+  After=network-online.target
+
+  [Service]
+  Environment=MCP_VFS_TOKEN=<key>
+  ExecStart=/usr/local/bin/mcp-fuse --server unix:/run/mcp/vfs.sock --mount /mnt/mcp
+  ExecStop=/bin/fusermount3 -u /mnt/mcp
+  Restart=on-failure
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  (`systemctl daemon-reload && systemctl enable --now mcp-fuse`; the mount
+  target directory must exist.) fstab helpers are not supported — the mount
+  is driven by this daemon, not mount(8).
+* **`mcp-mount` (escript)** — needs Erlang/Elixir installed; it is fully
+  platform-neutral (userland sync, no kernel FUSE involved). The
+  `file_system` watcher uses inotify on Linux, so write-back works without
+  the macOS escript `mac_listener` caveat.

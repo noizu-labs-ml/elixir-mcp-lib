@@ -55,3 +55,31 @@ jobs:
           else
             echo "::notice::Hosted runner has no /dev/fuse; kernel mount smoke skipped"
           fi
+
+  linux-artifacts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fuse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache-dependency-path: fuse/go.sum
+      # Pure-Go FUSE (hanwen/go-fuse): CGO off, cross-compile both arches.
+      - name: Cross-compile Linux binaries
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o ../bin/mcp-fuse-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o ../bin/mcp-fuse-linux-arm64 .
+      - name: Smoke-check binaries
+        run: |
+          file ../bin/mcp-fuse-linux-amd64 ../bin/mcp-fuse-linux-arm64
+          ../bin/mcp-fuse-linux-amd64 --help >/dev/null 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-fuse-linux
+          path: |
+            bin/mcp-fuse-linux-amd64
+            bin/mcp-fuse-linux-arm64
+          if-no-files-found: error

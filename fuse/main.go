@@ -21,7 +21,7 @@ const defaultRPCTimeout = 5 * time.Second
 func main() {
 	var (
 		server     = flag.String("server", "", "VFS socket URL, unix:/path/to.sock (required)")
-		mount      = flag.String("mount", "", "mountpoint, e.g. /Volumes/mcp (required)")
+		mount      = flag.String("mount", "", "mountpoint, e.g. /mnt/mcp (Linux) or /Volumes/mcp (macOS) (required)")
 		apiKey     = flag.String("apikey", "", "API key (falls back to $MCP_VFS_TOKEN)")
 		ro         = flag.Bool("ro", false, "read-only mount")
 		attrTTL    = flag.Duration("cache-ttl-attr", time.Second, "attribute cache TTL")
