@@ -1,13 +1,19 @@
 name: release
 
 on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - "daemon/mcp_mount/**"
+      - "fuse/**"
+      - ".github/workflows/release.yml"
   push:
     tags:
       - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   escript:
@@ -17,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.17"
+          elixir-version: "1.18"
           otp-version: "27"
       - name: Build escript
         working-directory: daemon/mcp_mount
@@ -26,14 +32,24 @@ jobs:
           mix local.rebar --force
           mix deps.get
           MIX_ENV=prod mix escript.build
-      # The escript is portable to any host with Erlang/OTP installed
-      # (no Elixir compiler needed at runtime): `erl` runs the archive directly.
+      # Built with OTP 27; run with OTP 27 or newer via escript.
+      # Native filesystem watcher requirements still apply (see INSTALL.md).
       - name: Package
         run: |
           dir="mcp-mount"
           mkdir -p "$dir"
           cp daemon/mcp_mount/mcp-mount "$dir/"
-          cp daemon/mcp_mount/README.md "$dir/INSTALL.md"
+          cat > "$dir/INSTALL.md" <<'EOF'
+          # Prebuilt mcp-mount
+
+          Requires Erlang/OTP 27 or newer, including `escript` on PATH.
+          Extract the archive and run `./mcp-mount` with the flags below;
+          no Elixir compiler or `mix escript.build` step is needed.
+          Linux write-back requires `inotifywait` (Debian/Ubuntu: inotify-tools).
+          On macOS this archive runs pull-only; see the platform notes below.
+
+          EOF
+          cat daemon/mcp_mount/README.md >> "$dir/INSTALL.md"
           tar -czf mcp-mount.tar.gz "$dir"
           sha256sum mcp-mount.tar.gz > mcp-mount.tar.gz.sha256
       - uses: actions/upload-artifact@v4
@@ -78,14 +94,15 @@ jobs:
           2. Prerequisite FUSE runtime:
              - Linux: fuse3 + fusermount3
                (Debian/Ubuntu: `apt-get install -y fuse3`; Fedora: `dnf install -y fuse3`)
-             - macOS: install macFUSE (https://osxfuse.github.io/) or fuse-t
-               (https://www.fuse-t.io/) — not bundled here.
+             - macOS: install macFUSE (https://osxfuse.github.io/), not bundled here.
           3. Mount:
-             `./mcp-fuse --url ws://127.0.0.1:4000/vfs --token TOKEN --mount ~/mcp`
+             Start an MCP VFS Unix-socket server, then create the mountpoint:
+             `mkdir -p ~/mcp`
+             `./mcp-fuse --server unix:/path/to/vfs.sock --apikey TOKEN --mount ~/mcp`
              (run `./mcp-fuse --help` for all flags; `--ro` for read-only)
           4. Unmount:
              - Linux: `fusermount3 -u ~/mcp`
-             - macOS: `umount ~/mcp` (or `mountctl unmount` under fuse-t)
+             - macOS: `umount ~/mcp`
           EOF
           tar -czf "${dir}.tar.gz" "$dir"
           sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
@@ -99,6 +116,8 @@ jobs:
 
   release:
     name: GitHub release
+    permissions:
+      contents: write
     needs: [escript, fuse]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -108,12 +127,18 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create release
+      - name: Attach packages to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/*
+          set -euo pipefail
+          # fuse.yml may create the same release concurrently. Only tolerate a
+          # failed create when the release now exists; preserve other failures.
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "$GITHUB_REF_NAME" --generate-notes ||
+              gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --clobber
