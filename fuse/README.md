@@ -29,10 +29,10 @@ Elixir-only package; build or distribute the Go binary separately.
   [fuse-t](https://www.fuse-t.app/) must be installed.
 * **Linux** — FUSE 3 runtime must be available. On Debian/Ubuntu:
   `sudo apt-get install fuse3`; on Fedora/RHEL: `sudo dnf install fuse3`.
-  `fusermount3` must be on `PATH`, and unprivileged mounts require either
-  `user_allow_other`-free default policy (fine for single-user mounts) or
-  membership in the `fuse` group on some distributions. Verify with
-  `fusermount3 --version`.
+  `fusermount3` must be on `PATH`. Unprivileged FUSE mounts do not allow
+  access by other users by default, which is fine for single-user mounts;
+  `user_allow_other` in `/etc/fuse.conf` unlocks multi-user access. Verify
+  with `fusermount3 --version`.
 
 The daemon itself is platform-neutral Go (pure-Go FUSE via
 `hanwen/go-fuse`; no CGO), so Linux binaries are plain cross-compiles —
@@ -137,7 +137,7 @@ otherwise it is skipped (GitHub-hosted Ubuntu runners currently do not).
   [Service]
   Environment=MCP_VFS_TOKEN=<key>
   ExecStart=/usr/local/bin/mcp-fuse --server unix:/run/mcp/vfs.sock --mount /mnt/mcp
-  ExecStop=/bin/fusermount3 -u /mnt/mcp
+  ExecStop=fusermount3 -u /mnt/mcp
   Restart=on-failure
 
   [Install]
