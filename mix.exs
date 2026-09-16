@@ -1,7 +1,7 @@
 defmodule Noizu.MCP.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.4.1"
   @source_url "https://github.com/noizu-labs/noizu-mcp"
 
   def project do
@@ -101,6 +101,7 @@ defmodule Noizu.MCP.MixProject do
         "guides/testing.md",
         "guides/inspector.md",
         "guides/engine.md",
+        "guides/postgres_sync.md",
         "cheatsheets/mcp.cheatmd"
       ],
       groups_for_extras: [

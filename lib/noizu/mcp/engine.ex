@@ -34,6 +34,7 @@ defmodule Noizu.MCP.Engine do
       "MCP federation engine. Attached upstream servers appear as <server>.<tool> " <>
         "entries; manage upstreams with engine.attach, engine.detach and engine.refresh.",
     sql: true,
+    sync: true,
     acl: Noizu.MCP.Engine.ACL
 
   @behaviour Noizu.MCP.Toolset.Behaviour
@@ -212,6 +213,30 @@ defmodule Noizu.MCP.Engine do
           {:error, reason} ->
             upstream_error(reason)
         end
+    end
+  end
+
+  @impl Noizu.MCP.Server
+  def handle_sync(method, params, ctx) do
+    alias Noizu.MCP.Sync.Protocol
+
+    with :ok <- Protocol.validate(method, params),
+         {prefix, relation} when prefix != "engine" <- Toolset.split(params["relation"]),
+         :allow <-
+           Noizu.MCP.Engine.ACL.check(
+             Map.get(ctx, :auth),
+             %Noizu.MCP.ACL.Resource{kind: :dataset, id: params["relation"]},
+             if(method == "sync/mutate", do: :modify, else: :scan),
+             ctx,
+             []
+           ),
+         {:ok, pid} <- Noizu.MCP.Engine.Supervisor.sync_session(prefix, ctx),
+         {:ok, result} <- Session.sync_request(pid, method, Map.put(params, "relation", relation)) do
+      Session.touch(pid)
+      {:ok, result}
+    else
+      {:error, %Error{}} = error -> error
+      _ -> {:error, Protocol.error("permission_denied")}
     end
   end
 

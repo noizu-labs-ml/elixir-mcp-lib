@@ -112,3 +112,22 @@ mcp-mount --url wss://tobor-stage.noizu.com/vfs --mount ~/mnt/tobor-stage
 # kernel FUSE (local unix socket)
 mcp-fuse --server unix:/run/mcp/vfs.sock --mount /Volumes/mcp --ro
 ```
+
+## 7. Linux
+
+`mcp-mount` is platform-neutral userland sync — no kernel FUSE involved. On Linux it needs
+Erlang/Elixir installed (build the escript as above); the `file_system` watcher uses inotify,
+so write-back works out of the box (the escript pull-only degradation is macOS-only — see
+`daemon/mcp_mount/README.md` "Platform notes").
+
+For a **kernel** FUSE mount of the VFS use the companion `mcp-fuse` daemon
+(`fuse/README.md` §Linux notes): install `fuse3` (`fusermount3` on `PATH`), then
+
+```bash
+export MCP_VFS_TOKEN=<key>
+bin/mcp-fuse --server unix:/run/mcp/vfs.sock --mount /mnt/mcp
+fusermount3 -u /mnt/mcp    # or Ctrl-C for graceful unmount
+```
+
+Linux binaries (`mcp-fuse-linux-amd64` / `-arm64`, statically linked) build via
+`make fuse-build-linux` and are uploaded as CI artifacts on every `fuse/**` change.

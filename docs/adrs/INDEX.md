@@ -25,3 +25,12 @@ PRDs for this series: `project-management/PRDs/` (PRD-6 … PRD-11, Series 2 in 
 | [ADR-008](ADR-008-mcp-fuse-companion.md) | Standalone Go FUSE companion and bounded write semantics | accepted |
 
 Implementation plan: `project-management/PRDs/PRD-12-mcp-fuse-companion.md`.
+
+## Series: PostgreSQL cache synchronization (2026-09-07)
+
+| ADR | Title | Status |
+|---|---|---|
+| [ADR-009](ADR-009-postgres-cache-synchronization.md) | Regular cache tables and conditional synchronization | accepted |
+
+Implementation plan: `project-management/PRDs/PRD-13-postgres-cache-synchronization.md`.
+Maintainer sign-off recorded 2026-09-07; docs-only sequencing applies before code.

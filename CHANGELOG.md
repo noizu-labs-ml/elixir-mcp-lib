@@ -9,16 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Standalone Go `mcp-fuse` companion daemon for mounting the unix-socket VFS,
-  with explicit read/write/truncate semantics, reconnecting JSON-RPC client,
-  cache coverage, race-tested unit tests, and an opt-in Linux kernel-mount
-  smoke. The executable is source-built and remains outside the Hex archive.
 - Multi-arch `mcp-fuse` GitHub Release binaries (`mcp-fuse-{os}-{arch}[.exe]`):
   linux amd64/arm64, darwin arm64, windows amd64/arm64. Windows uses cgofuse
   with `CGO_ENABLED=0` (WinFsp demand-loaded at mount; no headers to compile).
   Hex remains Elixir-only.
 - `mcp-mount --token` is optional; empty token still sends `vfs/auth` and is
   accepted when the server has `auth: nil` or optional auth.
+
+## [0.4.1] — 2026-09-16
+
+Changes since the published 0.4.0 package. The version bump originated in
+`99aefd5`; the package published on 2026-09-06 matches the packaged files at
+`a866b4b`. This entry covers `a866b4b..d17e673` (PRs #17, #19–#22).
+
+### Added
+
+- **Opt-in anonymous agent authentication** with Ed25519 keypairs. Agents can
+  open a session, register an account and exchange a signed JWT assertion for
+  an access token through `/oauth/session`, `/oauth/agents` and `/oauth/token`.
+  Nonces and assertion IDs prevent replay; key rotation requires proofs from
+  both the current and new keys. Pending accounts can authenticate with
+  restricted scopes, while hosts control approval, rejection and suspension.
+  Discovery advertises the agent endpoints and JWT bearer grant when enabled.
+- **`Noizu.MCP.Server.Tools.AgentAuth`** exposes seven tools for session creation,
+  registration, authentication, account inspection and key management. Account
+  identity comes from verified caller claims. The optional agent store contract
+  is implemented by both ETS and Ecto, with a separate
+  `priv/liquibase/noizu_mcp_agent.yaml` migration template.
+- **Experimental revisioned PostgreSQL cache synchronization** (ADR-009,
+  PRD-13): `Noizu.MCP.Sync` supplies a controlled `RevisionedDataset` source,
+  local cache tables, a durable outbox and an opt-in worker. Bounded snapshots
+  publish atomically; resumable changes include tombstones. Conditional writes,
+  durable operation IDs and fenced acknowledgments detect conflicts and recover
+  uncertain outcomes without silently overwriting source changes.
+- **Principal-bound `sync/*` protocol and Engine routing** for capabilities,
+  snapshots, changes, mutations and operation lookup. Sources must explicitly
+  advertise the consistency guarantees needed for writes. The PostgreSQL
+  schema and Liquibase include ship with the library; setup and recovery are
+  documented in [the synchronization guide](guides/postgres_sync.md).
+
+### Fixed
+
+- **Engine HTTP upstream authentication:** credentials resolved from `auth_ref`
+  now become bearer headers for ordinary HTTP upstreams as well as pass-through
+  sessions. Previously, non-pass-through credentials were resolved but omitted
+  from requests.
+- **Optional upstream catalogs:** a `method_not_found` response for tools,
+  prompts, resources or resource templates is treated as an empty catalog,
+  allowing an upstream with only some MCP surfaces to become ready. Other
+  listing failures still fail the upstream session.
+- Engine session status output omits internal state, catalog failures use
+  sanitized error details, and termination tolerates an already-stopped client.
+
+### Changed
+
+- Refreshed the README and architecture/layout documentation for the Engine,
+  SQL extension and FUSE companion.
+
+### Upgrade notes
+
+- Agent authentication defaults to disabled. Enable `agent_auth: [enabled:
+  true]` explicitly; custom stores must implement the agent callbacks or
+  configuration fails at boot. Ecto hosts opting in must apply the separate
+  agent migration template. Approval policy and rate limiting remain host-owned.
+- Synchronization is optional and requires PostgreSQL 14+, host-configured
+  repositories, schema installation and explicit worker startup. Existing
+  `sql/modify` and VFS sources do not automatically become revisioned sources.
 
 ## [0.4.0]
 
@@ -27,6 +83,11 @@ datasets), PRD-11 (the Engine) and the PRD-6 groundwork. Consumers should pin
 `~> 0.4`. Publish is user-run (`mix hex.publish` with 2FA); tag `v0.4.0`.
 
 ### Added
+
+- Standalone Go `mcp-fuse` companion daemon for mounting the unix-socket VFS,
+  with explicit read/write/truncate semantics, reconnecting JSON-RPC client,
+  cache coverage, race-tested unit tests, and an opt-in Linux kernel-mount
+  smoke. The executable is source-built and remains outside the Hex archive.
 
 - **`Noizu.MCP.Engine` — upstream federation** (PRD-11, ADR-007): an MCP
   server whose content is other MCP servers. Attach an upstream with a

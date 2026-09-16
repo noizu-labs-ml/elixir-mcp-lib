@@ -23,3 +23,6 @@ fuse-windows-arm64:
 	cd fuse && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o ../bin/mcp-fuse-windows-arm64.exe .
 
 fuse-cross: fuse-linux-amd64 fuse-linux-arm64 fuse-darwin-arm64 fuse-windows-amd64 fuse-windows-arm64
+
+.PHONY: fuse-build-linux
+fuse-build-linux: fuse-linux-amd64 fuse-linux-arm64

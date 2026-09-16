@@ -36,6 +36,7 @@ if Code.ensure_loaded?(Plug.Conn) do
     @behaviour Plug
 
     alias Noizu.MCP.Auth.Server
+    alias Noizu.MCP.Auth.Server.Agent
     alias Noizu.MCP.Auth.Server.Config
     alias Noizu.MCP.Auth.Server.PlugSupport
 
@@ -72,7 +73,7 @@ if Code.ensure_loaded?(Plug.Conn) do
         "scopes_supported" => config.scopes_supported,
         "response_types_supported" => ["code"],
         "response_modes_supported" => ["query"],
-        "grant_types_supported" => ["authorization_code", "refresh_token"],
+        "grant_types_supported" => grant_types(config),
         "code_challenge_methods_supported" => ["S256"],
         "token_endpoint_auth_methods_supported" => auth_methods(config),
         "revocation_endpoint_auth_methods_supported" => auth_methods(config),
@@ -82,6 +83,7 @@ if Code.ensure_loaded?(Plug.Conn) do
         "service_documentation" => Keyword.get(config.dcr, :documentation_uri)
       }
       |> maybe_put("registration_endpoint", registration_endpoint(config))
+      |> Map.merge(agent_metadata(config))
       |> maybe_put("jwks_uri", jwks_uri(config))
       |> maybe_put("resources_supported", resources(config))
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -92,6 +94,34 @@ if Code.ensure_loaded?(Plug.Conn) do
     # `"none"` first, and always present: a public client with PKCE is the normal
     # case for an MCP client, and its presence is half of what turns CIMD on.
     defp auth_methods(_config), do: ["none", "client_secret_post", "client_secret_basic"]
+
+    # RFC 7523 is advertised only when the store can serve it, for the same reason
+    # the router only routes it then: a grant a client can see but never use is
+    # worse than one it cannot see, because the failure surfaces mid-flow.
+    defp grant_types(config) do
+      base = ["authorization_code", "refresh_token"]
+
+      if Agent.supported?(config),
+        do: base ++ ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+        else: base
+    end
+
+    # Non-standard members, prefixed so they cannot be mistaken for RFC 8414 ones.
+    # A client that does not know them ignores them; one that does can drive the
+    # whole anonymous flow from discovery alone, without a hard-coded path.
+    defp agent_metadata(config) do
+      if Agent.supported?(config) do
+        %{
+          "noizu_agent_session_endpoint" => Config.url(config, :agent_session),
+          "noizu_agent_registration_endpoint" => Config.url(config, :agent_register),
+          "noizu_agent_keys_endpoint" => Config.url(config, :agent_keys),
+          "noizu_agent_signing_alg_values_supported" => ["EdDSA"],
+          "noizu_agent_approval_required" => Config.agent_auth(config, :require_approval)
+        }
+      else
+        %{}
+      end
+    end
 
     defp registration_endpoint(config) do
       if Server.dcr_enabled?(config), do: Config.url(config, :register)

@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: noizu-mcp-sync-001
+      author: noizu
+      dbms: postgresql
+      comment: Optional ADR-009 cache/source schema; requires a role capable of provisioning NOLOGIN roles.
+      changes:
+        - sqlFile:
+            path: ../sql/noizu_mcp_sync.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sql:
+            sql: "DO $$ BEGIN RAISE EXCEPTION 'Pause synchronization and reconcile pending operations before separately authorized schema removal'; END $$;"

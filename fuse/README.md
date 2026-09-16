@@ -14,6 +14,7 @@ Requirements: Go 1.22+. Repository development and CI pin Go 1.25.8 in
 
 ```bash
 make fuse-build        # from repo root; host binary at bin/mcp-fuse
+make fuse-build-linux  # linux amd64/arm64
 make fuse-cross        # linux/amd64 linux/arm64 darwin/arm64 windows/amd64 windows/arm64
 # or directly:
 cd fuse && go build -o ../bin/mcp-fuse .
@@ -33,7 +34,19 @@ job fails to schedule, the release still ships windows amd64.
 
 * **macOS** — [macFUSE](https://osxfuse.github.io/) or
   [fuse-t](https://www.fuse-t.app/) must be installed.
-* **Linux** — FUSE 3 (`fusermount3`) must be available.
+* **Linux** — FUSE 3 runtime must be available. On Debian/Ubuntu:
+  `sudo apt-get install fuse3`; on Fedora/RHEL: `sudo dnf install fuse3`.
+  `fusermount3` must be on `PATH`. Unprivileged FUSE mounts do not allow
+  access by other users by default, which is fine for single-user mounts;
+  `user_allow_other` in `/etc/fuse.conf` unlocks multi-user access. Verify
+  with `fusermount3 --version`.
+
+The Unix daemon uses pure-Go FUSE via
+`hanwen/go-fuse` (no CGO), so Linux binaries are plain cross-compiles —
+`make fuse-build-linux` produces statically linked `linux/amd64` and
+`linux/arm64` binaries. CI builds and uploads both as artifacts
+(`mcp-fuse-linux`) on every `fuse/**` change.
+
 * **Windows** — [WinFsp](https://winfsp.dev/) must be installed at runtime.
   The binary does not link WinFsp at compile time (`CGO_ENABLED=0`); the
   driver is loaded when `mcp-fuse` mounts. Use `--server unix:/path` (Windows
