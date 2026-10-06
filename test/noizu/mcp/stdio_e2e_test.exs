@@ -15,8 +15,17 @@ defmodule Noizu.MCP.StdioE2ETest do
   @example_dir Path.expand("../../../examples/echo_stdio", __DIR__)
 
   setup_all do
-    {_, 0} = System.cmd("mix", ["deps.get"], cd: @example_dir, stderr_to_stdout: true)
-    {_, 0} = System.cmd("mix", ["compile"], cd: @example_dir, stderr_to_stdout: true)
+    # Same MIX_ENV as the subprocess below — without it the setup compiles one
+    # env while `mix run --no-halt` recompiles another at runtime, and the
+    # `== app` / "Compiling" lines reach the port as (invalid) MCP messages.
+    dev_env = [{"MIX_ENV", "dev"}]
+
+    {_, 0} =
+      System.cmd("mix", ["deps.get"], cd: @example_dir, env: dev_env, stderr_to_stdout: true)
+
+    {_, 0} =
+      System.cmd("mix", ["compile"], cd: @example_dir, env: dev_env, stderr_to_stdout: true)
+
     :ok
   end
 
