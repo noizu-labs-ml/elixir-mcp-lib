@@ -79,6 +79,13 @@ lib/noizu/
 │   │   ├── quals.ex                   # Query qualifiers (filter pushdown to the pg_mcp extension)
 │   │   ├── schema.ex                  # SQL schema descriptors for exposed datasets
 │   │   └── types.ex                   # Value type mapping (Elixir ↔ Postgres)
+│   ├── sync/                          # Opt-in dataset synchronization, sync/version 1 (PRD-13)
+│   │   ├── protocol.ex                # Validation + explicit dispatch for sync/* methods
+│   │   ├── source.ex                  # Source behaviour: principal-bound, atomic CAS, change feed
+│   │   ├── remote_source.ex           # Source over an already-authenticated MCP Client
+│   │   ├── revisioned_dataset.ex      # Controlled PG Source: durable revisions, snapshots (Ecto-gated)
+│   │   ├── store.ex                   # SQL facade over host-owned mcp_sync schema (Ecto-gated)
+│   │   └── worker.ex                  # Opt-in bounded per-binding sync worker (host-supervised)
 │   ├── toolset/
 │   │   ├── behaviour.ex               # Protocol + behaviour duality for toolsets
 │   │   ├── cache.ex                   # Optional ETS memoization of composed custom-toolset catalogs

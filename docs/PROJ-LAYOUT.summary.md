@@ -15,6 +15,7 @@ noizu-mcp/
 │   │   ├── protocol/               # Compile-time MCP method registry
 │   │   ├── server/ + server.ex     # Server DSL, sessions, features (incl. sql, vfs)
 │   │   ├── sql/                    # SQL feature over pg_mcp (schema, quals, types)
+│   │   ├── sync/                   # Opt-in dataset sync, sync/version 1 contract (PRD-13)
 │   │   ├── toolset/ + toolset.ex   # Toolset resolution (tools/list, tools/call)
 │   │   ├── transport/ + transport.ex  # stdio, SSE codec, streamable HTTP, test, VFS transports
 │   │   ├── types/                  # Content blocks + shared MCP types
@@ -29,15 +30,16 @@ noizu-mcp/
 ├── test/                           # Mirrors lib (acl…transport) + support fixtures
 ├── priv/                           # spec/ JSON Schema, inspector UI, liquibase/
 ├── docs/                           # arch/ (12), adrs/, 01–09 topical, specs/, PROJ-* docs
-├── guides/                         # 15 ExDoc guides
+├── guides/                         # 16 ExDoc guides
 ├── cheatsheets/                    # mcp.cheatmd
 ├── examples/                       # echo_stdio, agent_client, http_kitchen_sink, no_dsl_server
 ├── daemon/mcp_mount/               # Companion mount daemon (separate mix app)
 ├── demo/vfs_demo_server/           # VFS demo server (separate mix app)
 ├── fuse/                           # Go FUSE daemon: MCP VFS as a local filesystem mount
 ├── pg/                             # pg_mcp Rust/pgrx extension + docker e2e/smoke
-├── project-management/PRDs/        # PRD series (INDEX + PRD-1…12)
-├── .github/workflows/              # CI: fuse.yml, pg_mcp.yml
+├── scripts/                        # Dev helper scripts (test_sync.sh)
+├── project-management/PRDs/        # PRD series (INDEX + PRD-1…13)
+├── .github/workflows/              # CI: fuse.yml, pg_mcp.yml, release.yml
 ├── mix.exs                         # noizu_mcp package
 └── README.md
 ```

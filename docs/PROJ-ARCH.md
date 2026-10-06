@@ -4,7 +4,7 @@
 
 Noizu MCP is an Elixir library implementing the [Model Context Protocol](https://modelcontextprotocol.io) (MCP) — a JSON-RPC 2.0-based protocol for exposing tools, resources, and prompts to LLM clients like Claude. The library provides both a **server** DSL (`use Noizu.MCP.Server`) and a **client** GenServer (`Noizu.MCP.Client`) sharing a common sans-IO state machine (`Peer`) that separates protocol logic from transport concerns.
 
-On top of the protocol core sits a frozen extension architecture (0.3.0): **toolsets** (single resolution path for every tool surface), **authorization** (binary-verdict ACL over a host-implemented policy seam), **persistence** (pluggable providers for lib-owned toolset/grant/consent state), plus a **virtual filesystem** with mount clients, per-render-context **descriptions** with an inline `@eval` grading harness, an OAuth 2.1 **authorization-server facade** for hosts, the **Engine** — an MCP server whose content is other MCP servers (ADR-007) — and the experimental **`sql/*`** projection family, consumed Postgres-side by the companion `pg_mcp` extension (ADR-003/005).
+On top of the protocol core sits a frozen extension architecture (0.3.0): **toolsets** (single resolution path for every tool surface), **authorization** (binary-verdict ACL over a host-implemented policy seam), **persistence** (pluggable providers for lib-owned toolset/grant/consent state), plus a **virtual filesystem** with mount clients, per-render-context **descriptions** with an inline `@eval` grading harness, an OAuth 2.1 **authorization-server facade** for hosts, the **Engine** — an MCP server whose content is other MCP servers (ADR-007) — the experimental **`sql/*`** projection family, consumed Postgres-side by the companion `pg_mcp` extension (ADR-003/005), and the opt-in **dataset synchronization** subsystem (`sync/version 1`; ADR-009/PRD-13).
 
 ## System Diagram
 
@@ -94,6 +94,7 @@ graph TB
 | Inspector | `Noizu.MCP.Inspector` | Localhost-only HTML dev client; launched via `mix mcp.client` |
 | Engine | `Noizu.MCP.Engine` | Federation server — an MCP server whose content is other MCP servers (ADR-007) |
 | SQL projection | `Noizu.MCP.SQL` | Experimental `sql/schema|scan|modify` family: typed relations, post-ACL derivation, qual-honesty re-filter (ADR-003/005) |
+| Sync | `Noizu.MCP.Sync.*` | Opt-in dataset synchronization over the `sync/version 1` contract: Source behaviour, protocol dispatch, PG revisioned dataset, bounded worker (ADR-009/PRD-13) |
 
 → *Components ↔ directories: see [PROJ-LAYOUT.md](PROJ-LAYOUT.md); detail docs under [arch/](layout/docs.md)*
 
@@ -126,6 +127,12 @@ All tool-surface consumers (`tools/list`, `tools/call`, catalog) flow through on
 The experimental `sql/schema|scan|modify` family (ADR-003/005; version-tagged, opt-in via a registered dataset, `sql: true`, or custom handlers) exposes a server's surface as typed relations: `catalog` relations mirror the live catalogs, `tool` relations derive from the requesting principal's *effective* toolset post-ACL (a denied tool has no relation), `dataset` relations are the only explicitly registered source, and `resource`/`prompt` relations read through. Column types come from the closed `SQL.Types` vocabulary; quals are hints under a one-directional honesty contract — a dataset may ignore a qual but never invert one, and callers re-check via `SQL.Quals.apply/2`. The companion **`pg_mcp`** Postgres extension (`pg/pg_mcp`, Rust/pgrx) consumes the family from the database side.
 
 → *See [arch/sql.md](arch/sql.md) for details; operator install: [pg-mcp-install.md](pg-mcp-install.md)*
+
+## Dataset Synchronization
+
+`Noizu.MCP.Sync` (ADR-009/PRD-13) is an opt-in, experimental-v1 subsystem that materializes an MCP-exposed dataset into ordinary PostgreSQL tables: a `SELECT` from `mcp_sync.records` makes no MCP request. A `Source` behaviour (first impl: `RevisionedDataset` over a controlled PG source; `RemoteSource` over an already-authenticated `Client`) must supply consistent snapshots, resumable tombstone change feeds, atomic conditional writes, and durable idempotency — `Sync.Protocol` validates and explicitly dispatches the five `sync/*` methods to a principal-bound source. State is server-controlled and bound to one principal+relation; credentials are never derived from request parameters. The database owns all correctness: the `mcp_sync` schema runs under FORCE RLS with SECURITY DEFINER guards, CAS revisions (`expected_local_revision`), an outbox with fencing tokens and leases, and one-open-per-operation conflict records. Nothing starts unless the host adds `Sync.Worker` to its supervision tree with `enabled: true`.
+
+→ *See [arch/sync.md](arch/sync.md) for details; operator setup: [guides/postgres_sync.md](../guides/postgres_sync.md)*
 
 ## Virtual Filesystem
 
@@ -178,7 +185,7 @@ Inbound messages flow through: Transport → Session → Peer (effects) → Task
 
 ## Authentication
 
-Client-side, the `Auth.ClientStrategy` behaviour (implementations: `Auth.OAuth` — full OAuth 2.1 with PKCE and RFC 9728 discovery; `Auth.Static` — bearer token) plugs into the Streamable HTTP client transport. Server-side, a token-verifier family (`TokenVerifier`, `ApiKeyVerifier`, `ChainVerifier`, `JwtVerifier`, `CompoundJwtVerifier`) validates bearers, and `Auth.Server` is an OAuth 2.1 **authorization-server facade** in front of the host's existing IdP: the facade owns client registry (RFC 7591 DCR + CIMD), consent, and token issuance; authenticating the human delegates to the host's own login.
+Client-side, the `Auth.ClientStrategy` behaviour (implementations: `Auth.OAuth` — full OAuth 2.1 with PKCE and RFC 9728 discovery; `Auth.Static` — bearer token) plugs into the Streamable HTTP client transport. Server-side, a token-verifier family (`TokenVerifier`, `ApiKeyVerifier`, `ChainVerifier`, `JwtVerifier`, `CompoundJwtVerifier`) validates bearers, and `Auth.Server` is an OAuth 2.1 **authorization-server facade** in front of the host's existing IdP: the facade owns client registry (RFC 7591 DCR + CIMD), consent, and token issuance; authenticating the human delegates to the host's own login. `Auth.Server`'s optional agent block adds anonymous-but-tracked accounts: Ed25519 keypair agents and password humans (globally-unique key fingerprints, hashed session nonces with atomic consume, JTI replay guards, append-only audit events), persisted via the `mcp_agent_*` Liquibase template.
 
 → *See [arch/auth.md](arch/auth.md) for details*
 
@@ -201,6 +208,7 @@ Anywhere a description string is expected, a variant list works instead: `{:verb
 - **Fail-to-boot (D4)**: a persistence store that cannot answer its boot ping refuses to start the server rather than silently degrading.
 - **Federation is just another layer (ADR-007)**: upstreams contribute weight-100 provenance layers over runtime-read base specs — overrides, ACL, and existence-hiding apply unchanged; an unreachable upstream is backoff plus `:error`, never a downed engine.
 - **Qual honesty is one-directional (ADR-003/005)**: `sql/*` datasets may ignore quals but never invert one; callers re-check unconditionally via `SQL.Quals.apply/2`. The family is experimental, opt-in, and wire-identical when unused.
+- **The database is the synchronization authority (ADR-009)**: sync correctness (CAS, fencing, idempotency, RLS) lives in PostgreSQL, not library process state; sources must prove snapshot/change/CAS/idempotency guarantees, and nothing syncs unless the host explicitly supervises the worker.
 - **Interface freeze**: 0.3.0 froze the toolset/ACL/persistence interfaces; changes require an ADR and a 0.4.0.
 
 ## Technology Stack
@@ -213,7 +221,7 @@ Anywhere a description string is expected, a variant list works instead: `{:verb
 | HTTP Server | Plug + Bandit (optional, for Streamable HTTP and Inspector) |
 | HTTP Client | Req (optional, for Streamable HTTP, OAuth, CIMD) |
 | Persistence | In-memory ETS (default); optional Postgres via Ecto provider |
-| Schema migrations | `Migration.Runner` change sets (Oban-shaped host delegation); OAuth AS tables via `priv/liquibase/` |
+| Schema migrations | `Migration.Runner` change sets (Oban-shaped host delegation); OAuth AS / agent / sync tables via `priv/liquibase/` + `priv/sql/` templates |
 | Concurrency | GenServer + Task.Supervisor + DynamicSupervisor |
 | Transports | Stdio, Streamable HTTP (POST/GET/DELETE + SSE), in-process test, VFS unix-socket/WebSocket |
 | Auth | OAuth 2.1 (PKCE + RFC 9728), static bearer, JWT verifiers, AS facade |
