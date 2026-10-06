@@ -26,12 +26,17 @@ if db_url do
     left behind by crashed runs older than an hour.
     """
 
-    use Noizu.MCP.VFS.Conformance, backend: TestFS, seed: {__MODULE__, :conformance_seed}
-    use Noizu.MCP.Fixtures.PersistenceDB
-
     alias Noizu.MCP.Ctx
     alias Noizu.MCP.VFS.Database.TestFS
     alias Noizu.MCP.VFS.Database.ReadOnlyFS
+
+    # Fully-qualified backend: aliases declared after (or via) `use` are not
+    # in scope for the macro's expansion.
+    use Noizu.MCP.VFS.Conformance,
+      backend: Noizu.MCP.VFS.Database.TestFS,
+      seed: {__MODULE__, :conformance_seed}
+
+    use Noizu.MCP.Fixtures.PersistenceDB
 
     @table_prefix "mcp_vfs_test_"
     @gc_age_ms :timer.hours(1)
