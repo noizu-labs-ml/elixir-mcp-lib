@@ -15,9 +15,10 @@ defmodule Noizu.MCP.StdioE2ETest do
   @example_dir Path.expand("../../../examples/echo_stdio", __DIR__)
 
   setup_all do
-    # Same MIX_ENV as the subprocess below — without it the setup compiles one
-    # env while `mix run --no-halt` recompiles another at runtime, and the
-    # `== app` / "Compiling" lines reach the port as (invalid) MCP messages.
+    # Compile once up front; the subprocesses below run with `--no-compile`
+    # because `mix run` recompiles the `noizu_mcp` path dep on every start
+    # (even right after `mix compile`), and the `== app` / "Compiling" lines
+    # reach the port as (invalid) MCP messages.
     dev_env = [{"MIX_ENV", "dev"}]
 
     {_, 0} =
@@ -36,7 +37,7 @@ defmodule Noizu.MCP.StdioE2ETest do
         :exit_status,
         :hide,
         {:line, 65_536},
-        {:args, ["run", "--no-halt"]},
+        {:args, ["run", "--no-compile", "--no-halt"]},
         {:cd, @example_dir},
         {:env, [{~c"MIX_ENV", ~c"dev"}]}
       ])
@@ -87,7 +88,7 @@ defmodule Noizu.MCP.StdioE2ETest do
     client =
       start_supervised!(
         {Noizu.MCP.Client,
-         transport: {:stdio, command: "mix", args: ["run", "--no-halt"], cd: @example_dir},
+         transport: {:stdio, command: "mix", args: ["run", "--no-compile", "--no-halt"], cd: @example_dir},
          client_info: %{name: "e2e_client", version: "1.0.0"},
          request_timeout: 60_000}
       )
