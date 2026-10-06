@@ -127,6 +127,11 @@ if Code.ensure_loaded?(Plug.Conn) do
               Config.url(config, :authorize) <> "?login_state=" <> URI.encode_www_form(state)
             )
 
+          {:sent, conn} ->
+            # An upstream that already answered (e.g. `Upstream.Password`
+            # re-rendering its login form) owns the response; respect it.
+            conn
+
           {:error, reason} ->
             PlugSupport.error_page(conn, Errors.new(:server_error, reason: {:upstream, reason}))
         end

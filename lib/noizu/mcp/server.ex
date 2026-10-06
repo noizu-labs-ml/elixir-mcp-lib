@@ -193,6 +193,8 @@ defmodule Noizu.MCP.Server do
           prompt: 2,
           vfs: 1,
           vfs: 2,
+          content: 1,
+          content: 2,
           dataset: 1,
           dataset: 2
         ]
@@ -202,6 +204,7 @@ defmodule Noizu.MCP.Server do
       Module.register_attribute(__MODULE__, :__mcp_resource_templates__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_prompts__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_vfs__, accumulate: true)
+      Module.register_attribute(__MODULE__, :__mcp_content__, accumulate: true)
       Module.register_attribute(__MODULE__, :__mcp_datasets__, accumulate: true)
       @__mcp_server_opts__ opts
       @before_compile Noizu.MCP.Server
@@ -279,6 +282,40 @@ defmodule Noizu.MCP.Server do
   defmacro vfs(module, opts \\ []) do
     quote do
       @__mcp_vfs__ {unquote(module), unquote(opts)}
+    end
+  end
+
+  @doc """
+  Register a CRUD-managed content mount (see
+  `Noizu.MCP.Server.Features.DynamicContent`): the backend is mounted for
+  `vfs/*` CRUD *and* bridged into the resources/prompts surfaces.
+
+      content {Noizu.MCP.VFS.File, root: "/srv/content"},
+        resources: "/resources",
+        prompts: "/prompts",
+        uri_scheme: "content",
+        write_scope: "content:write"
+
+  All prefixes are optional — declare only what you expose; at least one of
+  `:resources`/`:prompts` is required.
+  """
+  # ⟦𓆒⟧ content :: Register a CRUD-managed content mount (VFS-backed resources & prompts).
+  defmacro content(spec, bridge_opts \\ []) do
+    quote do
+      # `content {Backend, backend_opts}, ...` (or a bare backend module) —
+      # the backend spec unpacks into the mount registration; the bridge opts
+      # (`resources:`, `prompts:`, `uri_scheme:`, `write_scope:`) join the
+      # same opts list and travel to the backend untouched.
+      {backend, backend_opts} =
+        case unquote(spec) do
+          {m, o} when is_atom(m) and is_list(o) -> {m, o}
+          m when is_atom(m) -> {m, []}
+        end
+
+      # Bridge opts win over same-named backend opts (`Keyword.get` takes the
+      # first occurrence) — `content {Backend, resources: "/x"}, resources: "/y"`
+      # is bridged at `/y`.
+      @__mcp_content__ {backend, unquote(bridge_opts) ++ backend_opts}
     end
   end
 
@@ -561,6 +598,17 @@ defmodule Noizu.MCP.Server do
 
     vfs = env.module |> Module.get_attribute(:__mcp_vfs__) |> Enum.reverse()
 
+    content = env.module |> Module.get_attribute(:__mcp_content__) |> Enum.reverse()
+
+    validate_content!(content, env)
+
+    # A content registration IS a vfs registration (the mount is CRUDable
+    # through the existing vfs/* tooling) plus the resources/prompts bridge.
+    vfs = vfs ++ content
+
+    content_resources? = Enum.any?(content, fn {_backend, opts} -> is_binary(opts[:resources]) end)
+    content_prompts? = Enum.any?(content, fn {_backend, opts} -> is_binary(opts[:prompts]) end)
+
     datasets = env.module |> Module.get_attribute(:__mcp_datasets__) |> Enum.reverse()
 
     validate_datasets!(datasets, env)
@@ -576,11 +624,13 @@ defmodule Noizu.MCP.Server do
       tools != [] or defines?.({:handle_list_tools, 2}) or defines?.({:handle_call_tool, 3})
 
     resources? =
-      resources != [] or templates != [] or defines?.({:handle_list_resources, 2}) or
+      resources != [] or templates != [] or content_resources? or
+        defines?.({:handle_list_resources, 2}) or
         defines?.({:handle_read_resource, 2})
 
     prompts? =
-      prompts != [] or defines?.({:handle_list_prompts, 2}) or defines?.({:handle_get_prompt, 3})
+      prompts != [] or content_prompts? or
+        defines?.({:handle_list_prompts, 2}) or defines?.({:handle_get_prompt, 3})
 
     completions? =
       prompts != [] or templates != [] or defines?.({:handle_complete, 3})
@@ -614,17 +664,34 @@ defmodule Noizu.MCP.Server do
           end
         end,
         # resources
-        unless defines?.({:handle_list_resources, 2}) or (resources == [] and templates == []) do
-          quote do
-            @impl Noizu.MCP.Server
-            # ⟦𓈸𓉈𓅊𓐂⟧ handle_list_resources :: auto-generated pointer for public function handle_list_resources
-            def handle_list_resources(cursor, ctx) do
-              Noizu.MCP.Server.Features.Resources.list_registered(
-                __mcp__(:resources),
-                __mcp__(:resource_templates),
-                cursor,
-                ctx
-              )
+        unless defines?.({:handle_list_resources, 2}) or
+                 (resources == [] and templates == [] and not content_resources?) do
+          if content_resources? do
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓈸𓉈𓅊𓐂⟧ handle_list_resources :: static registry + content mounts
+              def handle_list_resources(cursor, ctx) do
+                Noizu.MCP.Server.Features.DynamicContent.list_resources(
+                  __MODULE__,
+                  __mcp__(:resources),
+                  __mcp__(:resource_templates),
+                  cursor,
+                  ctx
+                )
+              end
+            end
+          else
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓈸𓉈𓅊𓐂⟧ handle_list_resources :: auto-generated pointer for public function handle_list_resources
+              def handle_list_resources(cursor, ctx) do
+                Noizu.MCP.Server.Features.Resources.list_registered(
+                  __mcp__(:resources),
+                  __mcp__(:resource_templates),
+                  cursor,
+                  ctx
+                )
+              end
             end
           end
         end,
@@ -640,49 +707,118 @@ defmodule Noizu.MCP.Server do
             end
           end
         end,
-        unless defines?.({:handle_read_resource, 2}) or (resources == [] and templates == []) do
-          quote do
-            @impl Noizu.MCP.Server
-            # ⟦𓃐𓁐𓌬𓂑⟧ handle_read_resource :: auto-generated pointer for public function handle_read_resource
-            def handle_read_resource(uri, ctx) do
-              Noizu.MCP.Server.Features.Resources.dispatch_read(
-                __mcp__(:resources),
-                __mcp__(:resource_templates),
-                uri,
-                ctx
-              )
+        unless defines?.({:handle_read_resource, 2}) or
+                 (resources == [] and templates == [] and not content_resources?) do
+          if content_resources? do
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓃐𓁐𓌬𓂑⟧ handle_read_resource :: content-scheme URIs read off the mount
+              def handle_read_resource(uri, ctx) do
+                Noizu.MCP.Server.Features.DynamicContent.read_resource(
+                  __MODULE__,
+                  __mcp__(:resources),
+                  __mcp__(:resource_templates),
+                  uri,
+                  ctx
+                )
+              end
+            end
+          else
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓃐𓁐𓌬𓂑⟧ handle_read_resource :: auto-generated pointer for public function handle_read_resource
+              def handle_read_resource(uri, ctx) do
+                Noizu.MCP.Server.Features.Resources.dispatch_read(
+                  __mcp__(:resources),
+                  __mcp__(:resource_templates),
+                  uri,
+                  ctx
+                )
+              end
             end
           end
         end,
-        unless defines?.({:handle_subscribe, 2}) or (resources == [] and templates == []) do
-          quote do
-            @impl Noizu.MCP.Server
-            # ⟦𓍶𓐣𓈲𓃸⟧ handle_subscribe :: auto-generated pointer for public function handle_subscribe
-            def handle_subscribe(uri, _ctx) do
-              Noizu.MCP.Server.Features.Resources.check_subscribe(
-                __mcp__(:resources),
-                __mcp__(:resource_templates),
-                uri
-              )
+        unless defines?.({:handle_subscribe, 2}) or
+                (resources == [] and templates == [] and not content_resources?) do
+          if content_resources? do
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓍶𓐣𓈲𓃸⟧ handle_subscribe :: content-mount URIs subscribe, else the static registry
+              def handle_subscribe(uri, ctx) do
+                case Noizu.MCP.Server.Features.DynamicContent.check_subscribe(__MODULE__, uri, ctx) do
+                  :pass ->
+                    Noizu.MCP.Server.Features.Resources.check_subscribe(
+                      __mcp__(:resources),
+                      __mcp__(:resource_templates),
+                      uri
+                    )
+
+                  result ->
+                    result
+                end
+              end
+            end
+          else
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓍶𓐣𓈲𓃸⟧ handle_subscribe :: auto-generated pointer for public function handle_subscribe
+              def handle_subscribe(uri, _ctx) do
+                Noizu.MCP.Server.Features.Resources.check_subscribe(
+                  __mcp__(:resources),
+                  __mcp__(:resource_templates),
+                  uri
+                )
+              end
             end
           end
         end,
         # prompts
-        unless defines?.({:handle_list_prompts, 2}) or prompts == [] do
-          quote do
-            @impl Noizu.MCP.Server
-            # ⟦𓋷𓋑𓇰𓇠⟧ handle_list_prompts :: auto-generated pointer for public function handle_list_prompts
-            def handle_list_prompts(cursor, _ctx) do
-              Noizu.MCP.Server.Features.Prompts.list_registered(__mcp__(:prompts), cursor)
+        unless defines?.({:handle_list_prompts, 2}) or (prompts == [] and not content_prompts?) do
+          if content_prompts? do
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓋷𓋑𓇰𓇠⟧ handle_list_prompts :: static registry + content mounts
+              def handle_list_prompts(cursor, ctx) do
+                Noizu.MCP.Server.Features.DynamicContent.list_prompts(
+                  __MODULE__,
+                  __mcp__(:prompts),
+                  cursor,
+                  ctx
+                )
+              end
+            end
+          else
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓋷𓋑𓇰𓇠⟧ handle_list_prompts :: auto-generated pointer for public function handle_list_prompts
+              def handle_list_prompts(cursor, _ctx) do
+                Noizu.MCP.Server.Features.Prompts.list_registered(__mcp__(:prompts), cursor)
+              end
             end
           end
         end,
-        unless defines?.({:handle_get_prompt, 3}) or prompts == [] do
-          quote do
-            @impl Noizu.MCP.Server
-            # ⟦𓌗𓄇𓍶𓄺⟧ handle_get_prompt :: auto-generated pointer for public function handle_get_prompt
-            def handle_get_prompt(name, args, ctx) do
-              Noizu.MCP.Server.Features.Prompts.dispatch_get(__mcp__(:prompts), name, args, ctx)
+        unless defines?.({:handle_get_prompt, 3}) or (prompts == [] and not content_prompts?) do
+          if content_prompts? do
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓌗𓄇𓍶𓄺⟧ handle_get_prompt :: static dispatch, then content-mount JSON prompts
+              def handle_get_prompt(name, args, ctx) do
+                Noizu.MCP.Server.Features.DynamicContent.get_prompt(
+                  __MODULE__,
+                  __mcp__(:prompts),
+                  name,
+                  args,
+                  ctx
+                )
+              end
+            end
+          else
+            quote do
+              @impl Noizu.MCP.Server
+              # ⟦𓌗𓄇𓍶𓄺⟧ handle_get_prompt :: auto-generated pointer for public function handle_get_prompt
+              def handle_get_prompt(name, args, ctx) do
+                Noizu.MCP.Server.Features.Prompts.dispatch_get(__mcp__(:prompts), name, args, ctx)
+              end
             end
           end
         end,
@@ -823,6 +959,7 @@ defmodule Noizu.MCP.Server do
       def __mcp__(:resource_templates), do: unquote(Macro.escape(templates))
       def __mcp__(:prompts), do: unquote(Macro.escape(prompts))
       def __mcp__(:vfs), do: unquote(Macro.escape(vfs))
+      def __mcp__(:content), do: unquote(Macro.escape(content))
       def __mcp__(:datasets), do: unquote(Macro.escape(datasets))
       def __mcp__(:instructions), do: unquote(opts[:instructions])
       def __mcp__(:opts), do: unquote(Macro.escape(opts))
@@ -836,6 +973,7 @@ defmodule Noizu.MCP.Server do
           vfs?: unquote(vfs != []),
           sql?: unquote(sql?),
           sync?: unquote(opts[:sync] == true and defines?.({:handle_sync, 3})),
+          content_subscribe?: unquote(content_resources?),
           user_subscribe?: unquote(defines?.({:handle_subscribe, 2}))
         })
       end
@@ -859,7 +997,7 @@ defmodule Noizu.MCP.Server do
   # ⟦𓂋𓄴𓁙𓌃⟧ build_capabilities :: auto-generated pointer for public function build_capabilities
   def build_capabilities(server, flags) do
     subscribable? =
-      flags.user_subscribe? or
+      flags.user_subscribe? or Map.get(flags, :content_subscribe?, false) or
         Enum.any?(server.__mcp__(:resources), fn {module, _} ->
           module.__mcp_resource__(:subscribable)
         end) or
@@ -888,8 +1026,11 @@ defmodule Noizu.MCP.Server do
       if flags.vfs? do
         caps = Map.put(caps, "vfs", true)
 
-        if Enum.any?(server.__mcp__(:vfs), fn {module, _} ->
-             Noizu.MCP.Server.VFS.write_capable?(module)
+        # A `read_only: true` registration keeps its mutators runtime-gated
+        # (`:erofs`) — the capability stays honest and never advertises it.
+        if Enum.any?(server.__mcp__(:vfs), fn {module, opts} ->
+             read_only? = is_list(opts) and opts[:read_only] == true
+             not read_only? and Noizu.MCP.Server.VFS.write_capable?(module)
            end),
            do: Map.put(caps, "vfs_write", true),
            else: caps
@@ -925,6 +1066,39 @@ defmodule Noizu.MCP.Server do
         else: caps
     end)
     |> Map.put("logging", %{})
+  end
+
+  # ── `content:` registration validation ────────────────────────────────────
+  #
+  # A content mount that exposes nothing is a config typo, not a feature —
+  # it fails the build like the other `use`-time opt validations.
+  defp validate_content!(content, env) do
+    for {_backend, opts} <- content do
+      prefixes = Enum.filter([opts[:resources], opts[:prompts]], &is_binary/1)
+
+      case prefixes do
+        [] ->
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description:
+              "use Noizu.MCP.Server: content registration exposes no prefixes — pass " <>
+                "resources: \"/...\" and/or prompts: \"/...\" (at least one is required)."
+
+        prefixes ->
+          for prefix <- prefixes,
+              not String.starts_with?(prefix, "/") do
+            raise CompileError,
+              file: env.file,
+              line: env.line,
+              description:
+                "use Noizu.MCP.Server: content prefix #{inspect(prefix)} must be an " <>
+                  "absolute VFS path (leading \"/\")."
+          end
+      end
+    end
+
+    :ok
   end
 
   # ── `dataset:` registration validation (PRD-9 FR-9.6) ─────────────────────

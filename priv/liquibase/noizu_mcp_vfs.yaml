@@ -1,0 +1,53 @@
+databaseChangeLog:
+  # ---------------------------------------------------------------------------
+  # noizu_mcp_vfs — the Postgres-backed VFS node table
+  # (Noizu.MCP.VFS.Database).
+  #
+  # TEMPLATE, same rules as noizu_mcp_oauth.yaml / noizu_mcp_agent.yaml: copy
+  # this file into your own changelog directory, renumber the changeSet ids to
+  # match your convention, set `author:` to your app, and add the include to
+  # your master changelog. It is shipped rather than applied because the
+  # library owns no database.
+  #
+  # Files are rows with `data` BYTEA content; directories are explicit rows
+  # (so empty dirs persist). `parent_path` is maintained by the backend on
+  # create and backs the list index. `version` is a real monotonic counter the
+  # backend bumps on every write — do not rewrite it by hand. `mtime` is unix
+  # milliseconds. The root row is seed data, not schema:
+  #
+  #     INSERT INTO noizu_mcp_vfs_nodes (path, parent_path, type)
+  #     VALUES ('/', NULL, 'dir') ON CONFLICT (path) DO NOTHING;
+  #
+  # Timestamps follow the library convention: created_at / updated_at, never
+  # modified_at.
+  # ---------------------------------------------------------------------------
+
+  - changeSet:
+      id: noizu-mcp-vfs-nodes
+      author: noizu_mcp
+      comment: >-
+        The VFS node table backing Noizu.MCP.VFS.Database. `path` is the
+        primary key; `type` is constrained to file/dir at the schema level;
+        `data` is NULL for directories. Re-runs are idempotent via IF NOT
+        EXISTS so the changeSet is safe to hand-apply with psql too.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE IF NOT EXISTS noizu_mcp_vfs_nodes (
+                path text PRIMARY KEY,
+                parent_path text,
+                type varchar(8) NOT NULL CHECK (type IN ('file','dir')),
+                data bytea,
+                mime text,
+                writable boolean NOT NULL DEFAULT true,
+                version bigint NOT NULL DEFAULT 1,
+                mtime bigint NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX IF NOT EXISTS idx_noizu_mcp_vfs_nodes_parent
+                ON noizu_mcp_vfs_nodes (parent_path);
+      rollback:
+        - sql:
+            sql: "DROP TABLE IF EXISTS noizu_mcp_vfs_nodes CASCADE;"

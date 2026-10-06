@@ -192,6 +192,11 @@ if Code.ensure_loaded?(Plug.Conn) do
         {:redirect, url} ->
           PlugSupport.redirect(conn, url)
 
+        {:sent, conn} ->
+          # An upstream that already answered (e.g. `Upstream.Password`'s login
+          # form) has sent its own response; leave it on the conn.
+          conn
+
         {:error, reason} ->
           PlugSupport.error_page(conn, Errors.new(:server_error, reason: {:upstream, reason}))
       end

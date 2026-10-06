@@ -79,6 +79,44 @@ Order the chain cheapest-first. When every link rejects, the client gets one
 uniform `invalid_token` — a chain that reported *which* link rejected would tell
 an attacker their string parsed as a JWT.
 
+### HTTP Basic credentials
+
+`curl -u alice:s3cret` and friends speak RFC 7617, not OAuth. The transport
+hands a `Basic` header to the verifier chain with the scheme intact, so
+`Noizu.MCP.Auth.BasicVerifier` slots into the same chain:
+
+```elixir
+auth: [
+  verifier: {Noizu.MCP.Auth.ChainVerifier, [
+    verifiers: [
+      {Noizu.MCP.Auth.JWTVerifier, [resource: resource, secret: {MyApp.MCPAuth, :secret}]},
+      {Noizu.MCP.Auth.BasicVerifier, [
+        resource: resource,
+        validator: {MyApp.Accounts, :mcp_credentials}  # (username, password) -> {:ok, %{scopes: [...], claims: %{...}}} | :error
+      ]}
+    ]
+  ]},
+  resource_metadata: :derive
+]
+```
+
+For tests and single-operator deployments a static map works instead of a
+validator — values are `Noizu.MCP.Auth.Server.Secret.token_hash/1` digests,
+compared in constant time:
+
+```elixir
+{Noizu.MCP.Auth.BasicVerifier, [
+  resource: resource,
+  users: %{"alice" => Noizu.MCP.Auth.Server.Secret.token_hash("s3cret!")}
+]}
+```
+
+Plain SHA-256 suits a high-entropy secret, not a user-chosen password at scale —
+put the real user store behind `:validator`, where you can hash with
+bcrypt/Argon2. A mount that wants the client's own credential prompt to appear
+can send `Noizu.MCP.Auth.BasicVerifier.challenge()` — `Basic realm="mcp"` — as
+its `WWW-Authenticate` on a 401.
+
 ### Browser clients: CORS is not optional
 
 claude.ai drives MCP from a browser context. Without `cors: true` the preflight

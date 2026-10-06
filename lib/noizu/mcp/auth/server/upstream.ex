@@ -40,13 +40,18 @@ defmodule Noizu.MCP.Auth.Server.Upstream do
     * `{:ok, identity}` — authenticated; the flow continues to consent
     * `{:redirect, url}` — not authenticated; send them here to log in, and they
       come back to the authorization endpoint
+    * `{:sent, conn}` — the upstream already answered on the conn (e.g.
+      `Upstream.Password`'s login form); the flow leaves that response alone
     * `{:error, reason}` — cannot tell; the flow renders an error
 
   Implementations must not treat an inbound `Authorization` header as identity —
   that would make the authorization endpoint accept the very tokens it issues.
   """
   @callback authenticate(conn :: term(), state :: String.t(), Config.t(), opts :: keyword()) ::
-              {:ok, identity()} | {:redirect, String.t()} | {:error, term()}
+              {:ok, identity()}
+              | {:redirect, String.t()}
+              | {:sent, conn :: term()}
+              | {:error, term()}
 
   @doc """
   Handle the upstream's callback, for implementations that run their own round
@@ -54,7 +59,9 @@ defmodule Noizu.MCP.Auth.Server.Upstream do
   back on the authorization endpoint with a session.
   """
   @callback callback(conn :: term(), params :: map(), Config.t(), opts :: keyword()) ::
-              {:ok, identity(), state :: String.t()} | {:error, term()}
+              {:ok, identity(), state :: String.t()}
+              | {:sent, conn :: term()}
+              | {:error, term()}
 
   @optional_callbacks callback: 4
 
@@ -64,7 +71,10 @@ defmodule Noizu.MCP.Auth.Server.Upstream do
 
   @doc "Delegate to the configured implementation's `authenticate/4`."
   @spec authenticate(term(), String.t(), Config.t()) ::
-          {:ok, identity()} | {:redirect, String.t()} | {:error, term()}
+          {:ok, identity()}
+          | {:redirect, String.t()}
+          | {:sent, conn :: term()}
+          | {:error, term()}
   def authenticate(conn, state, %Config{} = config) do
     {module, opts} = impl(config)
     module.authenticate(conn, state, config, opts)
@@ -78,7 +88,8 @@ defmodule Noizu.MCP.Auth.Server.Upstream do
   end
 
   @doc "Delegate to the configured implementation's `callback/4`."
-  @spec callback(term(), map(), Config.t()) :: {:ok, identity(), String.t()} | {:error, term()}
+  @spec callback(term(), map(), Config.t()) ::
+          {:ok, identity(), String.t()} | {:sent, conn :: term()} | {:error, term()}
   def callback(conn, params, %Config{} = config) do
     {module, opts} = impl(config)
     module.callback(conn, params, config, opts)

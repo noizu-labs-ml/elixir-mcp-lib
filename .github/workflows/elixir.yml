@@ -1,0 +1,95 @@
+# Elixir CI (threat-model T-015) — the hex library's own test battery.
+#
+# Triggers: pull_request / push touching lib/**, test/**, priv/**, mix files,
+# or this file.
+#
+# The suite gates itself: without MCP_OAUTH_TEST_DATABASE_URL the Store.Ecto
+# conformance battery skips and `mix test` FAILS (see test/test_helper.exs —
+# an incomplete run is a failing run by design). The Postgres service below
+# satisfies that gate; `--include e2e --include slow` covers the rest of it.
+# The tests build their own scratch schema — only the database must exist.
+
+name: elixir
+
+on:
+  pull_request:
+    paths:
+      - "lib/**"
+      - "test/**"
+      - "priv/**"
+      - "mix.exs"
+      - "mix.lock"
+      - ".github/workflows/elixir.yml"
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - "lib/**"
+      - "test/**"
+      - "priv/**"
+      - "mix.exs"
+      - "mix.lock"
+      - ".github/workflows/elixir.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (elixir ${{ matrix.elixir }} / otp ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Floor: mix.exs requires ~> 1.18; 1.17 is outside the constraint.
+          - elixir: "1.18.4"
+            otp: "27"
+          - elixir: "1.20.1"
+            otp: "29"
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: noizu_mcp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIX_ENV: test
+      MCP_OAUTH_TEST_DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/noizu_mcp_test"
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Mix deps
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      # Full coverage: the helper's own gate demands the e2e battery, and a
+      # Postgres is already running for the Store.Ecto battery.
+      - name: Test suite
+        run: mix test --include e2e --include slow

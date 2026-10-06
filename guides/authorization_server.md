@@ -191,6 +191,25 @@ deliberately does **not** send the RFC 8707 `resource` parameter upstream:
 Authentik's support is unconfirmed, and the upstream token is read for its `sub`
 and discarded, so there is no audience to narrow.
 
+`Upstream.Password` is the bring-your-own-login option for a host with neither a
+session nor an IdP: it renders a username/password form that posts to the
+authorization server's own callback path, checks the credentials, and resumes
+the flow at consent.
+
+```elixir
+upstream: {Noizu.MCP.Auth.Server.Upstream.Password,
+           validator: {MyApp.Accounts, :mcp_login}}   # (username, password) -> {:ok, %{scopes: [...], claims: %{...}}} | :error
+```
+
+…or `users: %{"alice" => Secret.token_hash("…")}` for tests and
+single-operator deployments (constant-time compare; hash with bcrypt/Argon2
+behind a `:validator` for real users). A wrong credential re-renders the form
+with one generic message, so the endpoint cannot be used to enumerate users.
+The same validator shape serves `Noizu.MCP.Auth.BasicVerifier` on the resource
+side, so one credential check can back both. A custom module works too —
+implement the `Noizu.MCP.Auth.Server.Upstream` behaviour (`authenticate/4`,
+optionally `callback/4`) and pass it as `upstream: {MyModule, opts}`.
+
 ## Security properties, and where each lives
 
 | Property | Where |
