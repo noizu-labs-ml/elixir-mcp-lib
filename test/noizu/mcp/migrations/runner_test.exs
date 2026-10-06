@@ -68,6 +68,8 @@ if db_url do
       @moduledoc false
       # Statement 1 succeeds, statement 2 raises — the ROLLBACK assertion's
       # instrument: after the failure, statement 1's effect must be absent.
+      # (An empty column list is VALID Postgres — zero-column tables — so the
+      # instrument references a nonexistent type instead; that always raises.)
       def change_sets do
         [
           %ChangeSet{
@@ -75,7 +77,12 @@ if db_url do
             version: 1,
             up: fn repo, _opts ->
               repo.query!("create table noizu_mcp_runner_test_partial (id int)", [])
-              repo.query!("create table this_is_not_valid_sql ()", [])
+
+              repo.query!(
+                "create table noizu_mcp_runner_test_broken (id no_such_type_exists)",
+                []
+              )
+
               :ok
             end
           }
