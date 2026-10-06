@@ -237,6 +237,27 @@ inert `:allow`. Denials are silent: an ACL-hidden tool is indistinguishable
 from an absent one, and consent-gated tools stay listed but resolve to one
 honest `:forbidden`.
 
+For a working permission model out of the box, register the declarative
+scope provider instead of writing a policy module:
+
+```elixir
+use Noizu.MCP.Server,
+  acl: {Noizu.MCP.ACL.Providers.Scopes,
+        rules: [
+          %{scope: "mcp",      resource: "tools:**",              actions: [:call]},
+          %{scope: "read:all", resource: "content:/resources/**", actions: [:call]}
+        ]}
+```
+
+Rules are `%{scope, resource, actions}` triples: a caller's principal needs
+the rule's scope (`granted_scopes` — filled from JWT `scope`/`scp` claims,
+a basic verifier's per-credential grants, or your `principal:` claims
+mapping), the resource id must match the rule's glob (`**` crosses `/`,
+`*` stays within one segment), and the action must be listed. Everything
+else denies — fail-closed: no rules is deny-all, and a caller whose tools
+match no rule simply sees an empty catalog. See the
+`Noizu.MCP.ACL.Providers.Scopes` moduledoc for the full config story.
+
 State lives behind the `Noizu.MCP.Persistence` provider contract — an ETS
 memory provider (default), Postgres via the Ecto provider (tables ship as
 change sets for an Oban-shaped `Migration.Runner`), or a disabled provider —
@@ -259,7 +280,14 @@ forward "/mcp", Noizu.MCP.Transport.StreamableHTTP.Plug, server: MyApp.MCP
 Sessions, SSE upgrades, `Last-Event-ID` resumability, origin validation, and
 DELETE teardown are handled per spec. Protect it as an OAuth 2.1 resource
 server with `auth: [verifier: {MyVerifier, []}, resource_metadata: "..."]`
-(see `Noizu.MCP.Auth.TokenVerifier`).
+(see `Noizu.MCP.Auth.TokenVerifier`). Built-in verifiers cover OAuth JWTs,
+API keys and HTTP Basic (`Noizu.MCP.Auth.JWTVerifier`, `ApiKeyVerifier`,
+`BasicVerifier` — combinable via `ChainVerifier`; see the
+[authentication guide](guides/authentication.md)). On the authorization-server
+side, the built-in provider can be swapped for a login form with
+`upstream: {Noizu.MCP.Auth.Server.Upstream.Password, validator: {MyApp.Accounts, :mcp_login}}`
+alongside `HostSession` and `OIDC` — see the
+[authorization server guide](guides/authorization_server.md).
 
 ## VFS — the filesystem surface
 
@@ -309,6 +337,34 @@ use Noizu.MCP.VFS.Conformance,
   backend: MyApp.VFS.Backend,
   seed: {MyApp.VFS.Backend, :seed}
 ```
+
+Two backends ship. `Noizu.MCP.VFS.Fixture.Memory` is the in-memory one the
+battery itself runs against; `Noizu.MCP.VFS.File` serves a real directory —
+`vfs Noizu.MCP.VFS.File, root: "/srv/files"` (opts: `root:` required,
+`read_only:` makes mutators `:erofs`, `mime_types:` overrides the ext→mime
+map). Every path is confined to the mount root — lexical `..` escapes read as
+`:enoent`, symlink escapes as `:eacces` — and stat versions derive from
+`{mtime, size}` so external edits are advisory-visible. See
+`docs/MCP-VFS-MOUNTING.md` §9.
+
+### CRUD resources & prompts (`content/1,2`)
+
+A `content` registration is a `vfs` mount plus a bridge into the resources
+and prompts surfaces — manage live MCP components by writing files:
+
+```elixir
+content {Noizu.MCP.VFS.File, root: "/srv/content"},
+  resources: "/resources",        # files → resources (content://rel URIs)
+  prompts: "/prompts",            # JSON files → prompts ({{arg}} templates)
+  write_scope: "content:write"    # mutating vfs/* ops require this scope
+```
+
+The mount CRUDs through the existing `vfs/*` tooling; successful mutations
+under a prefix fan out the resource/prompt change notifications, and
+`write_scope:` gates the mutators on the caller's claims (`:eacces`
+without). Static `resource`/`prompt` registrations merge in front of the
+dynamic ones. See `docs/MCP-VFS-MOUNTING.md` §10 and the
+`Noizu.MCP.Server.Features.DynamicContent` moduledoc.
 
 ### Cache & generations
 

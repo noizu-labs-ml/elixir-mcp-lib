@@ -25,6 +25,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
 
   alias Noizu.MCP.Ctx
   alias Noizu.MCP.Error
+  alias Noizu.MCP.Server.Features.DynamicContent
   alias Noizu.MCP.Server.Features.Pagination
   alias Noizu.MCP.Server.VFSPubSub
   alias Noizu.MCP.VFS
@@ -244,9 +245,9 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_stat operation."
   # ⟦𓆒⟧ vfs_stat
   def vfs_stat(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
-        stat(backend, path, ctx) |> to_result(&node_to_map/1)
+        stat(backend, path, opts_ctx(ctx, opts)) |> to_result(&node_to_map/1)
       end)
     end)
   end
@@ -254,11 +255,11 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_list operation."
   # ⟦𓆒⟧ vfs_list
   def vfs_list(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
         cursor = (params || %{})["cursor"]
 
-        list(backend, path, cursor, ctx)
+        list(backend, path, cursor, opts_ctx(ctx, opts))
         |> to_result(fn {entries, next_cursor} ->
           result = %{"entries" => entries}
           if next_cursor, do: Map.put(result, "nextCursor", next_cursor), else: result
@@ -270,11 +271,11 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_read operation."
   # ⟦𓆒⟧ vfs_read
   def vfs_read(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
         expected = version_param(params)
 
-        read(backend, path, ctx, expected)
+        read(backend, path, opts_ctx(ctx, opts), expected)
         |> to_result(fn {content, version} ->
           %{"content" => content, "version" => version}
         end)
@@ -285,10 +286,18 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_write operation."
   # ⟦𓆒⟧ vfs_write
   def vfs_write(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
         with_data(params, fn data ->
-          write(backend, path, data, ctx) |> to_result(&node_to_map/1)
+          with :ok <- DynamicContent.write_gate(server, path, ctx),
+               {:ok, node} <- write(backend, path, data, opts_ctx(ctx, opts)) do
+            DynamicContent.after_mutation(server, path)
+            {:ok, node_to_map(node)}
+          else
+            {:error, %Error{}} = error -> error
+            {:error, errno} when is_atom(errno) -> {:error, errno_error(errno)}
+            {:error, other} -> {:error, Error.internal("vfs error: #{inspect(other)}")}
+          end
         end)
       end)
     end)
@@ -297,7 +306,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_create operation."
   # ⟦𓆒⟧ vfs_create
   def vfs_create(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
         data =
           case (params || %{})["data"] do
@@ -305,7 +314,15 @@ defmodule Noizu.MCP.Server.Features.VFS do
             data when is_binary(data) -> data
           end
 
-        create(backend, path, data, ctx) |> to_result(&node_to_map/1)
+        with :ok <- DynamicContent.write_gate(server, path, ctx),
+             {:ok, node} <- create(backend, path, data, opts_ctx(ctx, opts)) do
+          DynamicContent.after_mutation(server, path)
+          {:ok, node_to_map(node)}
+        else
+          {:error, %Error{}} = error -> error
+          {:error, errno} when is_atom(errno) -> {:error, errno_error(errno)}
+          {:error, other} -> {:error, Error.internal("vfs error: #{inspect(other)}")}
+        end
       end)
     end)
   end
@@ -313,9 +330,21 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_remove operation."
   # ⟦𓆒⟧ vfs_remove
   def vfs_remove(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
-        remove(backend, path, ctx) |> to_result(fn :ok -> %{"removed" => path} end)
+        with :ok <- DynamicContent.write_gate(server, path, ctx) do
+          case remove(backend, path, opts_ctx(ctx, opts)) |> to_result(fn :ok -> %{"removed" => path} end) do
+            {:ok, _} = ok ->
+              DynamicContent.after_mutation(server, path)
+              ok
+
+            other ->
+              other
+          end
+        else
+          # `write_gate/3` only ever fails with an errno atom (`:eacces`).
+          {:error, errno} when is_atom(errno) -> {:error, errno_error(errno)}
+        end
       end)
     end)
   end
@@ -325,12 +354,12 @@ defmodule Noizu.MCP.Server.Features.VFS do
   def vfs_search(server, params, ctx) do
     params = params || %{}
 
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       root = params["root"] || "/"
 
       with {:ok, _root} <- validate_binary(root, "root"),
            {:ok, query} <- validate_binary(params["query"], "query") do
-        case search(backend, root, query, ctx) do
+        case search(backend, root, query, opts_ctx(ctx, opts)) do
           {:ok, matches, _backend_cursor} ->
             case Pagination.paginate(matches, params["cursor"]) do
               {:ok, page, next_cursor} ->
@@ -360,21 +389,34 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @doc "vfs_xattr operation."
   # ⟦𓆒⟧ vfs_xattr
   def vfs_xattr(server, params, ctx) do
-    with_backend(server, fn backend ->
+    with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
-        xattr(backend, path, ctx) |> to_result(& &1)
+        xattr(backend, path, opts_ctx(ctx, opts)) |> to_result(& &1)
       end)
     end)
   end
 
   # ── helpers ───────────────────────────────────────────────────────────────
 
-  defp with_backend(server, fun) do
-    case server.__mcp__(:vfs) do
-      [{backend, _opts} | _] -> fun.(backend)
-      _ -> {:error, Error.capability_not_supported("vfs")}
+  # Mount selection: a `content/1,2` registration whose prefix covers the
+  # requested path wins; otherwise the first registered backend (the `vfs/1,2`
+  # first-wins rule — unchanged behavior for servers without `content`).
+  defp with_backend(server, params, fun) do
+    path = mount_path(params)
+
+    case DynamicContent.mount_for(server, server.__mcp__(:vfs), path) do
+      {backend, opts} -> fun.(backend, opts)
+      nil -> {:error, Error.capability_not_supported("vfs")}
     end
   end
+
+  defp mount_path(%{} = params), do: params["path"] || params["root"]
+  defp mount_path(_), do: nil
+
+  # Registration opts (`root:`, `read_only:`, ...) travel to the backend via
+  # ctx assigns — backends are stateless modules, the opts are per-mount state.
+  defp opts_ctx(ctx, []), do: ctx
+  defp opts_ctx(ctx, opts), do: Ctx.assign(ctx, :vfs_opts, opts)
 
   defp with_path(params, fun) do
     with {:ok, path} <- validate_binary((params || %{})["path"], "path"), do: fun.(path)
