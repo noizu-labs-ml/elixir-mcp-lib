@@ -8,11 +8,14 @@ defmodule Noizu.MCP.Fixtures.PersistenceDB do
   around for inspection without poisoning the next run.
   """
 
-  @database_url System.get_env("MCP_OAUTH_TEST_DATABASE_URL")
+  # Runtime reads, NOT a module attribute: an attribute bakes the value in at
+  # compile time, and CI's _build cache (keyed by beam, not partition) once
+  # restored a build compiled by another shard with ITS database frozen into
+  # the fixture (run 37563402933: 1.20 shards 2/3 connecting to
+  # noizu_mcp_test_1). `gated?` reads at runtime for the same reason.
+  def database_url, do: System.get_env("MCP_OAUTH_TEST_DATABASE_URL")
 
-  def database_url, do: @database_url
-
-  def gated?(), do: not is_nil(@database_url)
+  def gated?(), do: not is_nil(System.get_env("MCP_OAUTH_TEST_DATABASE_URL"))
 
   defmodule TestRepo do
     @moduledoc false

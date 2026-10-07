@@ -105,9 +105,11 @@ jobs:
           path: |
             deps
             _build
-          key: mix-${{ runner.os }}-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-${{ hashFiles('mix.lock') }}
+          # Partition-keyed: _build may bake env (compile-time reads) and must
+          # never cross shards — see fixture_persistence_db.ex.
+          key: mix-${{ runner.os }}-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-p${{ matrix.partition }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            mix-${{ runner.os }}-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-
+            mix-${{ runner.os }}-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-p${{ matrix.partition }}-
 
       - name: Mix deps
         run: |
