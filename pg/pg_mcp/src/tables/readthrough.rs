@@ -927,7 +927,7 @@ mod tests {
         // fine — the error must fire first.
         let resolved = resolved_for("http://127.0.0.1:1/mcp");
         let ctx = ctx_for("resource_contents", resolved, vec![]);
-        let err = resource_contents_rows(&ctx).err().expect("cap 0 refuses");
+        let err = resource_contents_rows(&ctx).expect_err("cap 0 refuses");
         assert_eq!(err.e.sqlstate(), "0A000");
         assert_eq!(
             err.e.message(),
@@ -963,9 +963,7 @@ mod tests {
         let mut resolved = resolved_for(&stub.url);
         resolved.options.max_unqualified_reads = 1;
         let ctx = ctx_for("resource_contents", resolved, vec![]);
-        let err = resource_contents_rows(&ctx)
-            .err()
-            .expect("over cap refuses");
+        let err = resource_contents_rows(&ctx).expect_err("over cap refuses");
         assert_eq!(err.e.sqlstate(), "54023");
         assert!(
             err.e.message().contains("max_unqualified_reads = 1"),
@@ -980,7 +978,7 @@ mod tests {
     fn prompt_messages_requires_a_prompt_qual() {
         let resolved = resolved_for("http://127.0.0.1:1/mcp");
         let ctx = ctx_for("prompt_messages", resolved, vec![]);
-        let err = prompt_messages_rows(&ctx).err().expect("no prompt qual");
+        let err = prompt_messages_rows(&ctx).expect_err("no prompt qual");
         assert_eq!(err.e.sqlstate(), "0A000");
         assert!(
             err.e.message().contains("prompt"),
@@ -1121,7 +1119,7 @@ mod tests {
         ];
         for (quals, missing) in cases {
             let ctx = ctx_for("completions", resolved_for("http://127.0.0.1:1/mcp"), quals);
-            let err = completions_rows(&ctx).err().expect("missing required qual");
+            let err = completions_rows(&ctx).expect_err("missing required qual");
             assert_eq!(err.e.sqlstate(), "0A000", "case for {missing}");
             assert!(
                 err.e.message().contains(missing),

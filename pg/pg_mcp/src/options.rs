@@ -580,13 +580,10 @@ mod host_tests {
             ("1", 1),
             ("60000", 60_000),
             (u64::MAX.to_string().as_str(), u64::MAX),
-            ("  5000  ", 5_000, ),
+            ("  5000  ", 5_000),
         ] {
-            let parsed = server(&[
-                ("url", "https://x.example/mcp"),
-                ("cache_ttl_ms", raw),
-            ])
-            .unwrap_or_else(|e| panic!("{raw:?}: {e:?}"));
+            let parsed = server(&[("url", "https://x.example/mcp"), ("cache_ttl_ms", raw)])
+                .unwrap_or_else(|e| panic!("{raw:?}: {e:?}"));
             assert_eq!(parsed.cache_ttl_ms, want, "cache_ttl_ms {raw:?}");
         }
         for bad in ["-1", "abc", "1.5", "", "+", "0x10"] {
@@ -613,17 +610,27 @@ mod host_tests {
                 "timeout_ms {ok:?} must be accepted"
             );
         }
-        for bad in ["0", "-1", "600001", "abc", "", "1.5", "18446744073709551616"] {
+        for bad in [
+            "0",
+            "-1",
+            "600001",
+            "abc",
+            "",
+            "1.5",
+            "18446744073709551616",
+        ] {
             assert!(
                 server(&[("url", "https://x.example/mcp"), ("timeout_ms", bad)]).is_err(),
                 "timeout_ms {bad:?} must be rejected"
             );
         }
-        let err = server(&[("url", "https://x.example/mcp"), ("timeout_ms", "abc")])
-            .unwrap_err();
+        let err = server(&[("url", "https://x.example/mcp"), ("timeout_ms", "abc")]).unwrap_err();
         assert_eq!(err.sqlstate(), "22023");
         assert!(err.message().contains("timeout_ms"));
-        assert!(err.message().contains("abc"), "echoes the bad value: it is not a credential");
+        assert!(
+            err.message().contains("abc"),
+            "echoes the bad value: it is not a credential"
+        );
     }
 
     /// `max_unqualified_reads`: any i64 >= 0, including i64::MAX; negatives
@@ -684,7 +691,10 @@ mod host_tests {
         assert!(is_loopback(&u("http://[::1]/mcp")));
         assert!(!is_loopback(&u("http://192.168.0.1/mcp")));
         assert!(!is_loopback(&u("http://[fe80::1]/mcp")));
-        assert!(is_loopback(&u("http://LOCALHOST/mcp")), "name match is case-insensitive");
+        assert!(
+            is_loopback(&u("http://LOCALHOST/mcp")),
+            "name match is case-insensitive"
+        );
         // A domain that cannot resolve (reserved TLD) is never loopback.
         assert!(!is_loopback(&u("http://nonexistent.invalid/mcp")));
     }
@@ -713,7 +723,10 @@ mod host_tests {
         }
         let err = server(&[("url", "https://x.example/mcp"), ("urls", "x")]).unwrap_err();
         assert!(err.message().contains("urls"));
-        assert!(err.message().contains("cache_ttl_ms"), "valid set is listed");
+        assert!(
+            err.message().contains("cache_ttl_ms"),
+            "valid set is listed"
+        );
 
         for name in ["token", "token_secret"] {
             assert!(UserMappingOptions::parse(&opts(&[(name, "mcp_s.t")])).is_ok());
@@ -763,7 +776,11 @@ mod host_tests {
             vec![("token", canary), ("unknown", "x")],
         ] {
             let err = UserMappingOptions::parse(&opts(&bad)).unwrap_err();
-            assert!(!err.message().contains(canary), "{:?} leaked", err.message());
+            assert!(
+                !err.message().contains(canary),
+                "{:?} leaked",
+                err.message()
+            );
         }
         // And the URL/option values are echoed only where they are not
         // credentials: a malformed URL is echoed, a bad mode is echoed.
@@ -804,7 +821,11 @@ mod host_tests {
         for bad in ["/mcp", "ftp://x.example", "x.example/mcp", "http://", ""] {
             let err = server(&[("url", bad)]).unwrap_err();
             assert_eq!(err.sqlstate(), "22023", "{bad:?}");
-            assert!(err.message().contains("url"), "{bad:?}: {:?}", err.message());
+            assert!(
+                err.message().contains("url"),
+                "{bad:?}: {:?}",
+                err.message()
+            );
         }
         // A URL with an empty host but a scheme ("http:///mcp") is rejected.
         assert!(server(&[("url", "http:///mcp")]).is_err());

@@ -366,7 +366,7 @@ pub fn page_items(result: &Value, array_key: &str) -> (Vec<Value>, Option<String
     let items = result
         .get(array_key)
         .and_then(Value::as_array)
-        .map(|a| a.clone())
+        .cloned()
         .unwrap_or_default();
     let next = result
         .get("nextCursor")
@@ -773,7 +773,10 @@ mod host_tests {
     fn is_error_result_matrix() {
         assert!(is_error_result(&json!({"isError": true})));
         assert!(!is_error_result(&json!({"isError": false})));
-        assert!(!is_error_result(&json!({"isError": "yes"})), "non-bool is not an error flag");
+        assert!(
+            !is_error_result(&json!({"isError": "yes"})),
+            "non-bool is not an error flag"
+        );
         assert!(!is_error_result(&json!({})));
     }
 
@@ -788,7 +791,11 @@ mod host_tests {
 
         let (items, next) = page_items(&json!({"tools": [], "nextCursor": ""}), "tools");
         assert!(items.is_empty());
-        assert_eq!(next.as_deref(), Some(""), "an empty cursor still asks for another page");
+        assert_eq!(
+            next.as_deref(),
+            Some(""),
+            "an empty cursor still asks for another page"
+        );
 
         let (items, next) = page_items(&json!({"tools": [1], "nextCursor": 42}), "tools");
         assert_eq!(items.len(), 1);
@@ -806,7 +813,8 @@ mod host_tests {
         let flags = Arc::new(Notifications::new());
         let writer = Arc::clone(&flags);
         std::thread::spawn(move || {
-            writer.observe(&json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}));
+            writer
+                .observe(&json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}));
         })
         .join()
         .unwrap();

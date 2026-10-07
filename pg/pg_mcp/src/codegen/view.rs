@@ -114,7 +114,10 @@ mod tests {
             InvokeOnSelect::ReadOnly,
         );
         assert!(!eligible(&tool));
-        assert!(create_view(&tool).is_none(), "a view without quals could not answer the required input");
+        assert!(
+            create_view(&tool).is_none(),
+            "a view without quals could not answer the required input"
+        );
     }
 
     #[pgrx::pg_test]

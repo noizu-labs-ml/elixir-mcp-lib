@@ -981,12 +981,9 @@ mod catalog_test {
         );
 
         // A refresh against a server with nothing cached still succeeds.
-        assert_eq!(
-            Spi::get_one::<bool>("SELECT mcp.refresh('cat_refresh')")
-                .unwrap()
-                .unwrap(),
-            true
-        );
+        assert!(Spi::get_one::<bool>("SELECT mcp.refresh('cat_refresh')")
+            .unwrap()
+            .unwrap());
     }
 
     #[pgrx::pg_test]
@@ -1178,11 +1175,11 @@ mod catalog_test {
 
     // ── PRD-7.E: the import OPTIONS read-path contract ──────────────────────
 
-    /// `import.rs` stamps `upstream '<name>'` ('' = engine-local) and
-    /// `cache_ttl_ms '<n>'` onto the foreign tables it creates; `fdw.rs`
-    /// hands those options to [`TableContext`] and `fetch_list` consumes
-    /// them. The probes below exercise that contract: the `scoped_items`
-    /// units first, then the same at SQL level.
+    // `import.rs` stamps `upstream '<name>'` ('' = engine-local) and
+    // `cache_ttl_ms '<n>'` onto the foreign tables it creates; `fdw.rs`
+    // hands those options to [`TableContext`] and `fetch_list` consumes
+    // them. The probes below exercise that contract: the `scoped_items`
+    // units first, then the same at SQL level.
 
     fn tool_item(name: &str) -> Value {
         json!({"name": name})

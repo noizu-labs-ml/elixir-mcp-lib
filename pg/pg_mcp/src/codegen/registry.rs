@@ -109,10 +109,7 @@ pub fn schemas_for(server: &str) -> McpResult<Vec<String>> {
             .map_err(|e| McpError::Internal(format!("mcp.generated lookup failed: {e}")))?;
         let mut out: Vec<String> = Vec::new();
         for row in table {
-            if let Some(s) = row
-                .get_by_name::<String, _>("schema")
-                .unwrap_or(None)
-            {
+            if let Some(s) = row.get_by_name::<String, _>("schema").unwrap_or(None) {
                 out.push(s);
             }
         }
@@ -276,12 +273,15 @@ mod tests {
         };
         record("gen_srv", &a).unwrap();
         record("gen_srv", &b).unwrap();
-        record("other_srv", &OwnedObject {
-            kind: KIND_TABLE.to_string(),
-            name: "tool_gen_b".to_string(),
-            schema: "gen_round".to_string(),
-            tool: "b".to_string(),
-        })
+        record(
+            "other_srv",
+            &OwnedObject {
+                kind: KIND_TABLE.to_string(),
+                name: "tool_gen_b".to_string(),
+                schema: "gen_round".to_string(),
+                tool: "b".to_string(),
+            },
+        )
         .unwrap();
 
         let mine = owned("gen_srv", "gen_round").unwrap();
@@ -289,7 +289,10 @@ mod tests {
         assert_eq!(mine[0].name, "gen_a");
         assert_eq!(mine[1].tool, "a");
 
-        assert_eq!(schemas_for("gen_srv").unwrap(), vec!["gen_round".to_string()]);
+        assert_eq!(
+            schemas_for("gen_srv").unwrap(),
+            vec!["gen_round".to_string()]
+        );
 
         // The recorded foreign table was never created by this probe (a
         // probe cannot create a foreign table without a server); take its

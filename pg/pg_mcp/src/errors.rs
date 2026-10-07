@@ -384,7 +384,11 @@ mod host_tests {
         assert_eq!(McpError::from_http_status(405).sqlstate(), "0A000");
         assert_eq!(McpError::from_http_status(404).sqlstate(), "08006");
         for other in [402, 409, 429, 500, 502, 503] {
-            assert_eq!(McpError::from_http_status(other).sqlstate(), "08006", "{other}");
+            assert_eq!(
+                McpError::from_http_status(other).sqlstate(),
+                "08006",
+                "{other}"
+            );
         }
     }
 

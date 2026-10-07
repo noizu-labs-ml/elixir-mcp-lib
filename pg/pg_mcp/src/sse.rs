@@ -358,9 +358,7 @@ mod host_tests {
     }
 
     fn reply(id: i64, body: &str) -> String {
-        format!(
-            "data: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{body}}}\n\n"
-        )
+        format!("data: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{body}}}\n\n")
     }
 
     /// CRLF line endings dispatch identically to LF (§4.5; some proxies
@@ -371,7 +369,8 @@ mod host_tests {
         let out = read(stream.as_bytes(), 9).unwrap();
         assert_eq!(out["result"], serde_json::json!("crlf"));
         // Mixed CRLF / LF / bare-CR line endings within one frame.
-        let mixed = "data: {\"jsonrpc\":\"2.0\",\r\ndata: \"id\":10,\ndata: \"result\":\"mixed\"}\r\n\r\n";
+        let mixed =
+            "data: {\"jsonrpc\":\"2.0\",\r\ndata: \"id\":10,\ndata: \"result\":\"mixed\"}\r\n\r\n";
         let out = read(mixed.as_bytes(), 10).unwrap();
         assert_eq!(out["result"], serde_json::json!("mixed"));
     }
@@ -477,8 +476,7 @@ mod host_tests {
                 ))
             }
         }
-        let err = read_until_id(Poisoned, 1, Duration::from_secs(5), &NoInterrupts)
-            .unwrap_err();
+        let err = read_until_id(Poisoned, 1, Duration::from_secs(5), &NoInterrupts).unwrap_err();
         assert_eq!(err.sqlstate(), "08006");
         assert!(err.message().contains("BrokenPipe"), "{:?}", err.message());
         assert!(

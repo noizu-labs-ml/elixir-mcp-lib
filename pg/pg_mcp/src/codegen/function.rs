@@ -111,7 +111,9 @@ fn function_body(tool: &PlannedTool) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             let insert = if tool.params.is_empty() {
-                format!("INSERT INTO {qualified} DEFAULT VALUES RETURNING \"content\", \"is_error\"")
+                format!(
+                    "INSERT INTO {qualified} DEFAULT VALUES RETURNING \"content\", \"is_error\""
+                )
             } else {
                 format!(
                     "INSERT INTO {qualified} ({insert_columns}) VALUES ({insert_values}) \
@@ -252,10 +254,16 @@ mod tests {
     use serde_json::{json, Value};
 
     fn plan_one(tool: Value) -> PlannedTool {
-        plan(&[tool], "npl", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap()
-            .tools
-            .remove(0)
+        plan(
+            &[tool],
+            "npl",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap()
+        .tools
+        .remove(0)
     }
 
     const SEARCH_DOCS: &str = r#"{
@@ -349,7 +357,10 @@ mod tests {
         );
         assert!(ddl.contains("RETURNS jsonb"), "{ddl}");
         // PARALLEL UNSAFE and VOLATILE are unconditional.
-        assert!(ddl.contains("LANGUAGE sql VOLATILE PARALLEL UNSAFE"), "{ddl}");
+        assert!(
+            ddl.contains("LANGUAGE sql VOLATILE PARALLEL UNSAFE"),
+            "{ddl}"
+        );
     }
 
     #[pgrx::pg_test]
@@ -402,7 +413,10 @@ mod tests {
             },
         }));
         let ddl = create_function(&tool);
-        assert!(ddl.starts_with("CREATE FUNCTION \"npl\".\"limit\"(\"limit\" bigint DEFAULT NULL)"), "{ddl}");
+        assert!(
+            ddl.starts_with("CREATE FUNCTION \"npl\".\"limit\"(\"limit\" bigint DEFAULT NULL)"),
+            "{ddl}"
+        );
         assert!(ddl.contains("t.\"limit\" = $1"), "{ddl}");
     }
 
