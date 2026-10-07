@@ -88,7 +88,9 @@ defmodule Noizu.MCP.StdioE2ETest do
     client =
       start_supervised!(
         {Noizu.MCP.Client,
-         transport: {:stdio, command: "mix", args: ["run", "--no-compile", "--no-halt"], cd: @example_dir},
+         transport:
+           {:stdio, command: "mix", args: ["run", "--no-compile", "--no-halt"],
+            cd: @example_dir, env: [{"MIX_ENV", "dev"}]},
          client_info: %{name: "e2e_client", version: "1.0.0"},
          request_timeout: 60_000}
       )
