@@ -76,10 +76,21 @@ defmodule Noizu.MCP.Client do
     GenServer.call(client, :await_ready, timeout)
   end
 
-  @doc "Close the connection."
+  @doc """
+  Close the connection.
+
+  Deterministically terminates the client, its transport, and its task
+  supervisor. Closing an already-closed (or failed) client is a no-op.
+  """
   @spec close(GenServer.server()) :: :ok
   # <REMOVED UUID HERE> close :: Close the connection.
-  def close(client), do: GenServer.stop(client, :normal)
+  def close(client) do
+    GenServer.stop(client, :normal)
+  catch
+    # Client already down (closed, failed transport, crashed): no-op.
+    :exit, :noproc -> :ok
+    :exit, {:noproc, _} -> :ok
+  end
 
   # ── introspection ─────────────────────────────────────────────────────────
 
@@ -616,6 +627,47 @@ defmodule Noizu.MCP.Client do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    # The client owns the transport and the task supervisor, and both are
+    # linked to it — but a :normal exit signal is ignored by the linked,
+    # non-trapping transport, so stopping the client alone leaves it (and any
+    # transport-owned processes) running. Take both down deterministically.
+    shutdown_transport(state.transport)
+    shutdown_task_sup(state.task_sup)
+    :ok
+  end
+
+  defp shutdown_transport(nil), do: :ok
+
+  defp shutdown_transport({_module, pid}) do
+    if Process.alive?(pid) do
+      # System stop so the transport's own terminate/2 runs (stdio closes its
+      # port); :shutdown reason so any transport-linked stragglers exit with
+      # it. Bounded + kill fallback in case the transport is wedged.
+      try do
+        GenServer.stop(pid, :shutdown, 5_000)
+      catch
+        :exit, _reason -> Process.exit(pid, :kill)
+      end
+    end
+
+    :ok
+  end
+
+  defp shutdown_task_sup(pid) do
+    if Process.alive?(pid) do
+      # Stopping the supervisor terminates any still-running handler tasks.
+      try do
+        GenServer.stop(pid, :normal, 5_000)
+      catch
+        :exit, _reason -> :ok
+      end
+    end
+
+    :ok
+  end
 
   # ── effects ───────────────────────────────────────────────────────────────
 
