@@ -145,8 +145,10 @@ where
                 occurrence += 1;
                 let ordinal = occurrence.to_string();
                 let head_len = TRUNCATE_BYTES.saturating_sub(1 + ordinal.len());
-                candidate =
-                    format!("{}_{original_hash}_{ordinal}", &sql[..head_len.min(sql.len())]);
+                candidate = format!(
+                    "{}_{original_hash}_{ordinal}",
+                    &sql[..head_len.min(sql.len())]
+                );
             }
             seen.insert(candidate.clone(), out.len());
             out.push((original.clone(), candidate));
@@ -164,18 +166,104 @@ pub fn is_reserved(name: &str) -> bool {
         // Sorted: `binary_search` below requires it. (`both` sorts after
         // `binary` — an earlier unsorted pairing made `is_reserved("both")`
         // miss; caught by the host unit test.)
-        "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric",
-        "binary", "both", "case", "cast", "check", "collate", "collation", "column", "concurrently",
-        "constraint", "create", "current_catalog", "current_date", "current_role", "current_time",
-        "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct", "do",
-        "else", "end", "except", "false", "fetch", "filter", "for", "foreign", "freeze", "from",
-        "full", "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect",
-        "into", "is", "isnull", "join", "lateral", "leading", "left", "like", "limit",
-        "localtime", "localtimestamp", "natural", "not", "notnull", "null", "offset", "on",
-        "only", "or", "order", "outer", "overlaps", "placing", "primary", "references",
-        "returning", "right", "select", "session_user", "similar", "some", "symmetric", "table",
-        "tablesample", "then", "to", "trailing", "true", "union", "unique", "user", "using",
-        "variadic", "verbose", "when", "where", "window", "with",
+        "all",
+        "analyse",
+        "analyze",
+        "and",
+        "any",
+        "array",
+        "as",
+        "asc",
+        "asymmetric",
+        "binary",
+        "both",
+        "case",
+        "cast",
+        "check",
+        "collate",
+        "collation",
+        "column",
+        "concurrently",
+        "constraint",
+        "create",
+        "current_catalog",
+        "current_date",
+        "current_role",
+        "current_time",
+        "current_timestamp",
+        "current_user",
+        "default",
+        "deferrable",
+        "desc",
+        "distinct",
+        "do",
+        "else",
+        "end",
+        "except",
+        "false",
+        "fetch",
+        "filter",
+        "for",
+        "foreign",
+        "freeze",
+        "from",
+        "full",
+        "grant",
+        "group",
+        "having",
+        "ilike",
+        "in",
+        "initially",
+        "inner",
+        "intersect",
+        "into",
+        "is",
+        "isnull",
+        "join",
+        "lateral",
+        "leading",
+        "left",
+        "like",
+        "limit",
+        "localtime",
+        "localtimestamp",
+        "natural",
+        "not",
+        "notnull",
+        "null",
+        "offset",
+        "on",
+        "only",
+        "or",
+        "order",
+        "outer",
+        "overlaps",
+        "placing",
+        "primary",
+        "references",
+        "returning",
+        "right",
+        "select",
+        "session_user",
+        "similar",
+        "some",
+        "symmetric",
+        "table",
+        "tablesample",
+        "then",
+        "to",
+        "trailing",
+        "true",
+        "union",
+        "unique",
+        "user",
+        "using",
+        "variadic",
+        "verbose",
+        "when",
+        "where",
+        "window",
+        "with",
     ];
     RESERVED.binary_search(&name).is_ok()
 }
@@ -340,7 +428,8 @@ mod tests {
     /// `_` + 7 hex, identical across runs (fixed vector).
     #[pgrx::pg_test]
     fn long_names_truncate_to_63_bytes_with_a_deterministic_hash_suffix() {
-        let long = "a_very_long_tool_name_that_goes_on_and_on_until_it_passes_the_sixty_three_byte_limit";
+        let long =
+            "a_very_long_tool_name_that_goes_on_and_on_until_it_passes_the_sixty_three_byte_limit";
         assert_eq!(long.len(), 84);
         let derived = derive(long, "");
         assert_eq!(derived.len(), 63, "byte length is the identifier limit");
@@ -349,12 +438,17 @@ mod tests {
         let tail = tail.strip_prefix('_').unwrap();
         assert_eq!(head, &long[..55].to_lowercase());
         assert_eq!(tail.len(), 7);
-        assert!(tail.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(tail
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         // The fixed vector: identical across runs and machines (AC-8.8).
-        assert_eq!(derived, format!("{}{}", &long[..55].to_lowercase(), {
-            let h = sha256_hex7(long.to_lowercase().as_bytes());
-            format!("_{h}")
-        }));
+        assert_eq!(
+            derived,
+            format!("{}{}", &long[..55].to_lowercase(), {
+                let h = sha256_hex7(long.to_lowercase().as_bytes());
+                format!("_{h}")
+            })
+        );
         // Deterministic across calls.
         assert_eq!(derive(long, ""), derive(long, ""));
     }
@@ -386,14 +480,17 @@ mod tests {
             &format!("a_b_{}", sha256_hex7(b"a_b")),
             "second occurrence suffixes with its own original name's hash"
         );
-        assert_eq!(
-            third,
-            &format!("a_b_{}", sha256_hex7(b"a.b"))
-        );
+        assert_eq!(third, &format!("a_b_{}", sha256_hex7(b"a.b")));
         // Deterministic and order-stable.
         assert_eq!(dedup(["a-b", "a_b"], ""), out[..2].to_vec());
         // No collision, no suffix.
-        assert_eq!(dedup(["one", "two"], "").iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>(), vec!["one", "two"]);
+        assert_eq!(
+            dedup(["one", "two"], "")
+                .iter()
+                .map(|(_, s)| s.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
 
         // Prefix composes with collision handling (rules 5+6 together).
         let out = dedup(["a-b", "a_b"], "p_");
@@ -407,16 +504,30 @@ mod tests {
     fn hostile_names_always_produce_valid_identifiers() {
         let hostile = [
             "github.create_issue",
-            "UPPER", "lower", "MiXeD case", "tabs\tand\nnewlines",
-            "emoji🚀rocket", "null\0byte", "quote\"name", "dollar$sign",
-            "0", "_leading_underscore", "trailing_", "a", "", "  ",
+            "UPPER",
+            "lower",
+            "MiXeD case",
+            "tabs\tand\nnewlines",
+            "emoji🚀rocket",
+            "null\0byte",
+            "quote\"name",
+            "dollar$sign",
+            "0",
+            "_leading_underscore",
+            "trailing_",
+            "a",
+            "",
+            "  ",
             "engine.upstream.very.long.name.chain.that.keeps.going.and.going",
             &"x".repeat(200),
         ];
         for name in hostile {
             let derived = derive(name, "p_");
             assert!(derived.len() <= 63, "{name:?} → {} bytes", derived.len());
-            assert!(!derived.is_empty(), "{name:?} must not derive to empty under a prefix");
+            assert!(
+                !derived.is_empty(),
+                "{name:?} must not derive to empty under a prefix"
+            );
             assert!(
                 derived
                     .bytes()
@@ -433,7 +544,12 @@ mod tests {
     /// The SHA-256 implementation against FIPS 180-4's published vectors.
     #[pgrx::pg_test]
     fn sha256_matches_the_published_test_vectors() {
-        let of = |s: &str| sha256(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let of = |s: &str| {
+            sha256(s.as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
         assert_eq!(
             of(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -620,7 +736,13 @@ mod host_tests {
     /// output): derive(derive(x)) == derive(x) for the ASCII output class.
     #[test]
     fn derivation_is_idempotent_over_its_own_output() {
-        for name in ["searchDocs", "getHTTPResponse", "we!rd@@name", "2fa", "日本語"] {
+        for name in [
+            "searchDocs",
+            "getHTTPResponse",
+            "we!rd@@name",
+            "2fa",
+            "日本語",
+        ] {
             let once = derive(name, "");
             let twice = derive(&once, "");
             assert_eq!(once, twice, "derive∘derive = derive for {name:?}");
@@ -643,21 +765,110 @@ mod host_tests {
         // recognizing it and this loop fails — the check is behavioral, so a
         // silently broken binary_search (unsorted list) is caught too.
         const RESERVED: &[&str] = &[
-            "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "both",
-            "binary", "case", "cast", "check", "collate", "collation", "column", "concurrently",
-            "constraint", "create", "current_catalog", "current_date", "current_role", "current_time",
-            "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct", "do",
-            "else", "end", "except", "false", "fetch", "filter", "for", "foreign", "freeze", "from",
-            "full", "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect",
-            "into", "is", "isnull", "join", "lateral", "leading", "left", "like", "limit",
-            "localtime", "localtimestamp", "natural", "not", "notnull", "null", "offset", "on",
-            "only", "or", "order", "outer", "overlaps", "placing", "primary", "references",
-            "returning", "right", "select", "session_user", "similar", "some", "symmetric", "table",
-            "tablesample", "then", "to", "trailing", "true", "union", "unique", "user", "using",
-            "variadic", "verbose", "when", "where", "window", "with",
+            "all",
+            "analyse",
+            "analyze",
+            "and",
+            "any",
+            "array",
+            "as",
+            "asc",
+            "asymmetric",
+            "both",
+            "binary",
+            "case",
+            "cast",
+            "check",
+            "collate",
+            "collation",
+            "column",
+            "concurrently",
+            "constraint",
+            "create",
+            "current_catalog",
+            "current_date",
+            "current_role",
+            "current_time",
+            "current_timestamp",
+            "current_user",
+            "default",
+            "deferrable",
+            "desc",
+            "distinct",
+            "do",
+            "else",
+            "end",
+            "except",
+            "false",
+            "fetch",
+            "filter",
+            "for",
+            "foreign",
+            "freeze",
+            "from",
+            "full",
+            "grant",
+            "group",
+            "having",
+            "ilike",
+            "in",
+            "initially",
+            "inner",
+            "intersect",
+            "into",
+            "is",
+            "isnull",
+            "join",
+            "lateral",
+            "leading",
+            "left",
+            "like",
+            "limit",
+            "localtime",
+            "localtimestamp",
+            "natural",
+            "not",
+            "notnull",
+            "null",
+            "offset",
+            "on",
+            "only",
+            "or",
+            "order",
+            "outer",
+            "overlaps",
+            "placing",
+            "primary",
+            "references",
+            "returning",
+            "right",
+            "select",
+            "session_user",
+            "similar",
+            "some",
+            "symmetric",
+            "table",
+            "tablesample",
+            "then",
+            "to",
+            "trailing",
+            "true",
+            "union",
+            "unique",
+            "user",
+            "using",
+            "variadic",
+            "verbose",
+            "when",
+            "where",
+            "window",
+            "with",
         ];
         for word in RESERVED {
-            assert!(is_reserved(word), "reserved keyword {word:?} not recognized");
+            assert!(
+                is_reserved(word),
+                "reserved keyword {word:?} not recognized"
+            );
         }
         // Every reserved word derives to itself and stays a valid identifier
         // (rule 3: they are emitted verbatim, quoted by the emitters).
@@ -689,7 +900,10 @@ mod host_tests {
         for name in hostile {
             let derived = derive(name, "t_");
             assert_valid_identifier(&derived);
-            assert!(!derived.is_empty(), "{name:?} must not go empty under a prefix");
+            assert!(
+                !derived.is_empty(),
+                "{name:?} must not go empty under a prefix"
+            );
         }
         // Without a prefix an all-punctuation name legitimately derives to
         // "" — the planner substitutes "_" for such columns (codegen/mod.rs).

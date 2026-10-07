@@ -257,9 +257,10 @@ pub fn plan(
             }
             Err(skip_reason) => {
                 plan_out.skipped.push(tool_display_name(tool));
-                plan_out
-                    .warnings
-                    .push(format!("skipped {}: {skip_reason}", tool_display_name(tool)));
+                plan_out.warnings.push(format!(
+                    "skipped {}: {skip_reason}",
+                    tool_display_name(tool)
+                ));
             }
         }
     }
@@ -346,7 +347,11 @@ fn plan_one(
     // §4.2's gate table.
     let read_only = tool
         .get("annotations")
-        .map(|a| a.get("readOnlyHint").and_then(Value::as_bool).unwrap_or(false))
+        .map(|a| {
+            a.get("readOnlyHint")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .unwrap_or(false);
     let invoke_on_select = match gate {
         InvokeOnSelect::ReadOnly => read_only,
@@ -547,7 +552,14 @@ mod tests {
             })),
             true,
         );
-        let plan = plan(&[tool], "npl", "", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        let plan = plan(
+            &[tool],
+            "npl",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         assert_eq!(plan.skipped.len(), 0);
         assert_eq!(plan.tools.len(), 1);
         let t = &plan.tools[0];
@@ -588,11 +600,17 @@ mod tests {
     fn output_shape_matrix_matches_prd_4_2() {
         let shape = |out: Option<Value>| {
             let tool = fixture_tool("t", json!({"type":"object","properties":{}}), out, true);
-            plan(&[tool], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-                .unwrap()
-                .tools
-                .remove(0)
-                .output
+            plan(
+                &[tool],
+                "s",
+                "",
+                InvokeOnSelect::ReadOnly,
+                SchemaMode::Single,
+            )
+            .unwrap()
+            .tools
+            .remove(0)
+            .output
         };
 
         // No outputSchema.
@@ -606,7 +624,9 @@ mod tests {
         ));
 
         // Scalar properties: one row per property type.
-        match shape(Some(json!({"type":"object","properties":{"total":{"type":"integer"}}}))) {
+        match shape(Some(
+            json!({"type":"object","properties":{"total":{"type":"integer"}}}),
+        )) {
             OutputShape::Single(cols) => {
                 assert_eq!(cols.len(), 1);
                 assert_eq!(cols[0].pg_type, ColumnType::Int8);
@@ -618,7 +638,8 @@ mod tests {
         // collapse — the array becomes a jsonb column (Q7).
         match shape(Some(json!({"type":"object","properties":{
             "results":{"type":"array","items":{"type":"object"}},
-            "total":{"type":"integer"}}}))) {
+            "total":{"type":"integer"}}})))
+        {
             OutputShape::Single(cols) => {
                 assert_eq!(cols.len(), 2);
                 assert_eq!(cols[0].pg_type, ColumnType::Jsonb);
@@ -644,7 +665,8 @@ mod tests {
 
         // An array-of-objects without properties fans out to content-only rows.
         match shape(Some(json!({"type":"object","properties":{
-            "items":{"type":"array","items":{"type":"object"}}}}))) {
+            "items":{"type":"array","items":{"type":"object"}}}})))
+        {
             OutputShape::ElementOf { property, columns } => {
                 assert_eq!(property, "items");
                 assert!(columns.is_empty());
@@ -656,23 +678,19 @@ mod tests {
     /// §4.2's gate table: readOnlyHint drives the default, options override.
     #[pgrx::pg_test]
     fn invocation_gate_follows_the_prd_matrix() {
-        let ro = fixture_tool(
-            "ro",
-            json!({"type":"object","properties":{}}),
-            None,
-            true,
-        );
-        let rw = fixture_tool(
-            "rw",
-            json!({"type":"object","properties":{}}),
-            None,
-            false,
-        );
+        let ro = fixture_tool("ro", json!({"type":"object","properties":{}}), None, true);
+        let rw = fixture_tool("rw", json!({"type":"object","properties":{}}), None, false);
 
         let gate_for = |gate: InvokeOnSelect, tool: &Value| {
-            plan(std::slice::from_ref(tool), "s", "", gate, SchemaMode::Single)
-                .unwrap()
-                .tools[0]
+            plan(
+                std::slice::from_ref(tool),
+                "s",
+                "",
+                gate,
+                SchemaMode::Single,
+            )
+            .unwrap()
+            .tools[0]
                 .invoke_on_select
         };
 
@@ -717,8 +735,14 @@ mod tests {
             None,
             true,
         );
-        let plan = plan(&[broken, fine], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap();
+        let plan = plan(
+            &[broken, fine],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         assert_eq!(plan.skipped, vec!["broken_ref".to_string()]);
         assert_eq!(plan.tools.len(), 1);
         assert_eq!(plan.tools[0].tool_name, "fine");
@@ -727,7 +751,14 @@ mod tests {
 
     #[pgrx::pg_test]
     fn unnamed_tools_are_skipped() {
-        let plan = plan(&[json!({"inputSchema": {"type":"object"}})], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        let plan = plan(
+            &[json!({"inputSchema": {"type":"object"}})],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         assert!(plan.tools.is_empty());
         assert!(plan.warnings.iter().any(|w| w.contains("no usable name")));
     }
@@ -737,10 +768,30 @@ mod tests {
     #[pgrx::pg_test]
     fn per_upstream_routing_splits_schemas_and_strips_prefixes() {
         let tools = vec![
-            fixture_tool("github.create_issue", json!({"type":"object","properties":{}}), None, true),
-            fixture_tool("github.list_issues", json!({"type":"object","properties":{}}), None, true),
-            fixture_tool("slack.post_message", json!({"type":"object","properties":{}}), None, false),
-            fixture_tool("local_echo", json!({"type":"object","properties":{}}), None, true),
+            fixture_tool(
+                "github.create_issue",
+                json!({"type":"object","properties":{}}),
+                None,
+                true,
+            ),
+            fixture_tool(
+                "github.list_issues",
+                json!({"type":"object","properties":{}}),
+                None,
+                true,
+            ),
+            fixture_tool(
+                "slack.post_message",
+                json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+            fixture_tool(
+                "local_echo",
+                json!({"type":"object","properties":{}}),
+                None,
+                true,
+            ),
         ];
         let planned = plan(
             &tools,
@@ -754,26 +805,52 @@ mod tests {
 
         let schema_of = |tool: &str| planned.tools.iter().find(|t| t.tool_name == tool).unwrap();
         assert_eq!(schema_of("github.create_issue").schema, "github");
-        assert_eq!(schema_of("github.create_issue").sql_name, "create_issue",
-            "no redundant upstream prefix in the object name");
+        assert_eq!(
+            schema_of("github.create_issue").sql_name,
+            "create_issue",
+            "no redundant upstream prefix in the object name"
+        );
         assert_eq!(schema_of("slack.post_message").schema, "slack");
-        assert_eq!(schema_of("local_echo").schema, "engine_mcp",
-            "unprefixed names stay in the target schema");
+        assert_eq!(
+            schema_of("local_echo").schema,
+            "engine_mcp",
+            "unprefixed names stay in the target schema"
+        );
         assert_eq!(schema_of("local_echo").sql_name, "local_echo");
 
         // `tool_name` (the table option) keeps the full wire name (§4.5 r7).
-        assert_eq!(schema_of("github.create_issue").tool_name, "github.create_issue");
+        assert_eq!(
+            schema_of("github.create_issue").tool_name,
+            "github.create_issue"
+        );
 
         // Collisions resolve per upstream: both upstreams may have `search`.
         let twins = vec![
-            fixture_tool("a.search", json!({"type":"object","properties":{}}), None, true),
-            fixture_tool("b.search", json!({"type":"object","properties":{}}), None, true),
+            fixture_tool(
+                "a.search",
+                json!({"type":"object","properties":{}}),
+                None,
+                true,
+            ),
+            fixture_tool(
+                "b.search",
+                json!({"type":"object","properties":{}}),
+                None,
+                true,
+            ),
         ];
-        let plan = plan(&twins, "e", "", InvokeOnSelect::ReadOnly, SchemaMode::PerUpstream).unwrap();
-        assert!(plan
-            .tools
-            .iter()
-            .all(|t| t.sql_name == "search"), "no cross-upstream collision suffix");
+        let plan = plan(
+            &twins,
+            "e",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::PerUpstream,
+        )
+        .unwrap();
+        assert!(
+            plan.tools.iter().all(|t| t.sql_name == "search"),
+            "no cross-upstream collision suffix"
+        );
     }
 
     #[pgrx::pg_test]
@@ -785,9 +862,19 @@ mod tests {
             None,
             true,
         );
-        let plan = plan(&[tool], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        let plan = plan(
+            &[tool],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         let inputs = &plan.tools[0].inputs;
-        assert_eq!(inputs[0].sql_name, "a_b", "first property keeps the plain name");
+        assert_eq!(
+            inputs[0].sql_name, "a_b",
+            "first property keeps the plain name"
+        );
         assert_ne!(inputs[1].sql_name, "a_b", "second gets a suffix");
         assert!(inputs[1].sql_name.starts_with("a_b_"));
         // The wire mapping is preserved: arguments use original property names.
@@ -802,7 +889,14 @@ mod tests {
             None,
             true,
         );
-        let plan = plan(&[tool], "s", "npl_", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        let plan = plan(
+            &[tool],
+            "s",
+            "npl_",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         assert_eq!(plan.tools[0].sql_name, "npl_search_docs");
     }
 
@@ -822,7 +916,14 @@ mod tests {
             "annotations": {"readOnlyHint": true},
             "inputSchema": {"type":"object","properties":{}},
         });
-        let plan = plan(&[tool], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        let plan = plan(
+            &[tool],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         assert_eq!(plan.tools[0].title.as_deref(), Some("Search documents"));
         assert_eq!(
             plan.tools[0].description.as_deref(),
@@ -863,9 +964,14 @@ mod host_tests {
             },
             "required": ["req_z", "req_a"],
         });
-        let planned =
-            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-                .unwrap();
+        let planned = plan(
+            &[tool("t", inputs)],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         let t = &planned.tools[0];
         assert_eq!(t.params, vec!["req_z", "req_a", "opt_a", "opt_b"]);
         // Every required input is a parameter.
@@ -885,9 +991,14 @@ mod host_tests {
             "properties": {"real": {"type": "string"}},
             "required": ["ghost", "real"],
         });
-        let planned =
-            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-                .unwrap();
+        let planned = plan(
+            &[tool("t", inputs)],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         let t = &planned.tools[0];
         assert_eq!(t.params, vec!["real"]);
         assert_eq!(t.inputs.len(), 1);
@@ -903,11 +1014,19 @@ mod host_tests {
             props.insert(n.to_string(), json!({"type": "string"}));
         }
         let inputs = json!({"type": "object", "properties": props});
-        let planned =
-            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-                .unwrap();
-        let got: Vec<&str> =
-            planned.tools[0].inputs.iter().map(|c| c.property.as_str()).collect();
+        let planned = plan(
+            &[tool("t", inputs)],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
+        let got: Vec<&str> = planned.tools[0]
+            .inputs
+            .iter()
+            .map(|c| c.property.as_str())
+            .collect();
         assert_eq!(got, names);
     }
 
@@ -916,8 +1035,14 @@ mod host_tests {
     #[test]
     fn duplicate_tool_names_get_distinct_sql_names() {
         let tools = vec![tool("echo", object_schema(json!({}))); 3];
-        let planned =
-            plan(&tools, "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single).unwrap();
+        let planned = plan(
+            &tools,
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         assert_eq!(planned.tools.len(), 3);
         let mut seen = std::collections::HashSet::new();
         for t in &planned.tools {
@@ -931,9 +1056,14 @@ mod host_tests {
     #[test]
     fn empty_derivation_becomes_the_underscore_column() {
         let inputs = object_schema(json!({"🚀": {"type": "string"}}));
-        let planned =
-            plan(&[tool("t", inputs)], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-                .unwrap();
+        let planned = plan(
+            &[tool("t", inputs)],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap();
         let t = &planned.tools[0];
         assert_eq!(t.inputs.len(), 1);
         assert_eq!(t.inputs[0].sql_name, "_");
@@ -955,7 +1085,10 @@ mod host_tests {
             "type": "object",
             "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}}}}}
         }));
-        assert!(matches!(analyze_output(fanout), OutputShape::ElementOf { .. }));
+        assert!(matches!(
+            analyze_output(fanout),
+            OutputShape::ElementOf { .. }
+        ));
         // `items` of scalars is NOT a fan-out.
         let scalar_items = Some(&json!({
             "type": "object",

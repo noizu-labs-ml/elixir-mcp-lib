@@ -571,10 +571,8 @@ mod tests {
         assert!(!opts.per_upstream_schema);
 
         // §4.6's example, all four keys at once.
-        let opts = parse_opts(
-            r#"{"per_tool": true, "invoke_on_select": "all", "prefix": "npl_"}"#,
-        )
-        .unwrap();
+        let opts = parse_opts(r#"{"per_tool": true, "invoke_on_select": "all", "prefix": "npl_"}"#)
+            .unwrap();
         assert!(opts.per_tool);
         assert_eq!(opts.invoke_on_select, codegen::InvokeOnSelect::All);
         assert_eq!(opts.prefix, "npl_");
@@ -613,17 +611,33 @@ mod tests {
 
         // search_docs: table + function (+view, read-only all-optional);
         // send_email: table + function only.
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE FOREIGN TABLE \"npl_s\".\"tool_search_docs\" (")));
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE FUNCTION \"npl_s\".\"search_docs\"(")));
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE VIEW \"npl_s\".\"v_tool_search_docs\"")));
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE FOREIGN TABLE \"npl_s\".\"tool_send_email\" (")));
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE FUNCTION \"npl_s\".\"send_email\"(")));
+        assert!(stmts
+            .iter()
+            .any(|s| s.starts_with("CREATE FOREIGN TABLE \"npl_s\".\"tool_search_docs\" (")));
+        assert!(stmts
+            .iter()
+            .any(|s| s.starts_with("CREATE FUNCTION \"npl_s\".\"search_docs\"(")));
+        assert!(stmts
+            .iter()
+            .any(|s| s.starts_with("CREATE VIEW \"npl_s\".\"v_tool_search_docs\"")));
+        assert!(stmts
+            .iter()
+            .any(|s| s.starts_with("CREATE FOREIGN TABLE \"npl_s\".\"tool_send_email\" (")));
+        assert!(stmts
+            .iter()
+            .any(|s| s.starts_with("CREATE FUNCTION \"npl_s\".\"send_email\"(")));
         assert!(!stmts.iter().any(|s| s.contains("v_tool_send_email")));
         // Tables carry the runtime contract options.
-        let table = stmts.iter().find(|s| s.contains("tool_search_docs")).unwrap();
+        let table = stmts
+            .iter()
+            .find(|s| s.contains("tool_search_docs"))
+            .unwrap();
         assert!(table.contains("tool 'search_docs'"), "{table}");
         assert!(table.contains("invoke_on_select 'true'"), "{table}");
-        let gated = stmts.iter().find(|s| s.contains("tool_send_email")).unwrap();
+        let gated = stmts
+            .iter()
+            .find(|s| s.contains("tool_send_email"))
+            .unwrap();
         assert!(gated.contains("invoke_on_select 'false'"), "{gated}");
     }
 
@@ -639,10 +653,9 @@ mod tests {
         opts.prefix = "mcp_".to_string();
         opts.cache_ttl_ms = Some(2500);
         let (stmts, _) = per_tool_plan("npl", "s", &tools, &opts).unwrap();
-        assert!(stmts
-            .iter()
-            .any(|s| s.starts_with("CREATE FOREIGN TABLE \"s\".\"tool_mcp_echo\" (")
-                && s.contains("cache_ttl_ms '2500'")));
+        assert!(stmts.iter().any(|s| s
+            .starts_with("CREATE FOREIGN TABLE \"s\".\"tool_mcp_echo\" (")
+            && s.contains("cache_ttl_ms '2500'")));
     }
 
     #[pgrx::pg_test]
@@ -662,11 +675,13 @@ mod tests {
         let (stmts, _) = per_tool_plan("engine", "eng_s", &tools, &opts).unwrap();
 
         assert_eq!(stmts[0], "CREATE SCHEMA \"github\";");
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE FOREIGN TABLE \"github\".\"tool_create_issue\" (")
+        assert!(stmts.iter().any(|s| s
+            .starts_with("CREATE FOREIGN TABLE \"github\".\"tool_create_issue\" (")
             && s.contains("tool 'github.create_issue'")
             && s.contains("upstream 'github'")));
         // Unprefixed names stay in the target schema, unmarked.
-        assert!(stmts.iter().any(|s| s.starts_with("CREATE FOREIGN TABLE \"eng_s\".\"tool_local_echo\" (")
+        assert!(stmts.iter().any(|s| s
+            .starts_with("CREATE FOREIGN TABLE \"eng_s\".\"tool_local_echo\" (")
             && s.contains("tool 'local_echo'")
             && !s.contains("upstream")));
         assert!(!stmts.iter().any(|s| s.contains("tool_github_create_issue")));
@@ -833,7 +848,9 @@ mod host_tests {
 
         // cache_ttl_ms also accepts a JSON number.
         assert_eq!(
-            ImportOptions::parse(&json!({"cache_ttl_ms": 250})).unwrap().cache_ttl_ms,
+            ImportOptions::parse(&json!({"cache_ttl_ms": 250}))
+                .unwrap()
+                .cache_ttl_ms,
             Some(250)
         );
 
@@ -854,11 +871,20 @@ mod host_tests {
 
         // Non-object options and unknown keys are rejected, the latter with
         // the valid set spelled out.
-        assert_eq!(ImportOptions::parse(&json!("all")).unwrap_err().sqlstate(), "22023");
-        assert_eq!(ImportOptions::parse(&json!(7)).unwrap_err().sqlstate(), "22023");
+        assert_eq!(
+            ImportOptions::parse(&json!("all")).unwrap_err().sqlstate(),
+            "22023"
+        );
+        assert_eq!(
+            ImportOptions::parse(&json!(7)).unwrap_err().sqlstate(),
+            "22023"
+        );
         let err = ImportOptions::parse(&json!({"cache": 1})).unwrap_err();
         assert!(err.message().contains("cache"));
-        assert!(err.message().contains("all_upstreams"), "lists the valid set");
+        assert!(
+            err.message().contains("all_upstreams"),
+            "lists the valid set"
+        );
     }
 
     /// §4.5 rule 6's prefix grammar: identifier fragments only, never a
@@ -873,7 +899,10 @@ mod host_tests {
         }
         let err = validate_prefix("Npl").unwrap_err();
         assert!(err.message().contains("prefix"));
-        assert!(err.message().contains("Npl"), "the bad value is echoed: not a credential");
+        assert!(
+            err.message().contains("Npl"),
+            "the bad value is echoed: not a credential"
+        );
     }
 
     /// Only a validated ttl is stamped onto the table OPTIONS.
@@ -931,10 +960,16 @@ mod host_tests {
             &LOCAL_SPEC,
             &[("upstream".to_string(), "it's".to_string())],
         );
-        assert!(ddl.starts_with("CREATE FOREIGN TABLE \"target\".\"local\" ("), "{ddl}");
+        assert!(
+            ddl.starts_with("CREATE FOREIGN TABLE \"target\".\"local\" ("),
+            "{ddl}"
+        );
         assert!(ddl.contains("  \"alpha\" text,"), "{ddl}");
         assert!(ddl.contains("  \"beta\" integer"), "{ddl}");
-        assert!(ddl.contains(") SERVER \"srv\"\"q\" OPTIONS (upstream 'it''s');"), "{ddl}");
+        assert!(
+            ddl.contains(") SERVER \"srv\"\"q\" OPTIONS (upstream 'it''s');"),
+            "{ddl}"
+        );
 
         let bare = create_foreign_table("srv", "target", &LOCAL_SPEC, &[]);
         assert!(bare.ends_with(" SERVER \"srv\";"), "{bare}");

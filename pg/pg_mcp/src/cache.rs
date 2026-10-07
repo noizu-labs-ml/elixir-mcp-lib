@@ -432,7 +432,11 @@ mod host_tests {
             let hit = get_or_fetch(server, user, 40, Slice::Tools, fetch).unwrap();
             assert_eq!(hit.len(), 3);
         }
-        assert_eq!(fetches.load(Ordering::SeqCst), 1, "one fetch inside the TTL");
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "one fetch inside the TTL"
+        );
 
         std::thread::sleep(Duration::from_millis(60));
         let fresh = get_or_fetch(server, user, 40, Slice::Tools, fetch).unwrap();
@@ -473,7 +477,11 @@ mod host_tests {
             items(2)
         };
         get_or_fetch(server, user, 60_000, Slice::Resources, fetch).unwrap();
-        assert_eq!(fetches.load(Ordering::SeqCst), 1, "the retry really fetches");
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "the retry really fetches"
+        );
     }
 
     /// `drop_tools` removes only the tools slice; other slices survive.
@@ -548,7 +556,11 @@ mod host_tests {
             items(1)
         })
         .unwrap();
-        assert_eq!(alice_items.load(Ordering::SeqCst), 1, "Bob's drop never touched Alice");
+        assert_eq!(
+            alice_items.load(Ordering::SeqCst),
+            1,
+            "Bob's drop never touched Alice"
+        );
     }
 
     /// Different servers are independent keys even for the same user.
@@ -564,7 +576,11 @@ mod host_tests {
             items(2)
         })
         .unwrap();
-        assert_eq!(fetches.load(Ordering::SeqCst), 0, "server b unaffected by server a's drop");
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            0,
+            "server b unaffected by server a's drop"
+        );
     }
 
     /// Arc sharing: repeated hits hand out the same Arc (no clone of the
@@ -574,7 +590,10 @@ mod host_tests {
         let (server, user) = (oid(31), oid(32));
         let first = get_or_fetch(server, user, 60_000, Slice::Tools, || items(3)).unwrap();
         let second = get_or_fetch(server, user, 60_000, Slice::Tools, || items(3)).unwrap();
-        assert!(Arc::ptr_eq(&first, &second), "the same fetch serves the same Arc");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the same fetch serves the same Arc"
+        );
 
         std::thread::sleep(Duration::from_millis(30));
         let fresh = get_or_fetch(server, user, 10, Slice::Tools, || items(4)).unwrap();

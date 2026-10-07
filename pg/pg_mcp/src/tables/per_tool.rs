@@ -39,8 +39,8 @@ use crate::errors::{McpError, McpResult};
 use crate::quals::Qual;
 use crate::session;
 use crate::tables::{Cell, ColumnType, Row, ScanCursor};
-use pgrx::prelude::*;
 use pgrx::pg_sys;
+use pgrx::prelude::*;
 use serde_json::{json, Value};
 use std::ffi::CString;
 
@@ -139,18 +139,13 @@ fn resolve_tool(ctx: PerToolContext) -> McpResult<ResolvedTool> {
         codegen::InvokeOnSelect::ReadOnly,
         codegen::SchemaMode::Single,
     )?;
-    let planned = plan
-        .tools
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            McpError::UndefinedObject(format!(
-                "tool \"{}\" on server \"{}\" no longer has a mappable input schema; \
+    let planned = plan.tools.into_iter().next().ok_or_else(|| {
+        McpError::UndefinedObject(format!(
+            "tool \"{}\" on server \"{}\" no longer has a mappable input schema; \
                  re-run mcp.generate_functions",
-                ctx.target.tool, ctx.server_name
-            ))
-        })?
-        ;
+            ctx.target.tool, ctx.server_name
+        ))
+    })?;
 
     Ok(ResolvedTool { ctx, planned })
 }
@@ -433,11 +428,7 @@ impl PerToolModify for PerToolInsert {
 
 /// Convert a JSON value from the wire (or a pushed qual) into the typed cell
 /// a column carries. Errors are `22023` naming the column.
-pub(crate) fn json_to_cell(
-    value: &Value,
-    ty: ColumnType,
-    column: &str,
-) -> McpResult<Option<Cell>> {
+pub(crate) fn json_to_cell(value: &Value, ty: ColumnType, column: &str) -> McpResult<Option<Cell>> {
     if value.is_null() {
         return Ok(None);
     }
@@ -582,11 +573,19 @@ mod tests {
             Some(Cell::Json(_))
         ));
         // JSON null is SQL NULL, whatever the type.
-        assert_eq!(json_to_cell(&Value::Null, ColumnType::Text, "q").unwrap(), None);
+        assert_eq!(
+            json_to_cell(&Value::Null, ColumnType::Text, "q").unwrap(),
+            None
+        );
 
         // Postgres-parsed temporal and uuid values.
         assert!(matches!(
-            json_to_cell(&json!("2026-09-05T10:00:00Z"), ColumnType::TimestampTz, "since").unwrap(),
+            json_to_cell(
+                &json!("2026-09-05T10:00:00Z"),
+                ColumnType::TimestampTz,
+                "since"
+            )
+            .unwrap(),
             Some(Cell::TimestampTz(_))
         ));
         assert_eq!(
@@ -886,7 +885,10 @@ mod live_tests {
             })),
             // The remaining read-only fixture tools (limit, list_projects,
             // the long/colliding names) all answer an empty success.
-            "limit" | "list_projects" | "a-b" | "a_b"
+            "limit"
+            | "list_projects"
+            | "a-b"
+            | "a_b"
             | "extremely_long_tool_name_that_keeps_going_well_past_the_sixty_three_x" => {
                 ok(json!({"content": [], "structuredContent": {}}))
             }
@@ -990,8 +992,16 @@ mod live_tests {
         )
         .unwrap();
         let types = col_types.expect("column list");
-        for want in ["text", "bigint", "timestamp with time zone", "date", "uuid",
-                     "double precision", "boolean", "jsonb"] {
+        for want in [
+            "text",
+            "bigint",
+            "timestamp with time zone",
+            "date",
+            "uuid",
+            "double precision",
+            "boolean",
+            "jsonb",
+        ] {
             assert!(types.contains(want), "missing {want} in {types}");
         }
     }
@@ -1038,10 +1048,8 @@ mod live_tests {
         // With the required qual supplied (here through the typed function,
         // which binds it) the same table answers: the failure is precisely
         // about the missing argument, nothing else.
-        let ok: Option<i64> = Spi::get_one(
-            "SELECT count(*) FROM pt_req_s.search_docs('hello')",
-        )
-        .unwrap();
+        let ok: Option<i64> =
+            Spi::get_one("SELECT count(*) FROM pt_req_s.search_docs('hello')").unwrap();
         assert_eq!(ok, Some(2));
     }
 
@@ -1083,10 +1091,8 @@ mod live_tests {
 
         // §4.3: the non-read-only function takes the INSERT path and returns
         // the whole result the table carries ({content, is_error}).
-        let sent: Option<String> = Spi::get_one(
-            "SELECT pt_fn_s.send_email('a@noizu.com')::jsonb->>'is_error'",
-        )
-        .unwrap();
+        let sent: Option<String> =
+            Spi::get_one("SELECT pt_fn_s.send_email('a@noizu.com')::jsonb->>'is_error'").unwrap();
         assert_eq!(sent.as_deref(), Some("false"));
 
         // §4.4: the all-optional read-only tool gets its flattened view.
@@ -1175,7 +1181,12 @@ mod live_tests {
         let tools = fixture_tools();
         let long = tools
             .iter()
-            .find(|t| t["name"].as_str().unwrap_or("").starts_with("extremely_long"))
+            .find(|t| {
+                t["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("extremely_long")
+            })
             .unwrap()
             .clone();
         crate::codegen::plan(
@@ -1219,10 +1230,8 @@ mod live_tests {
         make_fixture_server("pt_regen", &stub);
         import_and_generate("pt_regen", "pt_regen_s");
 
-        let before: Option<i64> = Spi::get_one(
-            "SELECT count(*) FROM mcp.generated WHERE server = 'pt_regen'",
-        )
-        .unwrap();
+        let before: Option<i64> =
+            Spi::get_one("SELECT count(*) FROM mcp.generated WHERE server = 'pt_regen'").unwrap();
         // 8 tools x (table + function), plus views for the 6 read-only
         // all-optional tools.
         assert_eq!(before, Some(22));
@@ -1231,11 +1240,13 @@ mod live_tests {
         stub.remove_tool("list_projects");
         Spi::run("SELECT * FROM mcp.generate_functions('pt_regen', 'pt_regen_s')").unwrap();
 
-        let after: Option<i64> = Spi::get_one(
-            "SELECT count(*) FROM mcp.generated WHERE server = 'pt_regen'",
-        )
-        .unwrap();
-        assert_eq!(after, Some(19), "7 tools x (table + function), 5 views remain");
+        let after: Option<i64> =
+            Spi::get_one("SELECT count(*) FROM mcp.generated WHERE server = 'pt_regen'").unwrap();
+        assert_eq!(
+            after,
+            Some(19),
+            "7 tools x (table + function), 5 views remain"
+        );
 
         let gone: Option<i64> = Spi::get_one(
             "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -1245,8 +1256,7 @@ mod live_tests {
         assert_eq!(gone, Some(0), "the tool's table and view are both gone");
 
         // Survivors still work.
-        let kept: Option<i64> =
-            Spi::get_one("SELECT count(*) FROM pt_regen_s.tool_limit").unwrap();
+        let kept: Option<i64> = Spi::get_one("SELECT count(*) FROM pt_regen_s.tool_limit").unwrap();
         assert_eq!(kept, Some(1));
     }
 
@@ -1270,10 +1280,9 @@ mod live_tests {
         );
 
         // Nothing half-dropped: every previously owned object still stands.
-        let intact: Option<i64> = Spi::get_one(
-            "SELECT count(*) FROM mcp.generated WHERE server = 'pt_restrict'",
-        )
-        .unwrap();
+        let intact: Option<i64> =
+            Spi::get_one("SELECT count(*) FROM mcp.generated WHERE server = 'pt_restrict'")
+                .unwrap();
         assert_eq!(
             intact,
             Some(22),
@@ -1433,7 +1442,7 @@ mod live_tests {
         // them (this is the §4.2 input-echo discipline, through params).
         let since_echo: Option<i64> = Spi::get_one(
             "SELECT count(*) FROM pt_param_s.tool_search_docs
-              WHERE query = 'hello' AND since = '2026-09-05T10:00:00Z'"
+              WHERE query = 'hello' AND since = '2026-09-05T10:00:00Z'",
         )
         .unwrap();
         assert_eq!(since_echo, Some(2));
@@ -1453,9 +1462,7 @@ mod live_tests {
         make_fixture_server("pt_shape", &stub);
         import_and_generate("pt_shape", "pt_shape_s");
 
-        let count = |stmt: &str| -> i64 {
-            Spi::get_one::<i64>(stmt).unwrap().expect("a count")
-        };
+        let count = |stmt: &str| -> i64 { Spi::get_one::<i64>(stmt).unwrap().expect("a count") };
 
         // `flag = true` is rewritten by the planner into a bare Var; the
         // extractor reads it back as an equality and it binds.
@@ -1579,7 +1586,10 @@ mod live_tests {
             "22023",
             Some("query"),
         );
-        assert!(stub.call_count() >= 2, "the zero-row answers were real scans");
+        assert!(
+            stub.call_count() >= 2,
+            "the zero-row answers were real scans"
+        );
     }
 
     /// Timestamps cross the wire as RFC 3339 (`fdw.rs`'s

@@ -18,7 +18,7 @@
 //! * `cache_ttl_ms '<n>'` — PRD-7 §4.10's per-table TTL override, stamped
 //!   when the caller provides one.
 
-use super::{PlannedTool};
+use super::PlannedTool;
 
 /// Quote a SQL identifier (same escaping discipline as `import.rs`).
 pub(crate) fn quote_ident(name: &str) -> String {
@@ -59,13 +59,15 @@ impl Default for ExtraOptions {
 /// `OPTIONS (...)` wrapper), `tool` and `invoke_on_select` first.
 pub fn table_options(tool: &PlannedTool, extra: &ExtraOptions) -> Vec<(String, String)> {
     let mut options = vec![
-        (
-            "tool".to_string(),
-            tool.tool_name.clone(),
-        ),
+        ("tool".to_string(), tool.tool_name.clone()),
         (
             "invoke_on_select".to_string(),
-            if tool.invoke_on_select { "true" } else { "false" }.to_string(),
+            if tool.invoke_on_select {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         ),
     ];
     if let Some(upstream) = &extra.upstream {
@@ -173,10 +175,16 @@ mod tests {
                 },
             },
         });
-        let planned = plan(&[tool], "npl", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap()
-            .tools
-            .remove(0);
+        let planned = plan(
+            &[tool],
+            "npl",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap()
+        .tools
+        .remove(0);
         let ddl = create_table("npl", &planned, &ExtraOptions::default());
         assert_eq!(
             ddl,
@@ -200,10 +208,16 @@ mod tests {
             "name": "send_email",
             "inputSchema": {"type": "object", "properties": {}},
         });
-        let planned = plan(&[tool], "npl", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap()
-            .tools
-            .remove(0);
+        let planned = plan(
+            &[tool],
+            "npl",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap()
+        .tools
+        .remove(0);
         assert!(!planned.invoke_on_select);
         let ddl = create_table(
             "npl",
@@ -214,8 +228,10 @@ mod tests {
             },
         );
         assert!(
-            ddl.ends_with("OPTIONS (tool 'send_email', invoke_on_select 'false', \
-                           upstream 'mail', cache_ttl_ms '5000');"),
+            ddl.ends_with(
+                "OPTIONS (tool 'send_email', invoke_on_select 'false', \
+                           upstream 'mail', cache_ttl_ms '5000');"
+            ),
             "{ddl}"
         );
     }
@@ -227,10 +243,16 @@ mod tests {
             "annotations": {"readOnlyHint": true},
             "inputSchema": {"type": "object", "properties": {}},
         });
-        let planned = plan(&[tool], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap()
-            .tools
-            .remove(0);
+        let planned = plan(
+            &[tool],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap()
+        .tools
+        .remove(0);
         assert_eq!(planned.sql_name, "limit");
         let ddl = create_table("s", &planned, &ExtraOptions::default());
         assert!(ddl.contains("\"s\".\"tool_limit\" ("), "{ddl}");
@@ -244,13 +266,22 @@ mod tests {
             "annotations": {"readOnlyHint": true},
             "inputSchema": {"type": "object", "properties": {}},
         });
-        let planned = plan(&[tool], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap()
-            .tools
-            .remove(0);
+        let planned = plan(
+            &[tool],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap()
+        .tools
+        .remove(0);
         assert_eq!(planned.output, OutputShape::None);
         let ddl = create_table("s", &planned, &ExtraOptions::default());
-        assert!(ddl.contains("\"content\" jsonb,\n  \"is_error\" boolean"), "{ddl}");
+        assert!(
+            ddl.contains("\"content\" jsonb,\n  \"is_error\" boolean"),
+            "{ddl}"
+        );
         assert_eq!(ddl.matches('\n').count(), 3, "two columns only: {ddl}");
     }
 
@@ -266,10 +297,16 @@ mod tests {
                 },
             },
         });
-        let planned = plan(&[tool], "s", "", InvokeOnSelect::ReadOnly, SchemaMode::Single)
-            .unwrap()
-            .tools
-            .remove(0);
+        let planned = plan(
+            &[tool],
+            "s",
+            "",
+            InvokeOnSelect::ReadOnly,
+            SchemaMode::Single,
+        )
+        .unwrap()
+        .tools
+        .remove(0);
         let comments = column_comments(&planned);
         assert_eq!(comments.len(), 1);
         assert_eq!(

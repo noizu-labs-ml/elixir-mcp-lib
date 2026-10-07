@@ -474,7 +474,10 @@ mod host_tests {
         assert_eq!(
             parsed,
             vec![
-                ("url".to_string(), "https://x.example/mcp?a=b&c=d".to_string()),
+                (
+                    "url".to_string(),
+                    "https://x.example/mcp?a=b&c=d".to_string()
+                ),
                 ("mode".to_string(), "generic".to_string()),
                 (String::new(), "value".to_string()),
                 ("empty".to_string(), String::new()),
@@ -491,11 +494,13 @@ mod host_tests {
         assert_eq!(params_object(None), json!({}));
         assert_eq!(params_object(Some(Value::Null)), json!({}));
         assert_eq!(params_object(Some(json!({}))), json!({}));
-        assert_eq!(params_object(Some(json!({"a": 1, "b": [true, null]}))), json!({"a": 1, "b": [true, null]}));
+        assert_eq!(
+            params_object(Some(json!({"a": 1, "b": [true, null]}))),
+            json!({"a": 1, "b": [true, null]})
+        );
         assert_eq!(params_object(Some(json!("scalar"))), json!("scalar"));
         assert_eq!(params_object(Some(json!(7))), json!(7));
     }
-
 
     /// Thread-local hygiene without a backend: the map starts empty in this
     /// thread, an absent key drops false, and clear is idempotent.
@@ -503,7 +508,10 @@ mod host_tests {
     fn session_map_hygiene_in_a_fresh_thread() {
         clear_all_sessions();
         assert_eq!(session_count(), 0);
-        assert!(!drop_session(pg_sys::Oid::from(77u32), pg_sys::Oid::from(88u32)));
+        assert!(!drop_session(
+            pg_sys::Oid::from(77u32),
+            pg_sys::Oid::from(88u32)
+        ));
         assert_eq!(
             initialize_count(pg_sys::Oid::from(77u32), pg_sys::Oid::from(88u32)),
             None

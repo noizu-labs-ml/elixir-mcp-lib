@@ -291,7 +291,13 @@ mod host_tests {
     #[test]
     fn support_matrix() {
         // Supported.
-        for v in [json!("x"), json!(42), json!(-1.5), json!(true), json!(false)] {
+        for v in [
+            json!("x"),
+            json!(42),
+            json!(-1.5),
+            json!(true),
+            json!(false),
+        ] {
             assert!(q("f", Operator::Equal, v.clone()).is_supported(), "{v}");
         }
         for items in [
@@ -345,22 +351,26 @@ mod host_tests {
         // ANY over an empty array matches nothing at all.
         assert!(!q("f", Operator::AnyEqual, json!([])).matches_json("f", &json!("a")));
         // Structural equality for jsonb shapes.
-        assert!(q(
-            "a",
-            Operator::Equal,
-            json!({"b": [1, 2], "c": null})
-        )
-        .matches_json("a", &json!({"c": null, "b": [1, 2]})));
+        assert!(q("a", Operator::Equal, json!({"b": [1, 2], "c": null}))
+            .matches_json("a", &json!({"c": null, "b": [1, 2]})));
     }
 
     /// `restricted_values`: Equal yields one, AnyEqual flattens in order, a
     /// corrupt non-array AnyEqual yields none.
     #[test]
     fn restricted_value_shapes() {
-        assert_eq!(q("f", Operator::Equal, json!("a")).restricted_values(), vec![&json!("a")]);
+        assert_eq!(
+            q("f", Operator::Equal, json!("a")).restricted_values(),
+            vec![&json!("a")]
+        );
         let many = q("f", Operator::AnyEqual, json!(["a", 1, true]));
-        assert_eq!(many.restricted_values(), vec![&json!("a"), &json!(1), &json!(true)]);
-        assert!(q("f", Operator::AnyEqual, json!("scalar")).restricted_values().is_empty());
+        assert_eq!(
+            many.restricted_values(),
+            vec![&json!("a"), &json!(1), &json!(true)]
+        );
+        assert!(q("f", Operator::AnyEqual, json!("scalar"))
+            .restricted_values()
+            .is_empty());
     }
 
     /// ParamQual round-trips through the fdw_private JSON blob, preserving

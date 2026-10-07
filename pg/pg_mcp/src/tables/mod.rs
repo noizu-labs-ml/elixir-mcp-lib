@@ -1100,9 +1100,21 @@ mod host_tests {
     static LOCAL_SPEC: TableSpec = TableSpec {
         name: "local",
         columns: &[
-            ColumnSpec { name: "alpha", pg_type: ColumnType::Text, source: Source::ServerIdentity },
-            ColumnSpec { name: "beta", pg_type: ColumnType::Jsonb, source: Source::List("tools/list") },
-            ColumnSpec { name: "gamma", pg_type: ColumnType::Int4, source: Source::Local },
+            ColumnSpec {
+                name: "alpha",
+                pg_type: ColumnType::Text,
+                source: Source::ServerIdentity,
+            },
+            ColumnSpec {
+                name: "beta",
+                pg_type: ColumnType::Jsonb,
+                source: Source::List("tools/list"),
+            },
+            ColumnSpec {
+                name: "gamma",
+                pg_type: ColumnType::Int4,
+                source: Source::Local,
+            },
         ],
     };
 
@@ -1116,7 +1128,10 @@ mod host_tests {
         assert_eq!(Cell::Bool(false).as_json(), json!(false));
         assert_eq!(Cell::Int4(-7).as_json(), json!(-7));
         assert_eq!(Cell::Int8(i64::MIN).as_json(), json!(i64::MIN));
-        assert_eq!(Cell::Date("2026-09-06".into()).as_json(), json!("2026-09-06"));
+        assert_eq!(
+            Cell::Date("2026-09-06".into()).as_json(),
+            json!("2026-09-06")
+        );
         for cell in [
             Cell::Bytea(vec![0, 1, 2]),
             Cell::Uuid([0u8; 16]),

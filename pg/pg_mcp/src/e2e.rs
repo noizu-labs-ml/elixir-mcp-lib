@@ -871,10 +871,8 @@ mod e2e_test {
         .unwrap();
         assert_eq!(returned.as_deref(), Some("true"));
         // call_tool_text under `return`: the text content, still not an error.
-        let text: Option<String> = Spi::get_one(
-            "SELECT mcp.call_tool_text('e2_api3', 'kaboom', '{}', 'return')",
-        )
-        .unwrap();
+        let text: Option<String> =
+            Spi::get_one("SELECT mcp.call_tool_text('e2_api3', 'kaboom', '{}', 'return')").unwrap();
         assert_eq!(text.as_deref(), Some("the fuse is blown"));
         assert!(stub.hits("tools/call") >= 3);
     }
@@ -889,7 +887,10 @@ mod e2e_test {
         // dies in flight.
         let replies = map(vec![
             ("initialize", init_reply("api-drop")),
-            (TOOLS_LIST, Reply::Result(json!({"tools": [{"name": "echo"}]}))),
+            (
+                TOOLS_LIST,
+                Reply::Result(json!({"tools": [{"name": "echo"}]})),
+            ),
             ("tools/call", Reply::Disconnect),
         ]);
         let stub = StubServer::start(replies, false);
@@ -911,8 +912,15 @@ mod e2e_test {
         expect_sqlstate("SELECT mcp.call_tool('e2_api4', 'echo')", "08006", None);
         let fresh: Option<i32> =
             Spi::get_one("SELECT mcp.session_initialize_count('e2_api4')").unwrap();
-        assert_eq!(fresh, None, "the retried session failed too and was dropped");
-        assert!(stub.hits("initialize") >= 2, "re-opened: {}", stub.hits("initialize"));
+        assert_eq!(
+            fresh, None,
+            "the retried session failed too and was dropped"
+        );
+        assert!(
+            stub.hits("initialize") >= 2,
+            "re-opened: {}",
+            stub.hits("initialize")
+        );
 
         // Contrast: a JSON-RPC error is a *successful* exchange at the
         // transport level — `on_error` covers only `isError` results, so a
@@ -920,8 +928,14 @@ mod e2e_test {
         // it: one initialize serves N failed calls (FR-6.4).
         let error_replies = map(vec![
             ("initialize", init_reply("api-keep")),
-            (TOOLS_LIST, Reply::Result(json!({"tools": [{"name": "echo"}]}))),
-            ("tools/call", Reply::Error(-32000, "tool exploded".to_string())),
+            (
+                TOOLS_LIST,
+                Reply::Result(json!({"tools": [{"name": "echo"}]})),
+            ),
+            (
+                "tools/call",
+                Reply::Error(-32000, "tool exploded".to_string()),
+            ),
         ]);
         let keep = StubServer::start(error_replies, false);
         Spi::run(&format!(

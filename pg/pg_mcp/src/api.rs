@@ -133,7 +133,12 @@ fn generate_per_tool(
     // main target schema must already exist (ordinary CREATE permission
     // applies either way).
     if options.per_upstream_schema {
-        for target in plan.tools.iter().map(|t| t.schema.as_str()).collect::<std::collections::HashSet<_>>() {
+        for target in plan
+            .tools
+            .iter()
+            .map(|t| t.schema.as_str())
+            .collect::<std::collections::HashSet<_>>()
+        {
             if target != schema {
                 if let Err(e) = Spi::run(&format!(
                     "CREATE SCHEMA IF NOT EXISTS {}",
@@ -185,10 +190,7 @@ fn owned_rows(tool: &codegen::PlannedTool) -> Vec<(&'static str, String)> {
         codegen::registry::KIND_TABLE,
         codegen::table::table_name(tool),
     )];
-    rows.push((
-        codegen::registry::KIND_FUNCTION,
-        tool.sql_name.clone(),
-    ));
+    rows.push((codegen::registry::KIND_FUNCTION, tool.sql_name.clone()));
     if codegen::view::create_view(tool).is_some() {
         rows.push((
             codegen::registry::KIND_VIEW,
@@ -410,8 +412,7 @@ mod mcp {
         }
 
         let (generated, skipped, _) = generate_per_tool(server, schema, &options);
-        let skipped_tools: Vec<Option<String>> =
-            skipped.iter().map(|s| Some(s.clone())).collect();
+        let skipped_tools: Vec<Option<String>> = skipped.iter().map(|s| Some(s.clone())).collect();
         TableIterator::once((generated as i32, skipped.len() as i32, skipped_tools))
     }
 
