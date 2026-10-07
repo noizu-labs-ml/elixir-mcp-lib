@@ -427,6 +427,14 @@ defmodule Noizu.MCP.Toolset.PersistedLayersTest do
       assert "echo" in Enum.map(entries, & &1.definition.name)
 
       assert_receive {:persistence_error_telemetry, _metadata}, 1_000
+
+      # The poison row outlives this test otherwise: nothing removes it until
+      # the next Memory.reset()-owning setup, and this suite is async: false —
+      # whichever suite lands next in the shuffle (e.g. LayeringTest) composes
+      # against the shared table, sees the undecodable row, and drops its whole
+      # persisted layer (CI: AC-11.13 "operator-overridden-description" lost
+      # to the federated definition on shard 3). Scrub it before returning.
+      :ets.delete(table, {"toolset_grants", "corrupt"})
     end
 
     test "the Disabled provider is a POLICY, not an outage — silent skip, no telemetry" do
