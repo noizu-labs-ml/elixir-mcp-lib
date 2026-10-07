@@ -336,4 +336,55 @@ defmodule Noizu.MCP.ClientTest do
       assert text =~ "capability_not_supported"
     end
   end
+
+  describe "close" do
+    test "terminates the transport and the task supervisor after uncached use" do
+      client = start_client()
+
+      # Uncached traffic through a live transport — the exact path that used
+      # to leak both processes on every close.
+      assert {:ok, _tools} = Client.list_tools(client)
+
+      state = :sys.get_state(client)
+      {_transport_mod, transport} = state.transport
+      task_sup = state.task_sup
+      assert Process.alive?(transport)
+      assert Process.alive?(task_sup)
+
+      assert :ok = Client.close(client)
+
+      # close/1 returns once terminate/2 has run, but allow a short window
+      # for monitor delivery before asserting the pids are gone.
+      transport_ref = Process.monitor(transport)
+      sup_ref = Process.monitor(task_sup)
+
+      assert_receive {:DOWN, ^transport_ref, _, _, _}, 500
+      assert_receive {:DOWN, ^sup_ref, _, _, _}, 500
+
+      refute Process.alive?(transport)
+      refute Process.alive?(task_sup)
+    end
+
+    test "close on an already-closed client is a no-op" do
+      client = start_client()
+
+      assert :ok = Client.close(client)
+      assert :ok = Client.close(client)
+    end
+
+    test "close on a client failed by transport-down is a no-op" do
+      client = start_client()
+
+      # Kill the transport; the client stops itself via its EXIT handler.
+      {_transport_mod, transport} = :sys.get_state(client).transport
+      transport_ref = Process.monitor(transport)
+      Process.exit(transport, :kill)
+      assert_receive {:DOWN, ^transport_ref, _, _, _}, 500
+
+      client_ref = Process.monitor(client)
+      assert_receive {:DOWN, ^client_ref, _, _, _}, 500
+
+      assert :ok = Client.close(client)
+    end
+  end
 end

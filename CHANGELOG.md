@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-10-08
+
+Patch release: `Client.close/1` process-leak fix.
+
+### Fixed
+
+- **`Client.close/1` leaked the transport on every close.** The client stops
+  with `:normal`, and a `:normal` exit signal is ignored by the linked,
+  non-trapping transport process — so the transport (and any processes it
+  owned) kept running after every close, including successful uncached
+  refreshes; consumers accumulated processes over time. `Client.terminate/2`
+  now deterministically takes down the transport (system stop with
+  `:shutdown` reason, so the transport's own `terminate/2` still runs and
+  transport-linked stragglers exit with it) and the client's task supervisor.
+  `close/1` on an already-closed (or failed) client is now a no-op instead of
+  exiting `:noproc`.
+
 ## [0.5.2] — 2026-10-07
 
 Patch release: transport hardening from the e2e-fix follow-up (#43, #45).
