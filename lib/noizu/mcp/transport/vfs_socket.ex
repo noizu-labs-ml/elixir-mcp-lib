@@ -57,6 +57,7 @@ defmodule Noizu.MCP.Transport.VFSSocket do
 
   # ── Supervisor child ──────────────────────────────────────────────────────
 
+  # <REMOVED UUID HERE> start_link :: auto-generated pointer for public function start_link
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
@@ -64,6 +65,7 @@ defmodule Noizu.MCP.Transport.VFSSocket do
   # ── Process ───────────────────────────────────────────────────────────────
 
   @impl GenServer
+  # <REMOVED UUID HERE> init :: auto-generated pointer for public function init
   def init(opts) do
     Process.flag(:trap_exit, true)
     server = Keyword.fetch!(opts, :server)

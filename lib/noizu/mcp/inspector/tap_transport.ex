@@ -14,19 +14,23 @@ defmodule Noizu.MCP.Inspector.TapTransport do
   @behaviour Noizu.MCP.Transport.Client
 
   @impl Noizu.MCP.Transport.Client
+  # <REMOVED UUID HERE> start_link :: auto-generated pointer for public function start_link
   def start_link(owner, opts) do
     GenServer.start_link(__MODULE__, {owner, opts})
   end
 
   @impl Noizu.MCP.Transport.Client
+  # <REMOVED UUID HERE> send_message :: auto-generated pointer for public function send_message
   def send_message(transport, iodata, routing) do
     GenServer.call(transport, {:send, IO.iodata_to_binary(iodata), routing})
   end
 
   @impl Noizu.MCP.Transport.Client
+  # <REMOVED UUID HERE> close :: auto-generated pointer for public function close
   def close(transport), do: GenServer.stop(transport, :normal)
 
   @impl GenServer
+  # <REMOVED UUID HERE> init :: auto-generated pointer for public function init
   def init({owner, opts}) do
     {inner_module, inner_opts} = Keyword.fetch!(opts, :inner)
     tap = Keyword.fetch!(opts, :tap)
@@ -41,6 +45,7 @@ defmodule Noizu.MCP.Inspector.TapTransport do
   end
 
   @impl GenServer
+  # <REMOVED UUID HERE> handle_call :: auto-generated pointer for public function handle_call
   def handle_call({:send, binary, routing}, _from, state) do
     send(state.tap, {:inspector_frame, :tx, binary})
     {module, inner} = state.inner
@@ -48,6 +53,7 @@ defmodule Noizu.MCP.Inspector.TapTransport do
   end
 
   @impl GenServer
+  # <REMOVED UUID HERE> handle_info :: auto-generated pointer for public function handle_info
   def handle_info({:mcp_transport, _inner, event}, state) do
     with {:message, binary, _meta} <- event do
       send(state.tap, {:inspector_frame, :rx, binary})
@@ -60,6 +66,7 @@ defmodule Noizu.MCP.Inspector.TapTransport do
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl GenServer
+  # <REMOVED UUID HERE> terminate :: auto-generated pointer for public function terminate
   def terminate(_reason, %{inner: {module, inner}}) do
     if Process.alive?(inner), do: module.close(inner)
     :ok

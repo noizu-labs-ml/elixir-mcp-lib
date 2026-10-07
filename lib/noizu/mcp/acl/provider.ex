@@ -56,6 +56,7 @@ defmodule Noizu.MCP.ACL.Provider do
   telemetry. Raises `ArgumentError` when the resource kind is outside the
   provider's `supported_kinds/0` — fail-closed config error (§4.7).
   """
+  # <REMOVED UUID HERE> check :: Dispatch one check against `provider`, normalizing the verdict.
   def check(provider, subject, %Resource{} = resource, action, ctx, opts) do
     ensure_kind!(provider, resource)
     started = System.monotonic_time()
@@ -82,6 +83,7 @@ defmodule Noizu.MCP.ACL.Provider do
   ids deny downstream). Extra ids are stale policy, not an error — ignored,
   with a `[:noizu_mcp, :acl, :stale_verdict]` debug event (PRD-2 Q1).
   """
+  # <REMOVED UUID HERE> check_all :: Batch entry behind `filter_entries/4`.
   def check_all(provider, subject, resources, action, ctx, opts) do
     verdicts = provider_verdicts(provider, subject, resources, action, ctx, opts)
 
@@ -122,6 +124,7 @@ defmodule Noizu.MCP.ACL.Provider do
   else `[:tool, :toolset, :prompt, :resource]` (the §4.6 default — kind-gaps
   surface when prompts/resources gate through ACL in PRD-4).
   """
+  # <REMOVED UUID HERE> supported_kinds :: The resource kinds `provider` governs.
   def supported_kinds(provider) do
     case provider.supported_kinds() do
       kinds when is_list(kinds) -> kinds
@@ -137,6 +140,7 @@ defmodule Noizu.MCP.ACL.Provider do
   end
 
   @doc false
+  # <REMOVED UUID HERE> ensure_kind! :: auto-generated pointer for public function ensure_kind!
   def ensure_kind!(provider, %Resource{kind: kind}) do
     ensure_kind!(provider, supported_kinds(provider), kind)
   end
@@ -163,6 +167,7 @@ defmodule Noizu.MCP.ACL.Provider do
   `{provider, opts}` form threads `opts` into every check. Returns just the
   module; `resolve_provider/2` carries the check opts.
   """
+  # <REMOVED UUID HERE> current_provider :: The ACL provider governing this call.
   @spec current_provider(server :: term(), opts :: keyword()) :: module() | nil
   def current_provider(server, opts) do
     case resolve_provider(server, opts) do
@@ -172,6 +177,7 @@ defmodule Noizu.MCP.ACL.Provider do
   end
 
   @doc false
+  # <REMOVED UUID HERE> resolve_provider :: auto-generated pointer for public function resolve_provider
   def resolve_provider(server, opts) when is_list(opts) do
     # §4.3 (PRD-4): the combined `providers:` form WINS over the individual
     # `acl:` key when both carry the key; Application env is read AT CALL TIME
@@ -278,6 +284,7 @@ defmodule Noizu.MCP.ACL.Provider do
   The subject is the caller ctx's `auth` principal (`nil` = anonymous — there
   is no system fallback).
   """
+  # <REMOVED UUID HERE> filter_entries :: THE enforcement chokepoint (PRD-2 §4.6).
   @spec filter_entries(
           [Noizu.MCP.Toolset.Entry.t()],
           server :: term(),

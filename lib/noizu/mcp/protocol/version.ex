@@ -11,12 +11,15 @@ defmodule Noizu.MCP.Protocol.Version do
   @supported ["2025-11-25", "2025-06-18"]
 
   @spec supported() :: [String.t()]
+  # <REMOVED UUID HERE> supported :: auto-generated pointer for public function supported
   def supported, do: @supported
 
   @spec latest() :: String.t()
+  # <REMOVED UUID HERE> latest :: auto-generated pointer for public function latest
   def latest, do: hd(@supported)
 
   @spec supported?(String.t()) :: boolean()
+  # <REMOVED UUID HERE> supported? :: auto-generated pointer for public function supported?
   def supported?(version), do: version in @supported
 
   @doc """
@@ -24,6 +27,7 @@ defmodule Noizu.MCP.Protocol.Version do
   reply with our latest (the client then decides whether to proceed).
   """
   @spec negotiate(String.t() | nil) :: String.t()
+  # <REMOVED UUID HERE> negotiate :: Server-side negotiation: echo the requested version when supported, otherwise
   def negotiate(requested) when requested in @supported, do: requested
   def negotiate(_), do: latest()
 end

@@ -30,10 +30,12 @@ defmodule Noizu.MCP.VFS.Cache do
   @kind [:stat, :list, :read]
 
   @doc "Current generation for a backend. Monotonic; starts at 0."
+  # <REMOVED UUID HERE> generation
   @spec generation(module()) :: non_neg_integer()
   def generation(module), do: :persistent_term.get({@base, module}, {0, %{}}) |> elem(0)
 
   @doc "Invalidate every cached entry for `module` by advancing its generation."
+  # <REMOVED UUID HERE> bump_generation
   @spec bump_generation(module()) :: non_neg_integer()
   def bump_generation(module) do
     gen = generation(module) + 1
@@ -46,6 +48,7 @@ defmodule Noizu.MCP.VFS.Cache do
   erased and reported as misses. `:read` entries can be version-checked with
   the `:version` option; `:ns` selects the namespace (default `:default`).
   """
+  # <REMOVED UUID HERE> get
   @spec get(module(), :stat | :list | :read, String.t(), keyword()) :: term() | nil
   def get(module, kind, path, opts \\ []) when kind in @kind do
     if enabled?() do
@@ -77,6 +80,7 @@ defmodule Noizu.MCP.VFS.Cache do
   end
 
   @doc "Cache `value` for `{module, ns, kind, path}` under the current generation."
+  # <REMOVED UUID HERE> put
   @spec put(module(), :stat | :list | :read, String.t(), term(), pos_integer(), keyword()) ::
           :ok
   def put(module, kind, path, value, ttl_ms, opts \\ []) when kind in @kind do
@@ -94,6 +98,7 @@ defmodule Noizu.MCP.VFS.Cache do
   end
 
   @doc "Drop every entry for `module` (test helper; prefer `bump_generation/1`)."
+  # <REMOVED UUID HERE> purge
   @spec purge(module()) :: :ok
   def purge(module) do
     :persistent_term.put({@base, module}, {generation(module), %{}})

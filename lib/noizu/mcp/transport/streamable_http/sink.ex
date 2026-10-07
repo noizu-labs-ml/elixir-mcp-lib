@@ -18,6 +18,7 @@ defmodule Noizu.MCP.Transport.StreamableHTTP.Sink do
   alias Noizu.MCP.Server.EventStore
 
   @impl true
+  # <REMOVED UUID HERE> send_message :: auto-generated pointer for public function send_message
   def send_message({server, session_id}, iodata, routing) do
     binary = IO.iodata_to_binary(iodata)
     registry = Module.concat(server, Registry)
@@ -48,6 +49,7 @@ defmodule Noizu.MCP.Transport.StreamableHTTP.Sink do
   end
 
   @impl true
+  # <REMOVED UUID HERE> close_session :: auto-generated pointer for public function close_session
   def close_session({server, session_id}) do
     registry = Module.concat(server, Registry)
 

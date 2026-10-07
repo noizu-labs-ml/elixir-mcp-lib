@@ -56,10 +56,12 @@ defmodule Noizu.MCP.Server do
         use Noizu.MCP.Server, name: "raw", version: "1.0.0"
 
         @impl true
+        # <REMOVED UUID HERE> handle_list_tools :: auto-generated pointer for public function handle_list_tools
         def handle_list_tools(_cursor, _ctx),
           do: {:ok, [%Noizu.MCP.Types.Tool{name: "echo"}], nil}
 
         @impl true
+        # <REMOVED UUID HERE> handle_call_tool :: auto-generated pointer for public function handle_call_tool
         def handle_call_tool("echo", args, _ctx),
           do: {:ok, inspect(args)}
       end
@@ -171,6 +173,7 @@ defmodule Noizu.MCP.Server do
                       handle_sql_modify: 3,
                       handle_sync: 3
 
+  # <REMOVED UUID HERE> __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     validate_acl_opt!(opts, __CALLER__)
     validate_persistence_opt!(opts, __CALLER__)
@@ -206,6 +209,7 @@ defmodule Noizu.MCP.Server do
       @__mcp_server_opts__ opts
       @before_compile Noizu.MCP.Server
 
+      # <REMOVED UUID HERE> child_spec :: auto-generated pointer for public function child_spec
       def child_spec(opts) do
         %{
           id: __MODULE__,
@@ -214,11 +218,13 @@ defmodule Noizu.MCP.Server do
         }
       end
 
+      # <REMOVED UUID HERE> start_link :: auto-generated pointer for public function start_link
       def start_link(opts \\ []) do
         Noizu.MCP.Server.Supervisor.start_link(__MODULE__, opts)
       end
 
       @doc "Notify all connected clients that a component list changed."
+      # <REMOVED UUID HERE> notify_changed :: Notify all connected clients that a component list changed.
       def notify_changed(kind) when kind in [:tools, :resources, :prompts] do
         for session <- Noizu.MCP.Server.Supervisor.sessions(__MODULE__) do
           Noizu.MCP.Server.Session.notify_changed(session, kind)
@@ -228,6 +234,7 @@ defmodule Noizu.MCP.Server do
       end
 
       @doc "Notify sessions subscribed to `uri` that the resource changed."
+      # <REMOVED UUID HERE> notify_resource_updated :: Notify sessions subscribed to `uri` that the resource changed.
       def notify_resource_updated(uri) when is_binary(uri) do
         for session <- Noizu.MCP.Server.Supervisor.sessions(__MODULE__) do
           Noizu.MCP.Server.Session.notify_resource_updated(session, uri)
@@ -239,6 +246,7 @@ defmodule Noizu.MCP.Server do
   end
 
   @doc "Register a tool module (see `Noizu.MCP.Server.Tool`). Options: `:name`, `:description` overrides."
+  # <REMOVED UUID HERE> tool :: Register a tool module (see `Noizu.MCP.Server.Tool`).
   defmacro tool(module, opts \\ []) do
     quote do
       @__mcp_tools__ {unquote(module), unquote(opts)}
@@ -246,6 +254,7 @@ defmodule Noizu.MCP.Server do
   end
 
   @doc "Register a resource module (see `Noizu.MCP.Server.Resource`)."
+  # <REMOVED UUID HERE> resource :: Register a resource module (see `Noizu.MCP.Server.Resource`).
   defmacro resource(module, opts \\ []) do
     quote do
       @__mcp_resources__ {unquote(module), unquote(opts)}
@@ -253,6 +262,7 @@ defmodule Noizu.MCP.Server do
   end
 
   @doc "Register a resource template module (see `Noizu.MCP.Server.ResourceTemplate`)."
+  # <REMOVED UUID HERE> resource_template :: Register a resource template module (see `Noizu.MCP.Server.ResourceTemplate`).
   defmacro resource_template(module, opts \\ []) do
     quote do
       @__mcp_resource_templates__ {unquote(module), unquote(opts)}
@@ -260,6 +270,7 @@ defmodule Noizu.MCP.Server do
   end
 
   @doc "Register a prompt module (see `Noizu.MCP.Server.Prompt`)."
+  # <REMOVED UUID HERE> prompt :: Register a prompt module (see `Noizu.MCP.Server.Prompt`).
   defmacro prompt(module, opts \\ []) do
     quote do
       @__mcp_prompts__ {unquote(module), unquote(opts)}
@@ -267,6 +278,7 @@ defmodule Noizu.MCP.Server do
   end
 
   @doc "Register a VFS backend module (see `Noizu.MCP.VFS`). The first registration wins."
+  # <REMOVED UUID HERE> vfs :: Register a VFS backend module (see `Noizu.MCP.VFS`).
   defmacro vfs(module, opts \\ []) do
     quote do
       @__mcp_vfs__ {unquote(module), unquote(opts)}
@@ -287,6 +299,7 @@ defmodule Noizu.MCP.Server do
   All prefixes are optional — declare only what you expose; at least one of
   `:resources`/`:prompts` is required.
   """
+  # <REMOVED UUID HERE> content :: Register a CRUD-managed content mount (VFS-backed resources & prompts).
   defmacro content(spec, bridge_opts \\ []) do
     quote do
       # `content {Backend, backend_opts}, ...` (or a bare backend module) —
@@ -313,6 +326,7 @@ defmodule Noizu.MCP.Server do
   relation from `sql/schema` while leaving it scannable by exact name, mirroring
   the tool `hidden` semantics.
   """
+  # <REMOVED UUID HERE> dataset :: Register a dataset module (see `Noizu.MCP.Server.Dataset`).
   defmacro dataset(module, opts \\ []) do
     quote do
       @__mcp_datasets__ {unquote(module), unquote(opts)}
@@ -571,6 +585,7 @@ defmodule Noizu.MCP.Server do
     end
   end
 
+  # <REMOVED UUID HERE> __before_compile__ :: auto-generated pointer for public function __before_compile__
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :__mcp_server_opts__)
     tools = env.module |> Module.get_attribute(:__mcp_tools__) |> Enum.reverse()
@@ -654,6 +669,7 @@ defmodule Noizu.MCP.Server do
           if content_resources? do
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_list_resources :: static registry + content mounts
               def handle_list_resources(cursor, ctx) do
                 Noizu.MCP.Server.Features.DynamicContent.list_resources(
                   __MODULE__,
@@ -667,6 +683,7 @@ defmodule Noizu.MCP.Server do
           else
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_list_resources :: auto-generated pointer for public function handle_list_resources
               def handle_list_resources(cursor, ctx) do
                 Noizu.MCP.Server.Features.Resources.list_registered(
                   __mcp__(:resources),
@@ -681,6 +698,7 @@ defmodule Noizu.MCP.Server do
         unless defines?.({:handle_list_resource_templates, 2}) or templates == [] do
           quote do
             @impl Noizu.MCP.Server
+            # <REMOVED UUID HERE> handle_list_resource_templates :: auto-generated pointer for public function handle_list_resource_templates
             def handle_list_resource_templates(cursor, _ctx) do
               Noizu.MCP.Server.Features.Resources.list_registered_templates(
                 __mcp__(:resource_templates),
@@ -694,6 +712,7 @@ defmodule Noizu.MCP.Server do
           if content_resources? do
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_read_resource :: content-scheme URIs read off the mount
               def handle_read_resource(uri, ctx) do
                 Noizu.MCP.Server.Features.DynamicContent.read_resource(
                   __MODULE__,
@@ -707,6 +726,7 @@ defmodule Noizu.MCP.Server do
           else
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_read_resource :: auto-generated pointer for public function handle_read_resource
               def handle_read_resource(uri, ctx) do
                 Noizu.MCP.Server.Features.Resources.dispatch_read(
                   __mcp__(:resources),
@@ -723,6 +743,7 @@ defmodule Noizu.MCP.Server do
           if content_resources? do
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_subscribe :: content-mount URIs subscribe, else the static registry
               def handle_subscribe(uri, ctx) do
                 case Noizu.MCP.Server.Features.DynamicContent.check_subscribe(__MODULE__, uri, ctx) do
                   :pass ->
@@ -740,6 +761,7 @@ defmodule Noizu.MCP.Server do
           else
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_subscribe :: auto-generated pointer for public function handle_subscribe
               def handle_subscribe(uri, _ctx) do
                 Noizu.MCP.Server.Features.Resources.check_subscribe(
                   __mcp__(:resources),
@@ -755,6 +777,7 @@ defmodule Noizu.MCP.Server do
           if content_prompts? do
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_list_prompts :: static registry + content mounts
               def handle_list_prompts(cursor, ctx) do
                 Noizu.MCP.Server.Features.DynamicContent.list_prompts(
                   __MODULE__,
@@ -767,6 +790,7 @@ defmodule Noizu.MCP.Server do
           else
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_list_prompts :: auto-generated pointer for public function handle_list_prompts
               def handle_list_prompts(cursor, _ctx) do
                 Noizu.MCP.Server.Features.Prompts.list_registered(__mcp__(:prompts), cursor)
               end
@@ -777,6 +801,7 @@ defmodule Noizu.MCP.Server do
           if content_prompts? do
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_get_prompt :: static dispatch, then content-mount JSON prompts
               def handle_get_prompt(name, args, ctx) do
                 Noizu.MCP.Server.Features.DynamicContent.get_prompt(
                   __MODULE__,
@@ -790,6 +815,7 @@ defmodule Noizu.MCP.Server do
           else
             quote do
               @impl Noizu.MCP.Server
+              # <REMOVED UUID HERE> handle_get_prompt :: auto-generated pointer for public function handle_get_prompt
               def handle_get_prompt(name, args, ctx) do
                 Noizu.MCP.Server.Features.Prompts.dispatch_get(__mcp__(:prompts), name, args, ctx)
               end
@@ -800,6 +826,7 @@ defmodule Noizu.MCP.Server do
         unless defines?.({:handle_sql_schema, 2}) or not sql? do
           quote do
             @impl Noizu.MCP.Server
+            # <REMOVED UUID HERE> handle_sql_schema :: auto-generated pointer for public function handle_sql_schema
             def handle_sql_schema(params, ctx) do
               Noizu.MCP.Server.Features.SQL.default_schema(__MODULE__, params, ctx)
             end
@@ -808,6 +835,7 @@ defmodule Noizu.MCP.Server do
         unless defines?.({:handle_sql_scan, 3}) or not sql? do
           quote do
             @impl Noizu.MCP.Server
+            # <REMOVED UUID HERE> handle_sql_scan :: auto-generated pointer for public function handle_sql_scan
             def handle_sql_scan(relation, opts, ctx) do
               Noizu.MCP.Server.Features.SQL.default_scan(__MODULE__, relation, opts, ctx)
             end
@@ -816,6 +844,7 @@ defmodule Noizu.MCP.Server do
         unless defines?.({:handle_sql_modify, 3}) or not sql? do
           quote do
             @impl Noizu.MCP.Server
+            # <REMOVED UUID HERE> handle_sql_modify :: auto-generated pointer for public function handle_sql_modify
             def handle_sql_modify(relation, params, ctx) do
               Noizu.MCP.Server.Features.SQL.default_modify(__MODULE__, relation, params, ctx)
             end
@@ -825,6 +854,7 @@ defmodule Noizu.MCP.Server do
         unless defines?.({:handle_complete, 3}) or (prompts == [] and templates == []) do
           quote do
             @impl Noizu.MCP.Server
+            # <REMOVED UUID HERE> handle_complete :: auto-generated pointer for public function handle_complete
             def handle_complete(ref, argument, ctx) do
               Noizu.MCP.Server.Features.Completion.dispatch(
                 __mcp__(:prompts),
@@ -910,6 +940,7 @@ defmodule Noizu.MCP.Server do
 
     quote do
       @impl Noizu.MCP.Server
+      # <REMOVED UUID HERE> server_info :: auto-generated pointer for public function server_info
       def server_info do
         %Noizu.MCP.Types.Implementation{
           name: unquote(name),
@@ -922,6 +953,7 @@ defmodule Noizu.MCP.Server do
       end
 
       @impl Noizu.MCP.Server
+      # <REMOVED UUID HERE> __mcp__ :: auto-generated pointer for public function __mcp__
       def __mcp__(:tools), do: unquote(Macro.escape(tools))
       def __mcp__(:resources), do: unquote(Macro.escape(resources))
       def __mcp__(:resource_templates), do: unquote(Macro.escape(templates))
@@ -962,6 +994,7 @@ defmodule Noizu.MCP.Server do
   @doc false
   # Runtime capability derivation: component modules are compiled by the time
   # a server starts, so subscribability can be checked here, not at macro time.
+  # <REMOVED UUID HERE> build_capabilities :: auto-generated pointer for public function build_capabilities
   def build_capabilities(server, flags) do
     subscribable? =
       flags.user_subscribe? or Map.get(flags, :content_subscribe?, false) or

@@ -54,6 +54,7 @@ defmodule Noizu.MCP.Migrations do
   @callback change_sets() :: [Noizu.MCP.Migrations.ChangeSet.t()]
 
   @doc "The shipped lib-owned change sets, in apply order."
+  # <REMOVED UUID HERE> change_sets :: The shipped lib-owned change sets, in apply order.
   @spec change_sets() :: [Noizu.MCP.Migrations.ChangeSet.t()]
   def change_sets, do: [Noizu.MCP.Migrations.V1Toolsets.change_set()]
 end

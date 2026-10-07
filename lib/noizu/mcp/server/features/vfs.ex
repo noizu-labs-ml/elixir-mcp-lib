@@ -48,6 +48,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # ── backend-level (cache-aware) ───────────────────────────────────────────
 
   @doc "Stat `path` against `backend`, through the cache."
+  # <REMOVED UUID HERE> stat
   @spec stat(module(), String.t(), Ctx.t()) ::
           {:ok, VFS.t()} | {:error, term()}
   def stat(backend, path, ctx) when is_binary(path) do
@@ -78,6 +79,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "List `path`'s children against `backend`, through the cache."
+  # <REMOVED UUID HERE> list
   @spec list(module(), String.t(), String.t() | nil, Ctx.t()) ::
           {:ok, [map()], String.t() | nil} | {:error, term()}
   def list(backend, path, cursor, ctx) when is_binary(path) do
@@ -107,6 +109,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   defp first_root_page(_path, _cursor, entries, _backend, _ctx), do: entries
 
   @doc "Read `path` against `backend`, through the cache."
+  # <REMOVED UUID HERE> read
   @spec read(module(), String.t(), Ctx.t(), non_neg_integer() | nil) ::
           {:ok, binary(), non_neg_integer()} | {:error, term()}
   def read(backend, path, ctx, expected_version \\ nil) when is_binary(path) do
@@ -145,6 +148,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Overwrite `path` via `backend`; bumps the generation on success."
+  # <REMOVED UUID HERE> write
   @spec write(module(), String.t(), binary(), Ctx.t()) :: {:ok, VFS.t()} | {:error, term()}
   def write(backend, path, data, ctx) when is_binary(path) and is_binary(data) do
     if Readme.reserved?(backend, path, ctx),
@@ -166,6 +170,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Create `path` via `backend`; bumps the generation on success."
+  # <REMOVED UUID HERE> create
   @spec create(module(), String.t(), binary() | :dir, Ctx.t()) ::
           {:ok, VFS.t()} | {:error, term()}
   def create(backend, path, data, ctx) when is_binary(path) do
@@ -188,6 +193,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Remove `path` via `backend`; bumps the generation on success."
+  # <REMOVED UUID HERE> remove
   @spec remove(module(), String.t(), Ctx.t()) :: :ok | {:error, term()}
   def remove(backend, path, ctx) when is_binary(path) do
     if Readme.reserved?(backend, path, ctx),
@@ -208,6 +214,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Search under `root` via `backend` (uncached)."
+  # <REMOVED UUID HERE> search
   @spec search(module(), String.t(), String.t(), Ctx.t()) ::
           {:ok, [map()], String.t() | nil} | {:error, term()}
   def search(backend, root, query, ctx) when is_binary(root) and is_binary(query) do
@@ -218,6 +225,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Extended attributes for `path` via `backend` (uncached)."
+  # <REMOVED UUID HERE> xattr
   @spec xattr(module(), String.t(), Ctx.t()) :: {:ok, map()} | {:error, term()}
   def xattr(backend, path, ctx) when is_binary(path) do
     case backend.xattr(path, ctx) do
@@ -239,6 +247,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # ── server-level (params → wire maps) ─────────────────────────────────────
 
   @doc "vfs_stat operation."
+  # <REMOVED UUID HERE> vfs_stat
   def vfs_stat(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -248,6 +257,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_list operation."
+  # <REMOVED UUID HERE> vfs_list
   def vfs_list(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -263,6 +273,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_read operation."
+  # <REMOVED UUID HERE> vfs_read
   def vfs_read(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -277,6 +288,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_write operation."
+  # <REMOVED UUID HERE> vfs_write
   def vfs_write(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -296,6 +308,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_create operation."
+  # <REMOVED UUID HERE> vfs_create
   def vfs_create(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -319,6 +332,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_remove operation."
+  # <REMOVED UUID HERE> vfs_remove
   def vfs_remove(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -341,6 +355,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_search operation."
+  # <REMOVED UUID HERE> vfs_search
   def vfs_search(server, params, ctx) do
     params = params || %{}
 
@@ -377,6 +392,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_xattr operation."
+  # <REMOVED UUID HERE> vfs_xattr
   def vfs_xattr(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -443,6 +459,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
     do: {:error, Error.internal("vfs error: #{inspect(other)}")}
 
   @doc "Map a VFS errno atom to a `Noizu.MCP.Error` (M2 wire mapping)."
+  # <REMOVED UUID HERE> errno_error
   def errno_error(:enoent), do: Error.resource_not_found("vfs path")
 
   def errno_error(errno) do

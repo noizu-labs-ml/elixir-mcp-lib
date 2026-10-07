@@ -17,6 +17,7 @@ defmodule Noizu.MCP.Types.Resource do
   defstruct [:uri, :name, :title, :description, :mime_type, :size, :annotations, :icons, :meta]
 
   @spec to_map(t()) :: map()
+  # <REMOVED UUID HERE> to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = resource) do
     %{"uri" => resource.uri, "name" => resource.name || resource.uri}
     |> put_unless_nil("title", resource.title)
@@ -29,6 +30,7 @@ defmodule Noizu.MCP.Types.Resource do
   end
 
   @spec from_map(map()) :: t()
+  # <REMOVED UUID HERE> from_map :: auto-generated pointer for public function from_map
   def from_map(%{"uri" => uri} = map) do
     %__MODULE__{
       uri: uri,

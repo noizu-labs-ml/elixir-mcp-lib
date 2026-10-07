@@ -65,6 +65,7 @@ defmodule Noizu.MCP.Toolset.Context do
   enabled and the toolset is mutable. Direct call + UndefinedFunctionError
   normalization — no exported-function probing (house style, D4).
   """
+  # <REMOVED UUID HERE> layers :: The persisted/host layers for this request (PRD seam).
   @spec layers(toolset :: term(), ctx :: term(), opts :: keyword()) :: [Layer.t()]
   def layers(%{__struct__: module} = toolset, ctx, opts),
     do: toolset_layers(module, toolset, ctx, opts) ++ persisted(toolset, ctx, opts).layers
@@ -80,6 +81,7 @@ defmodule Noizu.MCP.Toolset.Context do
   pipeline's concern, not the seam's) — plus the persisted layers. Layers
   arrive unordered; weights decide.
   """
+  # <REMOVED UUID HERE> layers :: The full default seam for one request (§4.2).
   @spec layers(toolset :: term(), entries :: list(), ctx :: term(), opts :: keyword()) ::
           [Layer.t()]
   def layers(toolset, entries, ctx, opts) do
@@ -103,6 +105,7 @@ defmodule Noizu.MCP.Toolset.Context do
   `[:noizu_mcp, :acl, :error]` telemetry PRD-2 established. A
   `supported_kinds` violation raises through — configuration error (§4.7).
   """
+  # <REMOVED UUID HERE> acl_layer :: ACL as a weight-300 override layer (PRD-2 re-home, §4.2).
   @spec acl_layer(
           entries :: list(),
           provider :: module(),
@@ -159,6 +162,7 @@ defmodule Noizu.MCP.Toolset.Context do
   callable: false`; a pre-existing non-nil denial reason is preserved, else
   the reason is `{:acl, provider}`. `nil` layer (no provider) is identity.
   """
+  # <REMOVED UUID HERE> project_acl :: Project an `acl_layer/4` result onto entries (PRD-2 `filter_entries` semantics, byte-identical).
   @spec project_acl(entries :: list(), layer :: Layer.t() | nil) :: list()
   def project_acl(entries, nil), do: entries
 
@@ -210,6 +214,7 @@ defmodule Noizu.MCP.Toolset.Context do
   Disabled provider is NOT an outage — a policy of no persisted layers,
   skipped silently.
   """
+  # <REMOVED UUID HERE> persisted :: The persisted state for one request (§4.5, PRD-4).
   @spec persisted(toolset :: term(), ctx :: term(), opts :: keyword()) :: %{
           layers: [Layer.t()],
           versions: map(),

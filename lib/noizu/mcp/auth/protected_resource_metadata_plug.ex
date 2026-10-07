@@ -53,6 +53,7 @@ if Code.ensure_loaded?(Plug.Conn) do
     @allow_headers "authorization, content-type, mcp-protocol-version"
 
     @impl Plug
+    # <REMOVED UUID HERE> init :: auto-generated pointer for public function init
     def init(opts) do
       %{
         documents: documents(opts),
@@ -62,6 +63,7 @@ if Code.ensure_loaded?(Plug.Conn) do
     end
 
     @impl Plug
+    # <REMOVED UUID HERE> call :: auto-generated pointer for public function call
     def call(%{method: "OPTIONS"} = conn, opts) do
       conn
       |> cors_headers(opts)

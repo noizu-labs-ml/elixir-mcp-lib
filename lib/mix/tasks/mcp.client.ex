@@ -46,6 +46,7 @@ defmodule Mix.Tasks.Mcp.Client do
   ]
 
   @impl Mix.Task
+  # <REMOVED UUID HERE> run :: auto-generated pointer for public function run
   def run(argv) do
     {target, opts} = parse_args!(argv)
     ensure_deps!()
@@ -86,6 +87,7 @@ defmodule Mix.Tasks.Mcp.Client do
   end
 
   @doc false
+  # <REMOVED UUID HERE> parse_args! :: auto-generated pointer for public function parse_args!
   def parse_args!(argv) do
     {opts, positional, invalid} = OptionParser.parse(argv, strict: @switches)
 

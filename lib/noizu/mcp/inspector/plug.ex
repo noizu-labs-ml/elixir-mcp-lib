@@ -20,8 +20,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
     @keepalive 25_000
 
+    # <REMOVED UUID HERE> init :: auto-generated pointer for public function init
     def init(config), do: config
 
+    # <REMOVED UUID HERE> call :: auto-generated pointer for public function call
     def call(conn, config) do
       conn
       |> put_private(:inspector, config)

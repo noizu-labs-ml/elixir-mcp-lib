@@ -41,14 +41,17 @@ defmodule Noizu.MCP.VFS.Readme do
   # ── path + node helpers ───────────────────────────────────────────────────
 
   @doc "The reserved self-documentation path."
+  # <REMOVED UUID HERE> path
   @spec path() :: String.t()
   def path, do: @path
 
   @doc "True when `path` is the reserved self-documentation node."
+  # <REMOVED UUID HERE> path?
   @spec path?(String.t()) :: boolean()
   def path?(path), do: path == @path
 
   @doc "Stat node for the generated document — always `writable: false`."
+  # <REMOVED UUID HERE> node
   @spec node(module(), Ctx.t()) :: VFS.t()
   def node(backend, ctx) do
     %VFS{
@@ -62,6 +65,7 @@ defmodule Noizu.MCP.VFS.Readme do
   end
 
   @doc "List entry for the generated document."
+  # <REMOVED UUID HERE> entry
   @spec entry(module(), Ctx.t()) :: map()
   def entry(backend, ctx) do
     %{
@@ -77,6 +81,7 @@ defmodule Noizu.MCP.VFS.Readme do
   Prepend the generated entry to a root listing unless the backend already
   lists its own `README.md`.
   """
+  # <REMOVED UUID HERE> prepend
   @spec prepend(module(), [map()], Ctx.t()) :: [map()]
   def prepend(backend, entries, ctx) when is_list(entries) do
     if Enum.any?(entries, &(&1[:name] == "README.md")) do
@@ -90,6 +95,7 @@ defmodule Noizu.MCP.VFS.Readme do
   True when `path` may not be written through the dispatcher — the reserved
   path, unless the backend serves a writable node there.
   """
+  # <REMOVED UUID HERE> reserved?
   @spec reserved?(module(), String.t(), Ctx.t()) :: boolean()
   def reserved?(backend, path, ctx) do
     path?(path) and backend_node(backend, ctx) == nil
@@ -109,6 +115,7 @@ defmodule Noizu.MCP.VFS.Readme do
   # ── content ───────────────────────────────────────────────────────────────
 
   @doc "The README content for `backend`'s mount: the `vfs_readme` override when set, else generated."
+  # <REMOVED UUID HERE> content
   @spec content(module(), Ctx.t()) :: String.t()
   def content(backend, ctx) do
     case override(backend, ctx) do
@@ -133,6 +140,7 @@ defmodule Noizu.MCP.VFS.Readme do
   end
 
   @doc "The generated document."
+  # <REMOVED UUID HERE> render
   @spec render(module()) :: String.t()
   def render(backend) do
     server = composing_server(backend)

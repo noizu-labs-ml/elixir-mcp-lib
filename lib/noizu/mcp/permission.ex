@@ -123,6 +123,7 @@ defmodule Noizu.MCP.Permission do
   alias Noizu.MCP.Toolset.Override
 
   @doc false
+  # <REMOVED UUID HERE> grant_map :: auto-generated pointer for public function grant_map
   def grant_map(%Grant{} = grant) do
     %{
       "id" => grant.id,
@@ -139,6 +140,7 @@ defmodule Noizu.MCP.Permission do
   end
 
   @doc false
+  # <REMOVED UUID HERE> negotiation_map :: auto-generated pointer for public function negotiation_map
   def negotiation_map(%Negotiation{} = negotiation) do
     %{
       "id" => negotiation.id,

@@ -7,6 +7,7 @@ defmodule Noizu.MCP.Auth.Static do
   @behaviour Noizu.MCP.Auth.ClientStrategy
 
   @impl true
+  # <REMOVED UUID HERE> init :: auto-generated pointer for public function init
   def init(opts) do
     case Keyword.fetch(opts, :token) do
       {:ok, token} when is_binary(token) -> {:ok, %{token: token}}
@@ -15,8 +16,10 @@ defmodule Noizu.MCP.Auth.Static do
   end
 
   @impl true
+  # <REMOVED UUID HERE> headers :: auto-generated pointer for public function headers
   def headers(state), do: {[{"authorization", "Bearer #{state.token}"}], state}
 
   @impl true
+  # <REMOVED UUID HERE> handle_unauthorized :: auto-generated pointer for public function handle_unauthorized
   def handle_unauthorized(_challenge, _info, state), do: {:error, :unauthorized, state}
 end

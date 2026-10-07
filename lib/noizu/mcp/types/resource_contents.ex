@@ -16,16 +16,19 @@ defmodule Noizu.MCP.Types.ResourceContents do
   defstruct [:uri, :mime_type, :text, :blob, :meta]
 
   @spec text(String.t(), String.t(), keyword()) :: t()
+  # <REMOVED UUID HERE> text :: auto-generated pointer for public function text
   def text(uri, text, opts \\ []) do
     %__MODULE__{uri: uri, text: text, mime_type: opts[:mime_type], meta: opts[:meta]}
   end
 
   @spec blob(String.t(), binary(), keyword()) :: t()
+  # <REMOVED UUID HERE> blob :: auto-generated pointer for public function blob
   def blob(uri, blob, opts \\ []) do
     %__MODULE__{uri: uri, blob: blob, mime_type: opts[:mime_type], meta: opts[:meta]}
   end
 
   @spec to_map(t()) :: map()
+  # <REMOVED UUID HERE> to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{} = contents) do
     %{"uri" => contents.uri}
     |> put_unless_nil("mimeType", contents.mime_type)
@@ -35,6 +38,7 @@ defmodule Noizu.MCP.Types.ResourceContents do
   end
 
   @spec from_map(map()) :: t()
+  # <REMOVED UUID HERE> from_map :: auto-generated pointer for public function from_map
   def from_map(%{"uri" => uri} = map) do
     %__MODULE__{
       uri: uri,

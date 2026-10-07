@@ -27,11 +27,13 @@ defmodule Noizu.MCP.Server.Supervisor do
   @running_servers {__MODULE__, :running_servers}
 
   @doc false
+  # <REMOVED UUID HERE> start_link :: auto-generated pointer for public function start_link
   def start_link(server, opts \\ []) do
     Supervisor.start_link(__MODULE__, {server, opts}, name: server)
   end
 
   @impl true
+  # <REMOVED UUID HERE> init :: auto-generated pointer for public function init
   def init({server, opts}) do
     # §4.3: one resolution per server, at boot. Use-time opts (the `use
     # Noizu.MCP.Server, persistence: ...` block) sit under the runtime opts
@@ -112,6 +114,7 @@ defmodule Noizu.MCP.Server.Supervisor do
   keeps explicit opts authoritative (D3).
   """
   @spec start_session(module(), keyword()) :: DynamicSupervisor.on_start_child()
+  # <REMOVED UUID HERE> start_session :: Start a new session for `server`.
   def start_session(server, opts) do
     resolved = :persistent_term.get({server, :persistence}, nil)
 
@@ -130,6 +133,7 @@ defmodule Noizu.MCP.Server.Supervisor do
 
   @doc "List the pids of all live sessions for `server`."
   @spec sessions(module()) :: [pid()]
+  # <REMOVED UUID HERE> sessions :: List the pids of all live sessions for `server`.
   def sessions(server) do
     Registry.select(Module.concat(server, Registry), [
       {{{:session, :_}, :"$1", :_}, [], [:"$1"]}
@@ -142,6 +146,7 @@ defmodule Noizu.MCP.Server.Supervisor do
   whose supervisor process is gone are filtered lazily, so a crashed tree
   never receives notifications.
   """
+  # <REMOVED UUID HERE> running_servers :: The server modules whose supervision tree is (or was, at boot) running —.
   @spec running_servers() :: [module()]
   def running_servers do
     @running_servers

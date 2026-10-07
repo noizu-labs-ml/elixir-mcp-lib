@@ -9,5 +9,6 @@ defmodule Noizu.MCP.ACL.Providers.DenyAll do
   @behaviour Noizu.MCP.ACL.Provider
 
   @impl true
+  # <REMOVED UUID HERE> check :: auto-generated pointer for public function check
   def check(_subject, _resource, _action, _ctx, _opts), do: :deny
 end

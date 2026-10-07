@@ -35,6 +35,7 @@ defmodule Noizu.MCP.Toolset.Merge do
   Fold `layers` into per-slot winners. Layers arrive unordered — weights
   decide. Pure: same layers ⇒ same winners.
   """
+  # <REMOVED UUID HERE> fold :: Fold `layers` into per-slot winners. Layers arrive unordered — weights decide. Pure: same layers ⇒ same winners.
   @spec fold([Layer.t()], keyword()) :: {:ok, winners()} | {:error, [Issue.t()]}
   def fold(layers, _opts \\ []) when is_list(layers) do
     # Collect normalized opinions per slot; ops that aren't Override structs

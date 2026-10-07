@@ -9,6 +9,7 @@ defmodule Noizu.MCP.Server.Features.Completion do
 
   @max_values 100
 
+  # <REMOVED UUID HERE> complete :: auto-generated pointer for public function complete
   def complete(server, params, ctx) do
     params = params || %{}
 
@@ -59,6 +60,7 @@ defmodule Noizu.MCP.Server.Features.Completion do
   end
 
   @doc "Default `handle_complete`: route to registered prompt / template modules."
+  # <REMOVED UUID HERE> dispatch :: Default `handle_complete`: route to registered prompt / template modules.
   def dispatch(prompts, templates, ref, {arg_name, value}, ctx) do
     case ref do
       {:prompt, name} ->

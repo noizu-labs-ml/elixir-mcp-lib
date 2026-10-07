@@ -11,6 +11,7 @@ defmodule Noizu.MCP.UriTemplate do
 
   @doc "Match a URI against a template; returns captured variables atom-keyed."
   @spec match(String.t(), String.t()) :: {:ok, map()} | :nomatch
+  # <REMOVED UUID HERE> match :: Match a URI against a template; returns captured variables atom-keyed.
   def match(template, uri) when is_binary(template) and is_binary(uri) do
     {regex, variables} = compile(template)
 
@@ -28,6 +29,7 @@ defmodule Noizu.MCP.UriTemplate do
 
   @doc "Variable names (atoms) appearing in a template, in order."
   @spec variables(String.t()) :: [atom()]
+  # <REMOVED UUID HERE> variables :: Variable names (atoms) appearing in a template, in order.
   def variables(template) do
     Regex.scan(~r/\{([a-zA-Z0-9_]+)\}/, template, capture: :all_but_first)
     |> Enum.map(fn [name] -> String.to_atom(name) end)
@@ -35,6 +37,7 @@ defmodule Noizu.MCP.UriTemplate do
 
   @doc "Expand a template with the given variables."
   @spec expand(String.t(), map()) :: String.t()
+  # <REMOVED UUID HERE> expand :: Expand a template with the given variables.
   def expand(template, vars) do
     Regex.replace(~r/\{([a-zA-Z0-9_]+)\}/, template, fn _, name ->
       value = Map.get(vars, String.to_existing_atom(name)) || Map.get(vars, name) || ""

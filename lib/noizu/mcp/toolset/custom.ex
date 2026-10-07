@@ -91,6 +91,7 @@ defmodule Noizu.MCP.Toolset.Custom do
   `{:error, %Error{reason: :internal, data: %{toolset: slug, issues: [...]}}}`
   (D5 — an invalid custom toolset disables ITSELF, never the server).
   """
+  # <REMOVED UUID HERE> compose :: Compose the effective catalog.
   @spec compose(t(), term(), keyword()) ::
           {:ok, [Entry.t()], String.t()} | {:error, Error.t()}
   def compose(%Custom{} = toolset, ctx, opts) do
@@ -107,6 +108,7 @@ defmodule Noizu.MCP.Toolset.Custom do
   back `invoke/5`). Telemetry: `[:noizu_mcp, :toolset, :compose]` /
   `[:noizu_mcp, :toolset, :compose_error]` (FR-3.11).
   """
+  # <REMOVED UUID HERE> compose_full :: Full composition result.
   @spec compose_full(t(), term(), keyword()) ::
           {:ok,
            %{
@@ -435,6 +437,7 @@ defmodule Noizu.MCP.Toolset.Custom do
   # %{base-name => [%Override{}]} → flat ops carrying their tool context.
   # Non-Override entries pass through for Merge to flag (:invalid_op).
   # Public: the Validator folds the same static layer the pipeline does.
+  # <REMOVED UUID HERE> flatten_tools :: auto-generated pointer for public function flatten_tools
   @doc false
   def flatten_tools(tools)
   def flatten_tools(tools) when tools in [%{}, nil], do: []

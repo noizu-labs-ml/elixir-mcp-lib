@@ -42,6 +42,7 @@ defmodule Noizu.MCP.Types.Content do
   ]
 
   @spec text(String.t(), keyword()) :: t()
+  # <REMOVED UUID HERE> text :: auto-generated pointer for public function text
   def text(text, opts \\ []) when is_binary(text) do
     %__MODULE__{type: :text, text: text}
     |> apply_opts(opts)
@@ -49,6 +50,7 @@ defmodule Noizu.MCP.Types.Content do
 
   @doc "Image content. `data` is the raw binary; it is base64-encoded on the wire."
   @spec image(binary(), String.t(), keyword()) :: t()
+  # <REMOVED UUID HERE> image :: Image content.
   def image(data, mime_type, opts \\ []) when is_binary(data) and is_binary(mime_type) do
     %__MODULE__{type: :image, data: data, mime_type: mime_type}
     |> apply_opts(opts)
@@ -56,12 +58,14 @@ defmodule Noizu.MCP.Types.Content do
 
   @doc "Audio content. `data` is the raw binary; it is base64-encoded on the wire."
   @spec audio(binary(), String.t(), keyword()) :: t()
+  # <REMOVED UUID HERE> audio :: Audio content.
   def audio(data, mime_type, opts \\ []) when is_binary(data) and is_binary(mime_type) do
     %__MODULE__{type: :audio, data: data, mime_type: mime_type}
     |> apply_opts(opts)
   end
 
   @spec resource_link(String.t(), keyword()) :: t()
+  # <REMOVED UUID HERE> resource_link :: auto-generated pointer for public function resource_link
   def resource_link(uri, opts \\ []) when is_binary(uri) do
     %__MODULE__{type: :resource_link, uri: uri}
     |> apply_opts(opts)
@@ -72,6 +76,7 @@ defmodule Noizu.MCP.Types.Content do
   binary, base64-encoded on the wire) for binary resources.
   """
   @spec embedded_resource(String.t(), keyword()) :: t()
+  # <REMOVED UUID HERE> embedded_resource :: Embedded resource content.
   def embedded_resource(uri, opts \\ []) when is_binary(uri) do
     resource =
       %{"uri" => uri}
@@ -95,6 +100,7 @@ defmodule Noizu.MCP.Types.Content do
   end
 
   @spec to_map(t()) :: map()
+  # <REMOVED UUID HERE> to_map :: auto-generated pointer for public function to_map
   def to_map(%__MODULE__{type: :text} = c) do
     %{"type" => "text", "text" => c.text}
     |> common(c)
@@ -126,6 +132,7 @@ defmodule Noizu.MCP.Types.Content do
   end
 
   @spec from_map(map()) :: t()
+  # <REMOVED UUID HERE> from_map :: auto-generated pointer for public function from_map
   def from_map(%{"type" => "text"} = map) do
     %__MODULE__{
       type: :text,

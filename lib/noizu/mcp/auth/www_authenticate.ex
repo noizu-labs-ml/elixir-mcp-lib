@@ -23,6 +23,7 @@ defmodule Noizu.MCP.Auth.WWWAuthenticate do
       }
   """
   @spec parse(String.t() | nil) :: t() | nil
+  # <REMOVED UUID HERE> parse :: auto-generated pointer for public function parse
   def parse(nil), do: nil
 
   def parse(header) when is_binary(header) do
@@ -49,6 +50,7 @@ defmodule Noizu.MCP.Auth.WWWAuthenticate do
   raises rather than splitting the response header.
   """
   @spec format(String.t(), [{String.t() | atom(), String.t()}] | map()) :: String.t()
+  # <REMOVED UUID HERE> format :: Format a challenge header value.
   def format(scheme \\ "Bearer", params) do
     rendered =
       Enum.map_join(params, ", ", fn {key, value} ->
