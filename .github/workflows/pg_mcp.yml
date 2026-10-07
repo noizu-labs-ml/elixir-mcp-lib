@@ -81,7 +81,11 @@ jobs:
         working-directory: pg/pg_mcp
 
       - name: Clippy (-D warnings)
-        run: cargo clippy --all-targets -- -D warnings
+        # Scoped to the leg's major: default features pull in every PG major
+        # and pgrx-pg-sys then demands all of them be pgrx-managed ("Postgres
+        # `pgN` is not managed by pgrx") when init downloaded just this one.
+        run: cargo clippy --all-targets --no-default-features
+          --features pg${{ matrix.pg }} -- -D warnings
         working-directory: pg/pg_mcp
 
       - name: Test suite (pg${{ matrix.pg }})
