@@ -60,6 +60,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pgrx init downloads and compiles PostgreSQL from source; the runner
+      # image no longer ships these headers (configure dies on readline).
+      - name: Install PG build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison flex libreadline-dev zlib1g-dev libssl-dev
+
       - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
         run: cargo install --locked cargo-pgrx@${PGRX_VERSION}
 
@@ -93,6 +101,14 @@ jobs:
         pg: [16, 17, 18]
     steps:
       - uses: actions/checkout@v4
+
+      # pgrx init downloads and compiles PostgreSQL from source; the runner
+      # image no longer ships these headers (configure dies on readline).
+      - name: Install PG build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison flex libreadline-dev zlib1g-dev libssl-dev
 
       - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
         run: cargo install --locked cargo-pgrx@${PGRX_VERSION}
