@@ -8,6 +8,16 @@
 # an incomplete run is a failing run by design). The Postgres service below
 # satisfies that gate; `--include e2e --include slow` covers the rest of it.
 # The tests build their own scratch schema — only the database must exist.
+#
+# Sharding: the battery is split with `mix test --partitions` so the full
+# coverage command stays well under ~8 min per leg including setup/compile.
+# Every shard passes the FULL coverage flags against its OWN database
+# (noizu_mcp_test_<partition>): the DB batteries DROP/CREATE their tables in
+# place, so two shards sharing one database would corrupt each other mid-run.
+# Because each shard passes both the database URL and `--include e2e`, the
+# test_helper's CoverageGateTest never arms — no MCP_SKIP_FULL_COVERAGE needed.
+# pg_mcp (`--only pg_mcp`, PRD-10) is excluded by default everywhere and needs
+# Docker + the layered extension image; it runs from pg_mcp.yml.
 
 name: elixir
 
@@ -39,20 +49,28 @@ defaults:
   run:
     shell: bash
 
+env:
+  # Shard count. Keep in sync with `matrix.partition` and the
+  # `--partitions` flag on the test step.
+  PARTITIONS: "3"
+
 jobs:
   test:
-    name: test (elixir ${{ matrix.elixir }} / otp ${{ matrix.otp }})
+    name: test (elixir ${{ matrix.beam.elixir }} / otp ${{ matrix.beam.otp }} / shard ${{ matrix.partition }})
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Floor: mix.exs requires ~> 1.18; 1.17 is outside the constraint.
-          - elixir: "1.18.4"
-            otp: "27"
-          - elixir: "1.20.1"
-            otp: "29"
+        # Keep the beam pair inside ONE nested object. An `include:` list
+        # beside a plain `partition:` axis does NOT cross-product: GitHub
+        # matched each include entry against the partition axis and the grid
+        # collapsed to 3 jobs (a single beam leg — run 37555933504). The
+        # nested object gives the full 2x3 = 6 jobs.
+        beam:
+          - { elixir: "1.18.4", otp: "27" } # Floor: mix.exs requires ~> 1.18
+          - { elixir: "1.20.1", otp: "29" }
+        partition: [1, 2, 3]
 
     services:
       postgres:
@@ -70,15 +88,28 @@ jobs:
 
     env:
       MIX_ENV: test
-      MCP_OAUTH_TEST_DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/noizu_mcp_test"
+      MIX_TEST_PARTITION: ${{ matrix.partition }}
+      MCP_OAUTH_TEST_DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/noizu_mcp_test_${{ matrix.partition }}"
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
         with:
-          elixir-version: ${{ matrix.elixir }}
-          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.beam.elixir }}
+          otp-version: ${{ matrix.beam.otp }}
+
+      - name: Restore deps + build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          # Partition-keyed: _build may bake env (compile-time reads) and must
+          # never cross shards — see fixture_persistence_db.ex.
+          key: mix-${{ runner.os }}-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-p${{ matrix.partition }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-p${{ matrix.partition }}-
 
       - name: Mix deps
         run: |
@@ -89,7 +120,16 @@ jobs:
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
 
+      - name: Per-shard database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -c "DROP DATABASE IF EXISTS noizu_mcp_test_${{ matrix.partition }};"
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE noizu_mcp_test_${{ matrix.partition }};"
+
       # Full coverage: the helper's own gate demands the e2e battery, and a
-      # Postgres is already running for the Store.Ecto battery.
-      - name: Test suite
-        run: mix test --include e2e --include slow
+      # Postgres is already running for the Store.Ecto battery. Each shard
+      # runs ~1/3 of the test files (ExUnit file-level round-robin); all
+      # batteries stay covered across the three shards.
+      - name: Test suite (shard ${{ matrix.partition }})
+        run: mix test --partitions 3 --include e2e --include slow

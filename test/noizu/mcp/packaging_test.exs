@@ -8,7 +8,7 @@ defmodule Noizu.MCP.PackagingTest do
   path ever appears in `mix hex.build` output, so a stray addition to the
   package `:files` list cannot ship the crate to every consumer.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   # Every subproject directory that must never leak into the hex tarball.
   @forbidden ["pg", "daemon"]

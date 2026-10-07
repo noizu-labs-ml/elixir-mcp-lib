@@ -1,7 +1,7 @@
 defmodule Noizu.MCP.Engine.MixTaskTest do
   @moduledoc "`mix mcp.engine` argument handling (PRD-11 §7 mix_task_test.exs, AC-11.14)."
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Mix.Tasks.Mcp.Engine, as: Task
 
