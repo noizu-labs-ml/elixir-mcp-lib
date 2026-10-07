@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-07
+
+Changes since 0.4.2 (667dfaa..8ccae8f, PRs #28–#34). User-facing features
+warrant a minor bump.
+
+### Added
+
+- **VFS backends:** directory-backed and database-backed VFS mounts.
+- **Dynamic resources/prompts CRUD** on VFS mounts (epic.content-crud-auth, #31).
+- **Declarative ACL scopes provider** for toolset authorization.
+- **RFC 7617 basic auth:** verifier, password upstream, scheme-aware challenges.
+- **Threat model** documentation for noizu_mcp (#31, #34).
+
+### Fixed
+
+- VFS README fallback on any read error; /etc/dev/runtime/status entry type (#28).
+- mcp-mount write-back amplifier, flush crash, /etc control churn (#29).
+- Persistence heir option 3-tuple (fixes  badarg on OTP 27).
+- Client: cancelled/timed-out async requests hold their terminal result for
+  late awaiters.
+
+### Internal
+
+- CI: elixir test workflow, compile-warning gate, sharded test suite with
+  per-shard databases, pg_mcp workflow startup fixes (#33, #36).
+
 ## [0.4.2] — 2026-09-16
 
 Changes since 0.4.1 was published on 2026-09-16, covering
