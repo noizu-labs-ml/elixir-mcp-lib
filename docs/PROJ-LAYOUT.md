@@ -9,7 +9,7 @@ noizu-mcp/
 │       └── mcp.ex              #   Top-level module
 ├── test/                       # Test suites (mirror lib/noizu/mcp subdirs)
 │   ├── noizu/mcp/              #   Per-area suites: acl, auth, engine, eval, inspector,
-│   │                           #   migrations, persistence, server, sql, store, toolset,
+│   │                           #   migrations, persistence, server, sql, store, sync, toolset,
 │   │                           #   transport + flat e2e/conformance files
 │   ├── mix/tasks/              #   Mix task suites
 │   ├── support/                #   Fixtures (acl, as, auth, custom, engine, oauth, persistence,
@@ -19,14 +19,16 @@ noizu-mcp/
 ├── priv/                       # Runtime assets
 │   ├── spec/2025-11-25/        #   Official MCP JSON Schema
 │   ├── inspector/              #   Inspector browser UI (vanilla ES modules, no build step)
-│   └── liquibase/              #   OAuth schema change set (noizu_mcp_oauth.yaml)
+│   └── liquibase/              #   Schema change sets (oauth, agent, sync)
 ├── docs/                       # Documentation → [layout/docs.md](layout/docs.md)
-│   ├── arch/                   #   Architecture docs (12: auth … vfs)
-│   ├── adrs/                   #   Decision records (ADR-001…008 + INDEX)
+│   ├── arch/                   #   Architecture docs (13: auth … vfs, sync)
+│   ├── adrs/                   #   Decision records (ADR-001…009 + INDEX)
 │   ├── 01–09-*.md              #   Topical guides, spec changelogs, draft-spec notes
-│   └── specs/                  #   MCP spec snapshots (2025-03-26 → draft)
-├── guides/                     # ExDoc guides (15: getting_started, engine, postgres,
-│                               #   testing, handler_context, …)
+│   ├── specs/                  #   MCP spec snapshots (2025-03-26 → draft)
+│   ├── schema/                 #   PROJ-SCHEMA domain detail (toolsets, oauth, agent, sync)
+│   └── threats/                #   THREAT-MODEL detail (surface, authn-authz, stores, local, supply-chain)
+├── guides/                     # ExDoc guides (16: getting_started, engine, postgres,
+│                               #   postgres_sync, testing, handler_context, …)
 ├── cheatsheets/                # ExDoc cheatsheet (mcp.cheatmd)
 ├── examples/                   # Example applications (own mix apps)
 │   ├── echo_stdio/             #   Minimal stdio MCP server
@@ -44,14 +46,16 @@ noizu-mcp/
 ├── pg/                         # Postgres extension track (pg_mcp)
 │   ├── pg_mcp/                 #   Rust/pgrx extension (src/, sql/, spike/, SPIKE.md)
 │   └── docker/                 #   E2E compose + smoke SQL + install image
-├── project-management/         # PRD series (INDEX.md, PRD-1…12)
-├── .github/workflows/          # CI: fuse.yml (Go daemon), pg_mcp.yml (Rust extension)
+├── scripts/                    # Dev helper scripts (test_sync.sh)
+├── project-management/         # PRD series (INDEX.md, PRD-1…13)
+├── .github/workflows/          # CI: fuse.yml, pg_mcp.yml, release.yml
 ├── AGENT.md, AGENTS.md,        # Agent guidance (kept aligned)
 │   CLAUDE.md
 ├── .dialyzer_ignore.exs        # Dialyzer warning suppressions
 ├── .formatter.exs              # Elixir formatter config
 ├── .gitignore
-├── .tool-versions              # Toolchain pinning (elixir 1.20.1-otp-29, erlang 29.0.2)
+├── .tool-versions              # Toolchain pinning (elixir 1.20.1-otp-29, erlang 29.0.2,
+│                               #   cmake, nodejs, golang for fuse/pg tracks)
 ├── Makefile                    # Repo tasks
 ├── CHANGELOG.md                # Release history
 ├── LICENSE                     # Project license
@@ -70,6 +74,7 @@ noizu-mcp/
 | `lib/noizu/mcp/peer.ex` | Sans-IO session core shared by server sessions and client |
 | `lib/noizu/mcp/engine.ex` + `engine/` | Federation engine: mount upstream MCPs behind one surface (attach/detach/refresh) |
 | `lib/noizu/mcp/sql/` | SQL feature over the pg_mcp extension (schema, quals, types) |
+| `lib/noizu/mcp/sync/` | Opt-in dataset synchronization (`sync/version 1` contract; PRD-13) — Source behaviour, protocol dispatch, PG revisioned dataset, worker |
 | `lib/noizu/mcp/transport.ex` | Transport behaviours (stdio, SSE, streamable HTTP, test, VFS) |
 | `lib/noizu/mcp/json_rpc.ex` | JSON-RPC 2.0 encode/decode |
 | `lib/noizu/mcp/schema.ex` | JSON Schema 2020-12 validation (JSV) against the MCP spec |
@@ -88,7 +93,7 @@ noizu-mcp/
 | `lib/mix/tasks/mcp.engine.ex` | `mix mcp.engine` Mix task |
 | `lib/mix/tasks/mcp.eval.ex` | `mix mcp.eval` eval harness Mix task |
 | `priv/spec/2025-11-25/schema.json` | Official MCP JSON Schema |
-| `priv/liquibase/noizu_mcp_oauth.yaml` | OAuth tables change set (Liquibase owns schema) |
+| `priv/liquibase/*.yaml` | Schema change sets: OAuth, agent, sync (Liquibase owns schema) |
 | `daemon/mcp_mount/` | Companion mount daemon (separate mix app) |
 | `fuse/README.md` | Go FUSE daemon build/run notes |
 | `pg/pg_mcp/SPIKE.md` | pg_mcp extension spike notes |

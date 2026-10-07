@@ -1,8 +1,13 @@
-defmodule Noizu.MCP.Sync.PostgresIntegrationTest do
-  use ExUnit.Case, async: false
-  alias Noizu.MCP.Test.SyncDB, as: DB
-  alias Noizu.MCP.Sync.{Store, Worker, RevisionedDataset}
-  alias Noizu.MCP.Test.{SyncCacheRepo, SyncSourceRepo, SyncAppRepo}
+# Harness-gated on scripts/test_sync.sh's disposable databases
+# (MCP_SYNC_TEST_DATABASE_URL + MCP_SYNC_ISOLATED=1). Without the env the
+# suite collapses to one skipped test so an absent run is visible, never
+# silent (house pattern) — a bare setup_all crash would invalidate all 50+.
+if System.get_env("MCP_SYNC_TEST_DATABASE_URL") do
+  defmodule Noizu.MCP.Sync.PostgresIntegrationTest do
+    use ExUnit.Case, async: false
+    alias Noizu.MCP.Test.SyncDB, as: DB
+    alias Noizu.MCP.Sync.{Store, Worker, RevisionedDataset}
+    alias Noizu.MCP.Test.{SyncCacheRepo, SyncSourceRepo, SyncAppRepo}
 
   setup_all do
     {cache_url, source_url} = DB.urls()
@@ -797,5 +802,15 @@ defmodule Noizu.MCP.Sync.PostgresIntegrationTest do
       end)
 
     assert found, "contender never waited on the independently held row lock"
+  end
+end
+else
+  defmodule Noizu.MCP.Sync.PostgresIntegrationTest do
+    @moduledoc false
+    use ExUnit.Case, async: false
+
+    @tag :skip
+    test "PostgresIntegration suite skipped without MCP_SYNC_TEST_DATABASE_URL (scripts/test_sync.sh)",
+      do: :ok
   end
 end

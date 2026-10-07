@@ -14,12 +14,13 @@ docs/
 │   ├── supervision.md              # Supervision tree design
 │   ├── toolsets.md                 # Toolset resolution + weighted merge (PRD-1/3)
 │   ├── transports.md               # Transport layer design
-│   └── vfs.md                      # Virtual filesystem + /etc/dev control tree
+│   ├── vfs.md                      # Virtual filesystem + /etc/dev control tree
+│   └── sync.md                     # Dataset synchronization, sync/version 1 (ADR-009/PRD-13)
 ├── layout/
 │   ├── auth.md                     # lib/noizu/mcp/auth/ breakdown (strategies + OAuth server)
 │   ├── lib.md                      # lib/ source code breakdown
 │   └── docs.md                     # This file
-├── adrs/                           # Decision records (ADR-001…008 + INDEX.md)
+├── adrs/                           # Decision records (ADR-001…009 + INDEX.md)
 ├── specs/                          # MCP specification references
 │   ├── 2025-03-26/                 #   Initial spec (15 files)
 │   ├── 2025-06-18/                 #   Added auth, elicitation (22 files)
@@ -40,5 +41,20 @@ docs/
 ├── PROJ-ARCH.md                    # Architecture documentation
 ├── PROJ-ARCH.summary.md            # Architecture summary
 ├── PROJ-LAYOUT.md                  # Project layout (this doc set)
-└── PROJ-LAYOUT.summary.md          # Layout summary
+├── PROJ-LAYOUT.summary.md          # Layout summary
+├── PROJ-SCHEMA.md                  # Data schema reference (ERDs + inventory)
+├── PROJ-SCHEMA.summary.md          # Schema quick-reference (Mermaid only)
+├── THREAT-MODEL.md                 # Threat model (surface, STRIDE register)
+├── THREAT-MODEL.summary.md         # Threat model quick-reference
+├── schema/                         # Per-domain schema detail
+│   ├── toolsets.md                 #   Lib-owned v1_toolsets tables
+│   ├── oauth.md                    #   OAuth 2.1 AS tables
+│   ├── agent.md                    #   Agent auth tables
+│   └── sync.md                     #   mcp_sync schema (ADR-009/PRD-13)
+└── threats/                        # Threat model detail
+    ├── attack-surface.md           #   Ingress/egress/store enumeration
+    ├── authn-authz.md              #   Auth + ACL control detail
+    ├── sync-and-stores.md          #   Store + synchronization controls
+    ├── local-surface.md            #   VFS mounts, Inspector, transport DoS
+    └── supply-chain.md             #   Hex package, shipped SQL, CI
 ```

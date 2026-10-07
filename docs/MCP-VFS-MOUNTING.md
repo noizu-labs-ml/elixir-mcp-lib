@@ -131,3 +131,115 @@ fusermount3 -u /mnt/mcp    # or Ctrl-C for graceful unmount
 
 Linux binaries (`mcp-fuse-linux-amd64` / `-arm64`, statically linked) build via
 `make fuse-build-linux` and are uploaded as CI artifacts on every `fuse/**` change.
+
+## 8. Database-backed mounts
+
+A mount can be served straight out of Postgres with `Noizu.MCP.VFS.Database`
+— a raw-SQL backend (no Ecto schemas) over a single table:
+
+```elixir
+defmodule MyApp.MCP.DBFS do
+  use Noizu.MCP.VFS.Database,
+    repo: MyApp.Repo,
+    table: "noizu_mcp_vfs_nodes",   # default
+    read_only: false                # true => writes are :erofs
+end
+```
+
+Apply the shipped Liquibase template
+(`priv/liquibase/noizu_mcp_vfs.yaml` — copy it into your changelog directory
+and add the include) before mounting, and seed the root row:
+
+```sql
+INSERT INTO noizu_mcp_vfs_nodes (path, parent_path, type)
+VALUES ('/', NULL, 'dir') ON CONFLICT (path) DO NOTHING;
+```
+
+Files are rows (`data` BYTEA), directories are explicit rows (empty dirs
+persist), and `version` is a real monotonic counter bumped on every write —
+so FUSE/cache clients see fresh content immediately. Register the backend as
+a VFS mount like any other (see `Noizu.MCP.Server` / `MCP-VFS-GROUP-MOUNTS.md`);
+the mount commands in §3 above work unchanged against it.
+
+## 9. Directory-backed mounts (`Noizu.MCP.VFS.File`)
+
+For a mount that IS a directory on the host filesystem, use the shipped
+`Noizu.MCP.VFS.File` backend — registration opts are the mount definition:
+
+```elixir
+use Noizu.MCP.Server, name: "my-files", version: "1.0.0"
+
+vfs Noizu.MCP.VFS.File,
+  root: "/srv/files",        # required — the served directory
+  read_only: false,          # true => write/create/remove answer :erofs
+  mime_types: %{".wasm" => "application/wasm"}  # ext -> mime overrides
+```
+
+Confinement is the backend's job, not the operator's: every path is
+lexically checked against `root` (a `..` that climbs out reads as
+`:enoent`, like any path that does not exist inside the tree), then
+resolved component-wise through symlinks — any link that lands outside the
+mount is `:eacces`, links that stay inside are followed. The root's own
+ancestry is taken as given, so a symlinked root directory is fine.
+
+Operator notes:
+
+* stat versions derive from `{mtime, size}`: a same-sized same-mtime
+  external edit is invisible to the version (writes through the backend
+  always bump strictly). Treat versions as advisory for out-of-band edits.
+* The server advertises `vfs_write` only when a registered backend is
+  write-capable; a `read_only: true` registration never gets it, and its
+  mutators stay runtime-gated (`:erofs`) rather than vanishing.
+* Registration opts reach the backend per-request through
+  `ctx.assigns[:vfs_opts]`; a bare backend call without them falls back to
+  `Application.get_env(:noizu_mcp, Noizu.MCP.VFS.File, [])` — set `root:`
+  there only if you call the backend directly without a server.
+
+## 10. CRUD resources & prompts (`content/1,2`)
+
+A `content` registration is a `vfs` mount plus a bridge into the resources
+and prompts surfaces: the files are CRUDable through the existing `vfs/*`
+tooling *and* advertise as live MCP resources and prompts. Add, edit, and
+remove components by writing files — no recompile, no redeploy.
+
+```elixir
+use Noizu.MCP.Server, name: "my-app", version: "1.0.0"
+
+resource MyApp.MCP.StaticAbout          # static registrations merge in front
+prompt MyApp.MCP.StaticCodeReview
+
+content {Noizu.MCP.VFS.File, root: "/srv/content"},
+  resources: "/resources",              # files → resources (uri_scheme://rel)
+  prompts: "/prompts",                  # JSON files → prompts
+  uri_scheme: "content",                # default; resource URIs read back
+  write_scope: "content:write"          # mutating vfs/* ops require this scope
+```
+
+Prefixes are optional — declare only what you expose; at least one is
+required (compile-time error otherwise). Mechanics:
+
+* `/resources/**` files advertise on `resources/list` as
+  `<uri_scheme>://<path-under-prefix>` (e.g. `/resources/guide.md` →
+  `content://guide.md`); `resources/read` reads off the backend
+  (cache-aware, like any VFS read). Mime comes from the backend's
+  `mime_type/2` when it has one, else an extension map; the description is
+  the first paragraph of text content (or a `description` xattr).
+* `/prompts/**` files are JSON prompt definitions — `{"name",
+  "description", "arguments": [...], "messages": [{"role", "content"}]}` —
+  the same shape the static prompt DSL produces. `prompts/get` substitutes
+  `{{argument}}` placeholders from the request's string-keyed arguments and
+  reports missing required arguments as `invalid_params`. Files that fail
+  to parse are skipped on `prompts/list` (one broken file must not hide
+  the others) and surface the error on `prompts/get`.
+* Successful `vfs/write`, `vfs/create`, and `vfs/remove` under a content
+  prefix fan out `notify_resource_updated/1` (resources prefix) and
+  `notify_changed/1` (`:resources` / `:prompts`), so subscribed sessions
+  and list caches invalidate exactly like static component changes.
+* `write_scope:` gates the three mutators on content prefixes: the
+  caller's claims (`ctx.assigns.auth_claims` — the same plumbing the JWT
+  verifier fills) must hold the scope, exact or trailing-`*` glob; missing
+  scope is `:eacces`. Reads stay under the existing auth.
+* Every `content` registration joins `__mcp__(:vfs)`, so the mount is
+  CRUDable through `vfs/*` and the mounters of §§3–9 — path routing picks
+  the content mount whose prefix covers the request, else the first `vfs`
+  registration (unchanged first-wins behavior).

@@ -207,6 +207,14 @@ defmodule Noizu.MCP.ClientTest do
         Client.async(client, "tools/call", %{"name" => "slow", "arguments" => %{"ms" => 30_000}})
 
       :ok = Client.cancel(client, slow_ref, "changed my mind")
+
+      # A cancel that lands before the awaiter attaches still reports the
+      # cancellation (the entry holds its terminal result, exactly like a
+      # normal resolve) — the old behavior leaked :unknown_request, which
+      # made Inspector sessions report a bogus error instead of "cancelled".
+      assert {:error, :cancelled} = Client.await(client, slow_ref, 100)
+
+      # ...and the entry is consumed: a second await sees it gone.
       assert {:error, :unknown_request} = Client.await(client, slow_ref, 100)
     end
 

@@ -755,7 +755,19 @@ defmodule Noizu.MCP.Auth.Server.E2ETest do
     decoded(response)
   end
 
-  # Req decodes a JSON body for us; a raw binary comes back for text/html.
+  # Req decodes a JSON body for us; a raw binary comes back for text/html —
+  # or for `text/event-stream`: the spec lets a server answer a POST with an
+  # SSE stream, and the transport upgrades when the reply misses the commit
+  # grace window. Unwrap the `data:` frames and take the message that carries
+  # a result.
   defp decoded(%Req.Response{body: body}) when is_map(body), do: body
+
+  defp decoded(%Req.Response{body: "data: " <> _ = body}) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.map(fn frame -> frame |> String.trim_leading("data: ") |> Jason.decode!() end)
+    |> Enum.find(&Map.has_key?(&1, "result"))
+  end
+
   defp decoded(%Req.Response{body: body}), do: Jason.decode!(body)
 end

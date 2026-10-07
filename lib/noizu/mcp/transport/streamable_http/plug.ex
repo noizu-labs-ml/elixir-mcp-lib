@@ -171,7 +171,7 @@ if Code.ensure_loaded?(Plug.Conn) do
           # No credential presented: per RFC 6750 §3.1 the challenge carries no
           # `error` — the client hasn't done anything wrong yet, it just needs
           # to be told where the authorization server is.
-          {:halt, unauthorized(conn, auth, nil)}
+          {:halt, unauthorized(conn, auth, nil, {verifier, verifier_opts})}
 
         token ->
           conn_info = %{method: conn.method, peer: conn.remote_ip, headers: conn.req_headers}
@@ -181,7 +181,7 @@ if Code.ensure_loaded?(Plug.Conn) do
               {:ok, assign(conn, :mcp_auth_claims, claims)}
 
             {:error, :invalid_token} ->
-              {:halt, unauthorized(conn, auth, "invalid_token")}
+              {:halt, unauthorized(conn, auth, "invalid_token", {verifier, verifier_opts})}
 
             {:error, :insufficient_scope, meta} ->
               # A `scope` in meta names what the caller is missing and wins over
@@ -212,22 +212,57 @@ if Code.ensure_loaded?(Plug.Conn) do
       case get_req_header(conn, "authorization") do
         ["Bearer " <> token | _] -> token
         ["bearer " <> token | _] -> token
+
+        # Other schemes (RFC 7617 `Basic`, say) reach the verifier with the
+        # scheme intact, so a verifier that understands them can dispatch on
+        # it — `Noizu.MCP.Auth.BasicVerifier` parses the pair out. Verifiers
+        # that only know bearer tokens see a token they will reject, exactly
+        # as they would any other non-credential string.
+        ["Basic " <> _ = header | _] -> header
+        ["basic " <> _ = header | _] -> header
         _ -> nil
       end
     end
 
-    defp unauthorized(conn, auth, error) do
+    defp unauthorized(conn, auth, error, {verifier, verifier_opts}) do
       challenge =
-        Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge(
-          resource_metadata: resource_metadata_url(conn, auth),
-          scope: Keyword.get(auth, :scope),
-          error: error
-        )
+        case basic_challenge(verifier, verifier_opts) do
+          # A verifier that speaks RFC 7617 Basic advertises its own challenge,
+          # so curl (and browsers) prompt for credentials instead of hunting
+          # for an OAuth server. Bearer-only mounts keep the bearer challenge.
+          %{} = basic ->
+            basic
+
+          nil ->
+            Noizu.MCP.Auth.WWWAuthenticate.bearer_challenge(
+              resource_metadata: resource_metadata_url(conn, auth),
+              scope: Keyword.get(auth, :scope),
+              error: error
+            )
+        end
 
       conn
       |> put_resp_header("www-authenticate", challenge)
       |> send_resp(401, "Unauthorized")
     end
+
+    # A configured verifier (or a chain holding one) that answers Basic
+    # credentials can produce a challenge — `BasicVerifier.challenge/1` takes
+    # the same opts the verifier runs with, so `:realm` is honored.
+    defp basic_challenge(Noizu.MCP.Auth.BasicVerifier, verifier_opts),
+      do: Noizu.MCP.Auth.BasicVerifier.challenge(verifier_opts)
+
+    defp basic_challenge(Noizu.MCP.Auth.ChainVerifier, verifier_opts) do
+      verifier_opts
+      |> Keyword.get(:verifiers, [])
+      |> Enum.find_value(fn
+        {Noizu.MCP.Auth.BasicVerifier, opts} -> Noizu.MCP.Auth.BasicVerifier.challenge(opts)
+        Noizu.MCP.Auth.BasicVerifier -> Noizu.MCP.Auth.BasicVerifier.challenge([])
+        _ -> nil
+      end)
+    end
+
+    defp basic_challenge(_verifier, _verifier_opts), do: nil
 
     defp resource_metadata_url(conn, auth) do
       case Keyword.get(auth, :resource_metadata) do

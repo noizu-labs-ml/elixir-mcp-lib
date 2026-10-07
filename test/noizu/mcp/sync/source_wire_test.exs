@@ -1,9 +1,14 @@
-defmodule Noizu.MCP.Sync.SourceWireTest do
-  use ExUnit.Case, async: false
-  import Noizu.MCP.Test
-  alias Noizu.MCP.Test.SyncDB, as: DB
-  alias Noizu.MCP.Test.{SyncCacheRepo, SyncSourceRepo, SyncAppRepo}
-  alias Noizu.MCP.Sync.{Protocol, RevisionedDataset, Store, Worker}
+# Harness-gated on scripts/test_sync.sh's disposable databases
+# (MCP_SYNC_TEST_DATABASE_URL + MCP_SYNC_ISOLATED=1). Without the env the
+# suite collapses to one skipped test so an absent run is visible, never
+# silent (house pattern) — a bare setup_all crash would invalidate all 20+.
+if System.get_env("MCP_SYNC_TEST_DATABASE_URL") do
+  defmodule Noizu.MCP.Sync.SourceWireTest do
+    use ExUnit.Case, async: false
+    import Noizu.MCP.Test
+    alias Noizu.MCP.Test.SyncDB, as: DB
+    alias Noizu.MCP.Test.{SyncCacheRepo, SyncSourceRepo, SyncAppRepo}
+    alias Noizu.MCP.Sync.{Protocol, RevisionedDataset, Store, Worker}
 
   defmodule SourceServer do
     use Noizu.MCP.Server, name: "sync-pg-wire", version: "1", sync: true
@@ -252,5 +257,15 @@ defmodule Noizu.MCP.Sync.SourceWireTest do
 
     assert {:ok, %{"resumed" => true}} = Store.resume(SyncCacheRepo, context.binding)
     assert {:ok, %{"status" => "ready"}} = Store.checkpoint(SyncCacheRepo, context.binding)
+  end
+end
+else
+  defmodule Noizu.MCP.Sync.SourceWireTest do
+    @moduledoc false
+    use ExUnit.Case, async: false
+
+    @tag :skip
+    test "SourceWire suite skipped without MCP_SYNC_TEST_DATABASE_URL (scripts/test_sync.sh)",
+      do: :ok
   end
 end

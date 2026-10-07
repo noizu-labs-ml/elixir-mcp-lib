@@ -509,8 +509,21 @@ defmodule Noizu.MCP.Client do
         if notification, do: send_message(state, notification)
         cancel_timer(entry)
         emit_request_exception(entry, :cancelled)
-        if entry.from, do: GenServer.reply(entry.from, {:error, :cancelled})
-        {:noreply, %{state | peer: peer, pending: pending}}
+
+        cond do
+          entry.from ->
+            GenServer.reply(entry.from, {:error, :cancelled})
+            {:noreply, %{state | peer: peer, pending: pending}}
+
+          # async request whose awaiter has not attached YET: hold the
+          # terminal result exactly like {:resolve, ...} does, so an await
+          # that arrives after the cancel sees {:error, :cancelled} instead
+          # of :unknown_request (Session awaiters are spawned concurrently
+          # and can lose that race under load).
+          true ->
+            entry = %{entry | result: {:error, :cancelled}, started_at: nil}
+            {:noreply, %{state | peer: peer, pending: Map.put(pending, id, entry)}}
+        end
     end
   end
 
@@ -553,8 +566,18 @@ defmodule Noizu.MCP.Client do
         {peer, notification, _tag} = Peer.cancel_out(state.peer, id, "timeout")
         if notification, do: send_message(state, notification)
         emit_request_exception(entry, :timeout)
-        if entry.from, do: GenServer.reply(entry.from, {:error, :timeout})
-        {:noreply, %{state | peer: peer, pending: pending}}
+
+        cond do
+          entry.from ->
+            GenServer.reply(entry.from, {:error, :timeout})
+            {:noreply, %{state | peer: peer, pending: pending}}
+
+          # Same holding contract as the cancel path: a late awaiter of a
+          # timed-out async request must see the timeout, not :unknown_request.
+          true ->
+            entry = %{entry | result: {:error, :timeout}, started_at: nil}
+            {:noreply, %{state | peer: peer, pending: Map.put(pending, id, entry)}}
+        end
     end
   end
 
@@ -817,16 +840,35 @@ defmodule Noizu.MCP.Client do
   defp normalize_outcome({:error, %Error{} = error}), do: {:error, error}
 
   defp fail_all(state, reason) do
-    for {_id, entry} <- state.pending do
+    {failed, pending} =
+      Enum.split_with(state.pending, fn {_id, entry} -> entry.from != nil end)
+
+    for {_id, entry} <- failed do
       cancel_timer(entry)
       if entry.started_at, do: emit_request_exception(entry, :transport_error)
-      if entry.from, do: GenServer.reply(entry.from, {:error, reason})
+      GenServer.reply(entry.from, {:error, reason})
     end
+
+    # async requests without an awaiter yet keep their entry, holding the
+    # terminal result — same contract as the cancel/timeout paths — so a late
+    # await sees the transport failure instead of :unknown_request.
+    held =
+      Map.new(pending, fn {id, entry} ->
+        cancel_timer(entry)
+        if entry.started_at, do: emit_request_exception(entry, :transport_error)
+        {id, %{entry | result: {:error, reason}, started_at: nil}}
+      end)
 
     for waiter <- state.waiters, do: GenServer.reply(waiter, {:error, reason})
     for {from, _, _, _} <- state.queued, do: GenServer.reply(from, {:error, reason})
 
-    %{state | pending: %{}, waiters: [], queued: [], status: {:failed, reason}}
+    %{
+      state
+      | pending: held,
+        waiters: [],
+        queued: [],
+        status: {:failed, reason}
+    }
   end
 
   defp cancel_timer(%{timer: nil}), do: :ok
