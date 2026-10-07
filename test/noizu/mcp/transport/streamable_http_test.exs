@@ -137,8 +137,9 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
       assert body["id"] == 1
       assert body["error"]["code"] == -32603
       assert body["error"]["message"] == "Server unavailable"
-      # The underlying reason (:noproc et al.) rides along as data for ops.
-      assert is_binary(body["error"]["data"])
+      # Generic marker only — the concrete reason (process/module names) goes
+      # to the server log, not the client payload.
+      assert body["error"]["data"] == "server session unavailable"
     end
 
     test "json-path request answers as application/json" do

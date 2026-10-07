@@ -446,8 +446,10 @@ if Code.ensure_loaded?(Plug.Conn) do
 
       # Tree-down shows up two ways: an exit from GenServer.call when the
       # SessionSupervisor name isn't registered at all, or an {:error, reason}
-      # return when the name resolves but the child refuses to start. Normalize
-      # both so the case below can answer in-protocol.
+      # return when the name resolves but the child refuses to start. Only
+      # those tree-down signals become an in-protocol 503 — any other exit
+      # (timeout, caller kill, genuine crash) re-raises rather than being
+      # mislabeled "Server unavailable".
       session_start =
         try do
           Noizu.MCP.Server.Supervisor.start_session(server,
@@ -458,7 +460,9 @@ if Code.ensure_loaded?(Plug.Conn) do
             assigns: assigns
           )
         catch
-          :exit, reason -> {:error, reason}
+          :exit, reason when reason in [:noproc, :badarg] -> {:error, reason}
+          :exit, {:noproc, {GenServer, :call, _}} = reason -> {:error, reason}
+          :exit, {:badarg, _} = reason -> {:error, reason}
         end
 
       case session_start do
@@ -483,14 +487,21 @@ if Code.ensure_loaded?(Plug.Conn) do
         {:error, reason} ->
           # Server tree not running (or the session child refused to start):
           # answer in-protocol with a JSON-RPC error instead of a MatchError
-          # crashing the request to a raw 500 the client can't parse.
+          # crashing the request to a raw 500 the client can't parse. The
+          # concrete reason stays in the server log — the client gets a
+          # generic marker so internals (process/module names) don't leak.
+          Logger.error("""
+          #{inspect(server)}: initialize failed to start session #{session_id}: \
+          #{inspect(reason)}
+          """)
+
           conn
           |> put_resp_content_type("application/json")
           |> send_resp(
             503,
             Noizu.MCP.JsonRpc.encode!(%Noizu.MCP.JsonRpc.ErrorResponse{
               id: id,
-              error: Noizu.MCP.Error.internal("Server unavailable", inspect(reason))
+              error: Noizu.MCP.Error.internal("Server unavailable", "server session unavailable")
             })
           )
       end
