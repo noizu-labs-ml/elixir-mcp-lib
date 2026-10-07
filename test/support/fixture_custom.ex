@@ -184,6 +184,7 @@ defmodule Noizu.MCP.Fixtures.Custom do
 
     defstruct [:specs]
 
+    @impl true
     def __toolset_specs__(%__MODULE__{specs: specs}, _ctx, _opts) when is_list(specs),
       do: specs
 
@@ -206,6 +207,7 @@ defmodule Noizu.MCP.Fixtures.Custom do
       end
     end
 
+    @impl true
     def metadata(_toolset, _ctx, _opts),
       do: {:ok, %{slug: "layered", title: nil, description: nil, version: "1.0.0"}}
   end

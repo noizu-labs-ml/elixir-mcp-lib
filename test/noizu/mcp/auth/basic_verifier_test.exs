@@ -60,7 +60,7 @@ defmodule Noizu.MCP.Auth.BasicVerifierTest do
     end
 
     test "an mfa validator receives username and password" do
-      validator = {__MODULE__.Validator, :check}
+      validator = {Noizu.MCP.Fixtures.BasicValidator, :check}
 
       assert {:ok, %{"sub" => "svc"}} =
                verify(basic("svc", "tok"), users: nil, validator: validator)
@@ -204,10 +204,4 @@ defmodule Noizu.MCP.Auth.BasicVerifierTest do
                ChainVerifier.verify("Basic " <> Base.encode64("eve:x"), OAuth.conn_info(), chain())
     end
   end
-end
-
-defmodule Noizu.MCP.Auth.BasicVerifierTest.Validator do
-  @moduledoc false
-  def check("svc", "tok"), do: {:ok, %{scopes: [], claims: %{"sub" => "svc"}}}
-  def check(_u, _p), do: :error
 end

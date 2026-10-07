@@ -206,13 +206,15 @@ defmodule Noizu.MCP.Persistence.Memory do
           :ets.new(@table, [
             :named_table,
             :public,
-            read_concurrency: true,
-            write_concurrency: true,
             # PRD-11: a put can arrive from an EPHEMERAL process (a session
             # handler task). Without an heir the table would die with its
             # creator, silently dropping every stored record — so ownership
             # transfers to a parked owner process that never exits.
-            heir: owner
+            # The 3-tuple form is required: the `{heir, pid}` 2-tuple
+            # shorthand raises badarg on OTP 27 (fine on OTP 28+).
+            {:heir, owner, @table},
+            read_concurrency: true,
+            write_concurrency: true
           ])
         catch
           _kind, _reason -> :ok

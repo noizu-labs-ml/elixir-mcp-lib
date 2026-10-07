@@ -29,7 +29,11 @@ defmodule Noizu.MCP.VFS.Conformance do
   """
 
   defmacro __using__(opts) do
-    backend = Keyword.fetch!(opts, :backend)
+    # Expand against the caller so a bare `backend: MyAlias` resolves via the
+    # caller's `alias`es — a bare alias declared AFTER the `use` (or never)
+    # would otherwise compile to the wrong atom and blow up at runtime with
+    # `TestFS is not available`.
+    backend = Macro.expand(Keyword.fetch!(opts, :backend), __CALLER__)
     {seed_mod, seed_fun} = Keyword.fetch!(opts, :seed)
 
     quote bind_quoted: [backend: backend, seed_mod: seed_mod, seed_fun: seed_fun] do
