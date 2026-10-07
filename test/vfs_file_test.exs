@@ -36,6 +36,40 @@ defmodule Noizu.MCP.VFS.FileTest do
 
   defp root_of(ctx), do: ctx.assigns[:vfs_opts][:root]
 
+  # ── cache namespace (regression) ──────────────────────────────────────────
+  #
+  # The battery is async and every test seeds a fresh root, but all of them
+  # share the backend module — and pre-namespace the cache was keyed only on
+  # `{module, kind, path}`. A stat cached under one root could satisfy another
+  # root's stat, so the battery's `post.version > before.version` across a
+  # write became a coin flip between two unrelated hash-derived versions (the
+  # PR #40 CI flake). Cache entries are namespaced by vfs_opts now: two mounts
+  # on one backend module never see each other's entries.
+  test "two mounts on one backend share no cache entries", %{backend: backend, ctx: ctx} do
+    other =
+      Path.join(System.tmp_dir!(), "mcp-vfs-file-test-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(other)
+    File.write!(Path.join(other, "hello.txt"), "other mount\n")
+    ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(other) end)
+    other_ctx = Noizu.MCP.Ctx.assign(%Noizu.MCP.Ctx{}, :vfs_opts, root: other)
+
+    # Warm both namespaces for stat and read.
+    assert {:ok, ours} = VFS.stat(backend, "/hello.txt", ctx)
+    assert {:ok, theirs} = VFS.stat(backend, "/hello.txt", other_ctx)
+    assert ours.size == byte_size("hello world\n")
+    assert theirs.size == byte_size("other mount\n")
+
+    assert {:ok, "hello world\n", _} = VFS.read(backend, "/hello.txt", ctx)
+    assert {:ok, "other mount\n", _} = VFS.read(backend, "/hello.txt", other_ctx)
+
+    # A write through one mount leaves the other mount's view intact.
+    assert {:ok, _} = VFS.write(backend, "/hello.txt", "changed\n", ctx)
+    assert {:ok, changed, _} = VFS.read(backend, "/hello.txt", ctx)
+    assert changed == "changed\n"
+    assert {:ok, "other mount\n", _} = VFS.read(backend, "/hello.txt", other_ctx)
+  end
+
   # ── containment ───────────────────────────────────────────────────────────
 
   test "traversal past the root is :enoent", %{backend: backend, ctx: ctx} do
@@ -114,7 +148,9 @@ defmodule Noizu.MCP.VFS.FileTest do
 
   test "stat xattrs carry the mime type", %{backend: backend, ctx: ctx} do
     assert {:ok, %{xattrs: %{mime: "text/markdown"}}} = VFS.stat(backend, "/docs/a.md", ctx)
-    assert {:ok, %{xattrs: %{mime: "application/octet-stream"}}} = VFS.stat(backend, "/bin/sh", ctx)
+
+    assert {:ok, %{xattrs: %{mime: "application/octet-stream"}}} =
+             VFS.stat(backend, "/bin/sh", ctx)
   end
 
   test "mime_type/2 honors :mime_types overrides" do

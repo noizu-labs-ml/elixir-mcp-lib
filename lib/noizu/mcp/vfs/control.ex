@@ -131,7 +131,7 @@ defmodule Noizu.MCP.VFS.Control do
       the moduledoc)
     * `:toggles` — extra config toggles, `%{name:, get: {m,f,a}, set: {m,f,a}}`
   """
-  # ⟦𓆒⟧ __using__
+  # <REMOVED UUID HERE> __using__
   defmacro __using__(opts) do
     server = Keyword.fetch!(opts, :server)
     real = Keyword.get(opts, :real)
@@ -182,7 +182,7 @@ defmodule Noizu.MCP.VFS.Control do
   # ── VFS callbacks (backend module passed in as `backend`) ─────────────────
 
   @doc false
-  # ⟦𓆒⟧ stat
+  # <REMOVED UUID HERE> stat
   @spec stat(module(), String.t(), Ctx.t()) :: {:ok, VFS.t()} | {:error, VFS.errno()}
   def stat(backend, path, ctx) do
     trace(backend, "stat", path)
@@ -196,7 +196,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ list
+  # <REMOVED UUID HERE> list
   @spec list(module(), String.t(), String.t() | nil, Ctx.t()) ::
           {:ok, [map()], String.t() | nil} | {:error, term()}
   def list(backend, path, cursor, ctx) do
@@ -211,7 +211,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ read
+  # <REMOVED UUID HERE> read
   @spec read(module(), String.t(), Ctx.t()) ::
           {:ok, binary(), non_neg_integer()} | {:error, VFS.errno()}
   def read(backend, path, ctx) do
@@ -225,7 +225,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ write
+  # <REMOVED UUID HERE> write
   @spec write(module(), String.t(), binary(), Ctx.t()) :: {:ok, VFS.t()} | {:error, term()}
   def write(backend, path, data, ctx) do
     trace(backend, "write", path)
@@ -242,7 +242,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ create
+  # <REMOVED UUID HERE> create
   @spec create(module(), String.t(), binary() | :dir, Ctx.t()) ::
           {:ok, VFS.t()} | {:error, VFS.errno()}
   def create(backend, path, data, ctx) do
@@ -257,7 +257,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ remove
+  # <REMOVED UUID HERE> remove
   @spec remove(module(), String.t(), Ctx.t()) :: :ok | {:error, VFS.errno()}
   def remove(backend, path, ctx) do
     trace(backend, "remove", path)
@@ -271,7 +271,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ search
+  # <REMOVED UUID HERE> search
   @spec search(module(), String.t(), String.t(), Ctx.t()) ::
           {:ok, [map()], String.t() | nil} | {:error, term()}
   def search(backend, root, query, ctx) do
@@ -280,7 +280,7 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   @doc false
-  # ⟦𓆒⟧ xattr
+  # <REMOVED UUID HERE> xattr
   @spec xattr(module(), String.t(), Ctx.t()) :: {:ok, map()} | {:error, VFS.errno()}
   def xattr(backend, path, ctx) do
     cond do
@@ -692,7 +692,7 @@ defmodule Noizu.MCP.VFS.Control do
   ]
 
   @doc false
-  # ⟦𓆒⟧ transports
+  # <REMOVED UUID HERE> transports
   def transports do
     for {mod, name} <- @transports, Code.ensure_loaded?(mod), do: name
   end

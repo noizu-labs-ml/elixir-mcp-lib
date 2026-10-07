@@ -91,7 +91,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       """
     end
 
-    # ⟦𓆒⟧ __using__
+    # <REMOVED UUID HERE> __using__
     defmacro __using__(opts) do
       repo = Keyword.get(opts, :repo)
       table = Keyword.get(opts, :table, @default_table)

@@ -8,7 +8,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   e.g. session-gated visibility:
 
       @impl true
-      # ⟦𓐯𓄷𓊜𓄶⟧ handle_list_tools :: auto-generated pointer for public function handle_list_tools
+      # <REMOVED UUID HERE> handle_list_tools :: auto-generated pointer for public function handle_list_tools
       def handle_list_tools(cursor, ctx) do
         Noizu.MCP.Server.Features.Tools.list_registered(
           __mcp__(:tools),
@@ -41,7 +41,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
 
   # ── tools/list ────────────────────────────────────────────────────────────
 
-  # ⟦𓌪𓍖𓍍𓋸⟧ list :: auto-generated pointer for public function list
+  # <REMOVED UUID HERE> list :: auto-generated pointer for public function list
   def list(server, params, ctx) do
     cursor = (params || %{})["cursor"]
     render = render_ctx(ctx)
@@ -99,7 +99,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
       only (raises `ArgumentError` for multi-tool registrations, where the
       override would be ambiguous)
   """
-  # ⟦𓄟𓏬𓇓𓇻⟧ expand :: Expand a `[{module, opts}]` registration list into flat `[%Spec{}]`.
+  # <REMOVED UUID HERE> expand :: Expand a `[{module, opts}]` registration list into flat `[%Spec{}]`.
   def expand(registered) do
     Enum.flat_map(registered, fn {module, opts} ->
       apply_registration_opts(module.__mcp_tools__(), module, opts)
@@ -152,7 +152,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   end
 
   @doc "Default `handle_list_tools` over the registered tool modules."
-  # ⟦𓉶𓌖𓋦𓋢⟧ list_registered :: Default `handle_list_tools` over the registered tool modules.
+  # <REMOVED UUID HERE> list_registered :: Default `handle_list_tools` over the registered tool modules.
   def list_registered(registered, cursor, opts \\ []) do
     include_hidden = Keyword.get(opts, :include_hidden, false)
     page_size = Keyword.get(opts, :page_size, Pagination.default_page_size())
@@ -178,7 +178,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
 
   # ── tools/call ────────────────────────────────────────────────────────────
 
-  # ⟦𓈩𓅐𓁯𓃫⟧ call :: auto-generated pointer for public function call
+  # <REMOVED UUID HERE> call :: auto-generated pointer for public function call
   def call(server, params, ctx) do
     name = (params || %{})["name"]
     args = (params || %{})["arguments"] || %{}
@@ -194,7 +194,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   end
 
   @doc "Default `handle_call_tool`: dispatch to a registered tool spec."
-  # ⟦𓇼𓁟𓆋𓇇⟧ dispatch :: Default `handle_call_tool`: dispatch to a registered tool spec.
+  # <REMOVED UUID HERE> dispatch :: Default `handle_call_tool`: dispatch to a registered tool spec.
   def dispatch(registered, name, args, ctx) do
     # AP-9 (PRD-3): a server with `toolset:` configured has NO static bypass —
     # the selected toolset replaces listing AND dispatch on this shim too.
@@ -255,7 +255,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   the config error is loud, the server stays healthy). Non-server toolset
   values pass through untouched.
   """
-  # ⟦𓋴𓄿𓎼𓆑⟧ select_toolset :: The toolset governing this request (PRD-3 §4.7): the server's `toolset:` opt resolved PER REQUEST (D3 — no compile-time capture).
+  # <REMOVED UUID HERE> select_toolset :: The toolset governing this request (PRD-3 §4.7): the server's `toolset:` opt resolved PER REQUEST (D3 — no compile-time capture).
   def select_toolset(toolset, ctx)
 
   def select_toolset(toolset, ctx) when is_atom(toolset) and toolset != nil do
@@ -374,7 +374,7 @@ defmodule Noizu.MCP.Server.Features.Tools do
   # ── return normalization ──────────────────────────────────────────────────
 
   @doc "Normalize a tool handler return value to a `ToolResult`."
-  # ⟦𓁧𓀏𓊉𓃜⟧ normalize :: Normalize a tool handler return value to a `ToolResult`.
+  # <REMOVED UUID HERE> normalize :: Normalize a tool handler return value to a `ToolResult`.
   def normalize(result, output_schema)
 
   # Already normalized (e.g. by the DSL dispatch path) — pass through.

@@ -8,8 +8,10 @@ defmodule Noizu.MCP.Server.Features.VFS do
       `remove/3`, `search/4`, `xattr/3`) — cache-aware wrappers over a backend
       module. Read results go through `Noizu.MCP.VFS.Cache` and get the
       backend's generation stamped into node versions; successful writes bump
-      the generation first. This is the layer the conformance battery
-      (`Noizu.MCP.VFS.Conformance`) exercises.
+      the generation first. Cache entries are namespaced by the mount's
+      `vfs_opts` (see `ns/1`) so two mounts sharing a backend module —
+      per-user roots — never serve each other's entries. This is the layer
+      the conformance battery (`Noizu.MCP.VFS.Conformance`) exercises.
     * Server-level (`stat(server, params, ctx)`, ...) — param extraction and
       validation over the server's registered backend (first entry of
       `__mcp__(:vfs)`), returning wire-shaped maps or `Noizu.MCP.Error` structs.
@@ -46,15 +48,15 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # ── backend-level (cache-aware) ───────────────────────────────────────────
 
   @doc "Stat `path` against `backend`, through the cache."
-  # ⟦𓆒⟧ stat
+  # <REMOVED UUID HERE> stat
   @spec stat(module(), String.t(), Ctx.t()) ::
           {:ok, VFS.t()} | {:error, term()}
   def stat(backend, path, ctx) when is_binary(path) do
-    case Cache.get(backend, :stat, path) do
+    case Cache.get(backend, :stat, path, ns: ns(ctx)) do
       nil ->
         case backend.stat(path, ctx) do
           {:ok, node} ->
-            Cache.put(backend, :stat, path, node, ttl())
+            Cache.put(backend, :stat, path, node, ttl(), ns: ns(ctx))
             {:ok, stamp(backend, node)}
 
           {:error, :enoent} = error ->
@@ -72,24 +74,24 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # Generated /README.md fallback — cached like any backend node.
   defp readme_stat(backend, path, ctx) do
     node = Readme.node(backend, ctx)
-    Cache.put(backend, :stat, path, node, ttl())
+    Cache.put(backend, :stat, path, node, ttl(), ns: ns(ctx))
     {:ok, stamp(backend, node)}
   end
 
   @doc "List `path`'s children against `backend`, through the cache."
-  # ⟦𓆒⟧ list
+  # <REMOVED UUID HERE> list
   @spec list(module(), String.t(), String.t() | nil, Ctx.t()) ::
           {:ok, [map()], String.t() | nil} | {:error, term()}
   def list(backend, path, cursor, ctx) when is_binary(path) do
     cache_key = "#{path}\0#{cursor || ""}"
 
-    case Cache.get(backend, :list, cache_key) do
+    case Cache.get(backend, :list, cache_key, ns: ns(ctx)) do
       nil ->
         case backend.list(path, cursor, ctx) do
           {:ok, entries, next_cursor} ->
             entries = Enum.map(entries, &stamp_entry(backend, &1))
             entries = first_root_page(path, cursor, entries, backend, ctx)
-            Cache.put(backend, :list, cache_key, {entries, next_cursor}, ttl())
+            Cache.put(backend, :list, cache_key, {entries, next_cursor}, ttl(), ns: ns(ctx))
             {:ok, entries, next_cursor}
 
           {:error, _} = error ->
@@ -107,17 +109,19 @@ defmodule Noizu.MCP.Server.Features.VFS do
   defp first_root_page(_path, _cursor, entries, _backend, _ctx), do: entries
 
   @doc "Read `path` against `backend`, through the cache."
-  # ⟦𓆒⟧ read
+  # <REMOVED UUID HERE> read
   @spec read(module(), String.t(), Ctx.t(), non_neg_integer() | nil) ::
           {:ok, binary(), non_neg_integer()} | {:error, term()}
   def read(backend, path, ctx, expected_version \\ nil) when is_binary(path) do
-    cache_opts = if expected_version, do: [version: unstamp(backend, expected_version)], else: []
+    cache_opts =
+      [ns: ns(ctx)] ++
+        if(expected_version, do: [version: unstamp(backend, expected_version)], else: [])
 
     case Cache.get(backend, :read, path, cache_opts) do
       nil ->
         case backend.read(path, ctx) do
           {:ok, content, version} = result ->
-            Cache.put(backend, :read, path, result, ttl())
+            Cache.put(backend, :read, path, result, ttl(), ns: ns(ctx))
             {:ok, content, version + Cache.generation(backend)}
 
           # /README.md is reserved and advertised by the dispatcher itself —
@@ -139,12 +143,12 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # Generated /README.md fallback — cached like any backend node.
   defp readme_read(backend, path, ctx) do
     result = {:ok, Readme.content(backend, ctx), 1}
-    Cache.put(backend, :read, path, result, ttl())
+    Cache.put(backend, :read, path, result, ttl(), ns: ns(ctx))
     {:ok, elem(result, 1), 1 + Cache.generation(backend)}
   end
 
   @doc "Overwrite `path` via `backend`; bumps the generation on success."
-  # ⟦𓆒⟧ write
+  # <REMOVED UUID HERE> write
   @spec write(module(), String.t(), binary(), Ctx.t()) :: {:ok, VFS.t()} | {:error, term()}
   def write(backend, path, data, ctx) when is_binary(path) and is_binary(data) do
     if Readme.reserved?(backend, path, ctx),
@@ -166,7 +170,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Create `path` via `backend`; bumps the generation on success."
-  # ⟦𓆒⟧ create
+  # <REMOVED UUID HERE> create
   @spec create(module(), String.t(), binary() | :dir, Ctx.t()) ::
           {:ok, VFS.t()} | {:error, term()}
   def create(backend, path, data, ctx) when is_binary(path) do
@@ -189,7 +193,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Remove `path` via `backend`; bumps the generation on success."
-  # ⟦𓆒⟧ remove
+  # <REMOVED UUID HERE> remove
   @spec remove(module(), String.t(), Ctx.t()) :: :ok | {:error, term()}
   def remove(backend, path, ctx) when is_binary(path) do
     if Readme.reserved?(backend, path, ctx),
@@ -210,7 +214,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Search under `root` via `backend` (uncached)."
-  # ⟦𓆒⟧ search
+  # <REMOVED UUID HERE> search
   @spec search(module(), String.t(), String.t(), Ctx.t()) ::
           {:ok, [map()], String.t() | nil} | {:error, term()}
   def search(backend, root, query, ctx) when is_binary(root) and is_binary(query) do
@@ -221,7 +225,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "Extended attributes for `path` via `backend` (uncached)."
-  # ⟦𓆒⟧ xattr
+  # <REMOVED UUID HERE> xattr
   @spec xattr(module(), String.t(), Ctx.t()) :: {:ok, map()} | {:error, term()}
   def xattr(backend, path, ctx) when is_binary(path) do
     case backend.xattr(path, ctx) do
@@ -243,7 +247,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # ── server-level (params → wire maps) ─────────────────────────────────────
 
   @doc "vfs_stat operation."
-  # ⟦𓆒⟧ vfs_stat
+  # <REMOVED UUID HERE> vfs_stat
   def vfs_stat(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -253,7 +257,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_list operation."
-  # ⟦𓆒⟧ vfs_list
+  # <REMOVED UUID HERE> vfs_list
   def vfs_list(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -269,7 +273,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_read operation."
-  # ⟦𓆒⟧ vfs_read
+  # <REMOVED UUID HERE> vfs_read
   def vfs_read(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -284,7 +288,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_write operation."
-  # ⟦𓆒⟧ vfs_write
+  # <REMOVED UUID HERE> vfs_write
   def vfs_write(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -304,7 +308,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_create operation."
-  # ⟦𓆒⟧ vfs_create
+  # <REMOVED UUID HERE> vfs_create
   def vfs_create(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -328,12 +332,13 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_remove operation."
-  # ⟦𓆒⟧ vfs_remove
+  # <REMOVED UUID HERE> vfs_remove
   def vfs_remove(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
         with :ok <- DynamicContent.write_gate(server, path, ctx) do
-          case remove(backend, path, opts_ctx(ctx, opts)) |> to_result(fn :ok -> %{"removed" => path} end) do
+          case remove(backend, path, opts_ctx(ctx, opts))
+               |> to_result(fn :ok -> %{"removed" => path} end) do
             {:ok, _} = ok ->
               DynamicContent.after_mutation(server, path)
               ok
@@ -350,7 +355,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_search operation."
-  # ⟦𓆒⟧ vfs_search
+  # <REMOVED UUID HERE> vfs_search
   def vfs_search(server, params, ctx) do
     params = params || %{}
 
@@ -387,7 +392,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   end
 
   @doc "vfs_xattr operation."
-  # ⟦𓆒⟧ vfs_xattr
+  # <REMOVED UUID HERE> vfs_xattr
   def vfs_xattr(server, params, ctx) do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
@@ -418,6 +423,14 @@ defmodule Noizu.MCP.Server.Features.VFS do
   defp opts_ctx(ctx, []), do: ctx
   defp opts_ctx(ctx, opts), do: Ctx.assign(ctx, :vfs_opts, opts)
 
+  # Cache namespace: backends resolve roots and capabilities from `vfs_opts`,
+  # so the same backend module under two mounts (per-user roots, per-test
+  # tmpdirs) must never serve one mount's cached entry to the other. Mounts
+  # with identical opts (or none — `opts_ctx/2` skips the assign) still share
+  # one namespace, preserving the hit rate for the common one-mount case.
+  defp ns(%Ctx{} = ctx), do: Map.get(ctx.assigns, :vfs_opts, :default)
+  defp ns(_ctx), do: :default
+
   defp with_path(params, fun) do
     with {:ok, path} <- validate_binary((params || %{})["path"], "path"), do: fun.(path)
   end
@@ -446,7 +459,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
     do: {:error, Error.internal("vfs error: #{inspect(other)}")}
 
   @doc "Map a VFS errno atom to a `Noizu.MCP.Error` (M2 wire mapping)."
-  # ⟦𓆒⟧ errno_error
+  # <REMOVED UUID HERE> errno_error
   def errno_error(:enoent), do: Error.resource_not_found("vfs path")
 
   def errno_error(errno) do

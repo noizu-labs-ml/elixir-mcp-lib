@@ -72,7 +72,7 @@ defmodule Noizu.MCP.Server.Tools.McpFsSearch do
   alias Noizu.MCP.Server.Features.VFS
 
   @impl true
-  # ⟦𓌰𓐟𓆬𓈾⟧ call :: auto-generated pointer for public function call
+  # <REMOVED UUID HERE> call :: auto-generated pointer for public function call
   def call(args, ctx) do
     args = args || %{}
 

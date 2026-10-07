@@ -13,7 +13,7 @@ defmodule Noizu.MCP.Server.Prompt do
         end
 
         @impl true
-        # ⟦𓎺𓃭𓏒𓄉⟧ get :: auto-generated pointer for public function get
+        # <REMOVED UUID HERE> get :: auto-generated pointer for public function get
         def get(%{"code" => code} = args, _ctx) do
           style = args["style"] || "strict"
 
@@ -57,7 +57,7 @@ defmodule Noizu.MCP.Server.Prompt do
 
   @optional_callbacks complete: 3
 
-  # ⟦𓄉𓆚𓈚𓋉⟧ __using__ :: auto-generated pointer for public function __using__
+  # <REMOVED UUID HERE> __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server.Prompt
@@ -71,7 +71,7 @@ defmodule Noizu.MCP.Server.Prompt do
   end
 
   @doc "Declare prompt arguments with `arg/1,2`."
-  # ⟦𓀲𓄛𓏨𓃤⟧ arguments :: Declare prompt arguments with `arg/1,2`.
+  # <REMOVED UUID HERE> arguments :: Declare prompt arguments with `arg/1,2`.
   defmacro arguments(do: block) do
     args = extract_args(block, __CALLER__)
 
@@ -111,7 +111,7 @@ defmodule Noizu.MCP.Server.Prompt do
     end)
   end
 
-  # ⟦𓃥𓂮𓈻𓍤⟧ __before_compile__ :: auto-generated pointer for public function __before_compile__
+  # <REMOVED UUID HERE> __before_compile__ :: auto-generated pointer for public function __before_compile__
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :__mcp_prompt_opts__)
     args = Module.get_attribute(env.module, :__mcp_prompt_args__)
@@ -144,7 +144,7 @@ defmodule Noizu.MCP.Server.Prompt do
 
     quote do
       @impl Noizu.MCP.Server.Prompt
-      # ⟦𓎡𓇘𓏩𓊓⟧ definition :: auto-generated pointer for public function definition
+      # <REMOVED UUID HERE> definition :: auto-generated pointer for public function definition
       def definition do
         %Noizu.MCP.Types.Prompt{
           name: unquote(name),
@@ -157,7 +157,7 @@ defmodule Noizu.MCP.Server.Prompt do
       end
 
       @impl Noizu.MCP.Server.Prompt
-      # ⟦𓂆𓊿𓈘𓂌⟧ __mcp_prompt__ :: auto-generated pointer for public function __mcp_prompt__
+      # <REMOVED UUID HERE> __mcp_prompt__ :: auto-generated pointer for public function __mcp_prompt__
       def __mcp_prompt__(:static_completions), do: unquote(Macro.escape(static_completions))
       def __mcp_prompt__(:hidden), do: unquote(opts[:hidden] == true)
     end

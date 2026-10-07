@@ -10,6 +10,6 @@ defmodule Noizu.MCP.ACL.Providers.Disabled do
   @behaviour Noizu.MCP.ACL.Provider
 
   @impl true
-  # ⟦𓂁𓊢𓋗𓆣⟧ check :: auto-generated pointer for public function check
+  # <REMOVED UUID HERE> check :: auto-generated pointer for public function check
   def check(_subject, _resource, _action, _ctx, _opts), do: :allow
 end
