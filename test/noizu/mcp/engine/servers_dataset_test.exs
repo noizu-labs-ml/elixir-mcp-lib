@@ -117,7 +117,12 @@ defmodule Noizu.MCP.Engine.ServersDatasetTest do
       stored = fetch_row("upd")
       assert stored["enabled"] == false
 
-      # A changed row restarts the session.
+      # A changed row restarts the session. terminate_child/2 has returned,
+      # but the Registry drops the key only when it processes the DOWN —
+      # pooled_pid can still resolve the dead old_pid for a beat. Wait for the
+      # stop to become visible instead of asserting synchronously (CI flake:
+      # refute left: old pid).
+      wait_until_pid_changed("upd", old_pid)
       refute Supervisor.pooled_pid("upd") == old_pid
     end
 
@@ -160,6 +165,10 @@ defmodule Noizu.MCP.Engine.ServersDatasetTest do
 
       {provider, popts} = Noizu.MCP.Engine.Config.persistence()
       assert :error = provider.get("engine_servers", "del", popts)
+
+      # Same registry-DOWN visibility gap as the update test: wait for the
+      # stop to show before refuting the pid (CI flake: refute got a dead pid).
+      wait_until_stopped("del")
       refute Supervisor.pooled_pid("del")
 
       assert {:ok, tools} = list_tools(connect(Engine), timeout: 5_000)
@@ -230,6 +239,24 @@ defmodule Noizu.MCP.Engine.ServersDatasetTest do
       Process.sleep(50)
       repeat(fun, deadline)
     end
+  end
+
+  defp wait_until_stopped(name, timeout \\ 15_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    repeat(
+      fn -> Supervisor.pooled_pid(name) == nil end,
+      deadline
+    )
+  end
+
+  defp wait_until_pid_changed(name, old_pid, timeout \\ 15_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    repeat(
+      fn -> Supervisor.pooled_pid(name) != old_pid end,
+      deadline
+    )
   end
 
   defp fetch_row(name), do: fetch_all() |> Enum.find(&(&1["name"] == name))
