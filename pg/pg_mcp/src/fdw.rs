@@ -190,9 +190,7 @@ unsafe fn server_name_for_relid(relid: pg_sys::Oid) -> String {
 }
 
 /// Resolve the calling role's server + credential for a foreign table (D3, FR-7.18).
-unsafe fn resolve_for_relid(
-    relid: pg_sys::Oid,
-) -> (Target, String, session::Resolved) {
+unsafe fn resolve_for_relid(relid: pg_sys::Oid) -> (Target, String, session::Resolved) {
     let target = target_for_relid(relid);
     let server_name = server_name_for_relid(relid);
     let resolved = match session::resolve(&server_name) {
@@ -535,8 +533,10 @@ unsafe fn extract_optional_param_qual(
     {
         return None;
     }
-    let arg0 = strip_coercion((*(*(*bool_expr).args).elements.add(0)).ptr_value as *mut pg_sys::Node);
-    let arg1 = strip_coercion((*(*(*bool_expr).args).elements.add(1)).ptr_value as *mut pg_sys::Node);
+    let arg0 =
+        strip_coercion((*(*(*bool_expr).args).elements.add(0)).ptr_value as *mut pg_sys::Node);
+    let arg1 =
+        strip_coercion((*(*(*bool_expr).args).elements.add(1)).ptr_value as *mut pg_sys::Node);
 
     // Which arm is the NULL test, which the equality?
     let (null_arm, eq_arm) = match ((*arg0).type_, (*arg1).type_) {
@@ -612,9 +612,7 @@ unsafe fn var_column(
 
     match target {
         Target::Registry(entry) => {
-            if entry.spec.attno(&column).is_none() {
-                return None;
-            }
+            entry.spec.attno(&column)?;
             if !entry.handler.pushdown_columns().contains(&column.as_str()) {
                 return None;
             }
@@ -690,17 +688,14 @@ unsafe fn datum_to_json(type_oid: pg_sys::Oid, datum: pg_sys::Datum) -> Option<J
             serde_json::from_str(&raw).ok()
         }
         t if t == pg_sys::BOOLOID => bool::from_datum(datum, false).map(Json::Bool),
-        t if t == pg_sys::INT4OID => i32::from_datum(datum, false).map(|v| Json::from(v)),
-        t if t == pg_sys::INT8OID => i64::from_datum(datum, false).map(|v| Json::from(v)),
+        t if t == pg_sys::INT4OID => i32::from_datum(datum, false).map(Json::from),
+        t if t == pg_sys::INT8OID => i64::from_datum(datum, false).map(Json::from),
         // PRD-8 §4.1: per-tool input columns can be typed `double precision`,
         // `uuid`, `date` and `timestamptz`; their constants become JSON so the
         // qual can be pushed into `arguments` and echoed back.
-        t if t == pg_sys::FLOAT8OID => f64::from_datum(datum, false).and_then(|v| {
-            serde_json::Number::from_f64(v).map(serde_json::Number::into)
-        }),
-        t if t == pg_sys::UUIDOID => {
-            Some(Json::String(cstring_from_func(pg_sys::uuid_out, datum)))
-        }
+        t if t == pg_sys::FLOAT8OID => f64::from_datum(datum, false)
+            .and_then(|v| serde_json::Number::from_f64(v).map(serde_json::Number::into)),
+        t if t == pg_sys::UUIDOID => Some(Json::String(cstring_from_func(pg_sys::uuid_out, datum))),
         t if t == pg_sys::DATEOID => Some(Json::String(cstring_from_func(pg_sys::date_out, datum))),
         t if t == pg_sys::TIMESTAMPTZOID => Some(Json::String(pg_timestamptz_to_json(
             &cstring_from_func(pg_sys::timestamptz_out, datum),
@@ -957,8 +952,8 @@ unsafe fn cell_to_datum(cell: &Cell) -> pg_sys::Datum {
             .into_datum()
             .unwrap_or_else(|| pg_sys::Datum::from(0usize)),
         Cell::Date(d) => {
-            let c = CString::new(d.as_str())
-                .unwrap_or_else(|_| CString::new("1970-01-01").unwrap());
+            let c =
+                CString::new(d.as_str()).unwrap_or_else(|_| CString::new("1970-01-01").unwrap());
             call_in_func(pg_sys::date_in, pg_sys::Datum::from(c.as_ptr() as usize))
         }
     }
@@ -1016,7 +1011,7 @@ unsafe fn resolve_param_quals(
         return out;
     }
     let planstate = &mut (*node).ss.ps;
-    let econtext = (*planstate).ps_ExprContext;
+    let econtext = planstate.ps_ExprContext;
     for pq in params {
         let expr_node = list_node_at((*plan).fdw_exprs, pq.index);
         if expr_node.is_null() {
@@ -1120,7 +1115,6 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     let (target, server_name, resolved) = resolve_for_relid(relid);
 
     let holder = match target {
-
         Target::Registry(entry) => {
             let ctx = ModifyContext {
                 spec: entry.spec,
@@ -1185,8 +1179,8 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
             server_name,
             session,
         } => {
-            let cells = read_slot(slot, *spec);
-            let input = InsertRow::new(*spec, cells);
+            let cells = read_slot(slot, spec);
+            let input = InsertRow::new(spec, cells);
             match session.insert(&input) {
                 Ok(r) => r,
                 Err(e) => e.raise_ctx(server_name, "tools/call"),
@@ -1391,7 +1385,10 @@ unsafe fn read_slot_json(
     let mut out = Vec::with_capacity(natts);
     for i in 0..natts {
         let attno = (i + 1) as pg_sys::AttrNumber;
-        let name = cstr_to_string(pg_sys::get_attname(relid, attno, false), "insert column name");
+        let name = cstr_to_string(
+            pg_sys::get_attname(relid, attno, false),
+            "insert column name",
+        );
         let mut isnull = false;
         let datum = pg_sys::slot_getattr(slot, (i + 1) as c_int, &mut isnull);
         if isnull {
@@ -1406,25 +1403,24 @@ unsafe fn read_slot_json(
             }
             t if t == pg_sys::JSONBOID => {
                 let raw = cstring_from_func(pg_sys::jsonb_out, datum);
-                serde_json::from_str(&raw)
-                    .unwrap_or_else(|_| McpError::Internal(format!("column \"{name}\" holds malformed jsonb")).raise())
+                serde_json::from_str(&raw).unwrap_or_else(|_| {
+                    McpError::Internal(format!("column \"{name}\" holds malformed jsonb")).raise()
+                })
             }
-            t if t == pg_sys::BOOLOID => Json::Bool(bool::from_datum(datum, false).unwrap_or(false)),
-            t if t == pg_sys::INT4OID => {
-                Json::from(i32::from_datum(datum, false).unwrap_or(0))
+            t if t == pg_sys::BOOLOID => {
+                Json::Bool(bool::from_datum(datum, false).unwrap_or(false))
             }
+            t if t == pg_sys::INT4OID => Json::from(i32::from_datum(datum, false).unwrap_or(0)),
             t if t == pg_sys::INT8OID => Json::from(i64::from_datum(datum, false).unwrap_or(0)),
             t if t == pg_sys::FLOAT8OID => Json::from(f64::from_datum(datum, false).unwrap_or(0.0)),
-            t if t == pg_sys::UUIDOID => {
-                Json::String(cstring_from_func(pg_sys::uuid_out, datum))
-            }
+            t if t == pg_sys::UUIDOID => Json::String(cstring_from_func(pg_sys::uuid_out, datum)),
             t if t == pg_sys::DATEOID => Json::String(cstring_from_func(pg_sys::date_out, datum)),
             t if t == pg_sys::TIMESTAMPTZOID => Json::String(pg_timestamptz_to_json(
                 &cstring_from_func(pg_sys::timestamptz_out, datum),
             )),
-            t if t == pg_sys::BYTEAOID => {
-                Json::String(hex_encode_bytea(cstring_from_func(pg_sys::byteaout, datum).as_str()))
-            }
+            t if t == pg_sys::BYTEAOID => Json::String(hex_encode_bytea(
+                cstring_from_func(pg_sys::byteaout, datum).as_str(),
+            )),
             _ => McpError::Internal(format!(
                 "column \"{name}\" has a type the per-tool insert path does not carry"
             ))

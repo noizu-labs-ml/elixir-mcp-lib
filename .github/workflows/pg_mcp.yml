@@ -1,20 +1,26 @@
 # pg_mcp CI (PRD-10 §4.2) — runs independently of the Elixir pipeline: a Rust
 # failure never blocks a pure-Elixir PR and vice versa.
 #
-# Triggers: pull_request / push touching pg/** or this file.
+# Triggers: pull_request / push touching pg/** or this file; tag pushes
+# (pg_mcp-v*) are routed here by pg_mcp_tag.yml (GitHub rejects a `push:`
+# block that combines `paths:` with `tags:` — "at most one of 'tags' 'paths'"),
+# so this workflow is also a workflow_call target.
 #
 # Jobs:
 #   test    pg16/17/18 — fmt, clippy -D warnings, the trusted run-tests.sh
 #           (pgrx-managed toolchains; `cargo pgrx test`'s framework runner is
 #           unreliable — see pg/pg_mcp/run-tests.sh header)
 #   package pg16/17/18 — cargo pgrx package + out-dir artifacts
-#   image   pg17 — docker build (postgres:17 profile) + smoke.sql; pushes
-#           only on tag builds. A nightly job builds the PRODUCTION base
+#   build-image pg17 — builds the postgres:17 profile once, shared as an
+#           artifact (7-day retention) by the smoke and e2e legs so neither
+#           rebuilds it; e2e's critical path is test → build-image → e2e.
+#   image   pg17 — smoke.sql against the shared image; pushes only on tag
+#           builds. A nightly job builds the PRODUCTION base
 #           (docker.io/noizu/…) and runs smoke-production.sql — the layering
 #           against the real base is verified there, since the base is not
 #           pullable everywhere (PRD-10 §1, out-of-scope: rebuilding the base).
-#   e2e     pg17 — image + container + the Elixir suite with PG_MCP_URL set
-#           (E1–E19). Slowest job; runs on PRs touching pg/** per §9 Q3's
+#   e2e     pg17 — shared image + container + the Elixir suite with PG_MCP_URL
+#           set (E1–E19). Slowest job; runs on PRs touching pg/** per §9 Q3's
 #           recommendation, cheap to extend to nightly.
 
 name: pg_mcp
@@ -28,13 +34,12 @@ on:
     paths:
       - "pg/**"
       - ".github/workflows/pg_mcp.yml"
-    tags:
-      - "pg_mcp-v*"
   schedule:
     # Nightly: production-base image verification (manual re-run also works
     # via workflow_dispatch on any branch).
     - cron: "23 6 * * *"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -58,8 +63,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pgrx init downloads and compiles PostgreSQL from source; the runner
+      # image no longer ships these headers (configure dies on readline).
+      - name: Install PG build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison flex libreadline-dev zlib1g-dev libssl-dev
+
+      # PG-from-source compiles dominate leg wall-clock; ~/.pgrx is
+      # deterministic per (OS, PG major, pgrx version), so restore it instead
+      # of recompiling. First run on a key is a miss and saves for the rest.
+      - name: Cache pgrx toolchain (pg${{ matrix.pg }})
+        uses: actions/cache@v4
+        with:
+          path: ~/.pgrx
+          key: pgrx-${{ runner.os }}-pg${{ matrix.pg }}-${{ env.PGRX_VERSION }}
+
+      - name: Cache cargo-pgrx binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ runner.os }}-${{ env.PGRX_VERSION }}
+
       - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
-        run: cargo install --locked cargo-pgrx@${PGRX_VERSION}
+        run: |
+          if cargo pgrx --version 2>/dev/null | grep -q "${PGRX_VERSION}"; then
+            echo "cargo-pgrx ${PGRX_VERSION} restored from cache"
+          else
+            cargo install --locked cargo-pgrx@${PGRX_VERSION}
+          fi
 
       # pgrx-managed toolchains for every major (the run-tests.sh convention;
       # no reliance on runner-local postgres installs).
@@ -71,17 +104,18 @@ jobs:
         working-directory: pg/pg_mcp
 
       - name: Clippy (-D warnings)
-        run: cargo clippy --all-targets -- -D warnings
+        # Scoped to the leg's major: default features pull in every PG major
+        # and pgrx-pg-sys then demands all of them be pgrx-managed ("Postgres
+        # `pgN` is not managed by pgrx") when init downloaded just this one.
+        run: cargo clippy --all-targets --no-default-features
+          --features pg${{ matrix.pg }} -- -D warnings
         working-directory: pg/pg_mcp
 
       - name: Test suite (pg${{ matrix.pg }})
         working-directory: pg/pg_mcp
         env:
           PG_MAJOR: ${{ matrix.pg }}
-          PGBIN: ${{ home }}/.pgrx/*/pgrx-install/bin
-        run: |
-          PGBIN="$(ls -d ~/.pgrx/*/pgrx-install/bin | head -1)"
-          ./run-tests.sh
+        run: ./run-tests.sh
 
   package:
     name: package (pg${{ matrix.pg }})
@@ -93,8 +127,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pgrx init downloads and compiles PostgreSQL from source; the runner
+      # image no longer ships these headers (configure dies on readline).
+      - name: Install PG build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison flex libreadline-dev zlib1g-dev libssl-dev
+
+      # PG-from-source compiles dominate leg wall-clock; ~/.pgrx is
+      # deterministic per (OS, PG major, pgrx version), so restore it instead
+      # of recompiling. First run on a key is a miss and saves for the rest.
+      - name: Cache pgrx toolchain (pg${{ matrix.pg }})
+        uses: actions/cache@v4
+        with:
+          path: ~/.pgrx
+          key: pgrx-${{ runner.os }}-pg${{ matrix.pg }}-${{ env.PGRX_VERSION }}
+
+      - name: Cache cargo-pgrx binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ runner.os }}-${{ env.PGRX_VERSION }}
+
       - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
-        run: cargo install --locked cargo-pgrx@${PGRX_VERSION}
+        run: |
+          if cargo pgrx --version 2>/dev/null | grep -q "${PGRX_VERSION}"; then
+            echo "cargo-pgrx ${PGRX_VERSION} restored from cache"
+          else
+            cargo install --locked cargo-pgrx@${PGRX_VERSION}
+          fi
 
       - name: pgrx init (pg${{ matrix.pg }})
         run: cargo pgrx init --pg${{ matrix.pg }} download
@@ -113,24 +175,56 @@ jobs:
           name: pg_mcp-pg${{ matrix.pg }}
           path: out/
 
-  image:
-    name: image (pg17, postgres:17 profile)
+  # Builds the postgres:17 dev profile ONCE and shares it via artifact: the
+  # smoke leg and e2e compose previously each built the identical image
+  # (BASE_IMAGE=postgres:17, PG_MAJOR=17, FINAL_USER=root — the tag e2e
+  # compose expects, `pg_mcp-e2e:pg17`, is preloaded so `up -d` never builds).
+  # Gated on test only: e2e's critical path is test → build-image → e2e, not
+  # the package/smoke chains that used to serialize ahead of it.
+  build-image:
+    name: build-image (postgres:17 profile)
     runs-on: ubuntu-latest
-    needs: [test, package]
+    needs: [test]
     steps:
       - uses: actions/checkout@v4
 
       - name: Build image (postgres:17 profile)
         run: |
           docker build -f pg/docker/Dockerfile \
-            --build-arg BASE_IMAGE=postgres:17 --build-arg FINAL_USER=root \
-            -t pg_mcp:smoke .
+            --build-arg BASE_IMAGE=postgres:17 --build-arg PG_MAJOR=17 \
+            --build-arg FINAL_USER=root \
+            -t pg_mcp-e2e:pg17 -t pg_mcp:smoke .
+
+      - name: Export image artifact
+        run: docker save pg_mcp-e2e:pg17 -o pg_mcp-pg17-image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg_mcp-pg17-image
+          path: pg_mcp-pg17-image.tar
+          retention-days: 7
+
+  image:
+    name: image (pg17, postgres:17 profile)
+    runs-on: ubuntu-latest
+    needs: [build-image]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load shared image
+        uses: actions/download-artifact@v4
+        with:
+          name: pg_mcp-pg17-image
+
+      - name: Import shared image
+        run: docker load -i pg_mcp-pg17-image.tar
 
       - name: Smoke test (smoke.sql)
         run: |
           docker run -d --rm --name pg_mcp_smoke \
             -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
-            pg_mcp:smoke
+            pg_mcp-e2e:pg17
           for i in $(seq 1 30); do
             docker exec pg_mcp_smoke pg_isready -U postgres && break
             sleep 1
@@ -196,13 +290,13 @@ jobs:
   e2e:
     name: e2e (pg17, E1–E19)
     runs-on: ubuntu-latest
-    needs: [image]
+    needs: [build-image]
     steps:
       - uses: actions/checkout@v4
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.17"
+          elixir-version: "1.18"
           otp-version: "27"
 
       - name: Mix deps
@@ -211,11 +305,20 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      # Compose builds the postgres:17 profile (host-gateway wired for the
-      # container → Bandit listener leg) and the suite boots the Engine plus
-      # stdio fixture upstreams host-side.
+      - name: Load shared image
+        uses: actions/download-artifact@v4
+        with:
+          name: pg_mcp-pg17-image
+
+      - name: Import shared image
+        run: docker load -i pg_mcp-pg17-image.tar
+
+      # The compose service's `image: pg_mcp-e2e:pg17` is already loaded
+      # above, so `up -d` (no --build) runs the artifact build. Host
+      # networking is wired for the container → Bandit listener leg; the
+      # suite boots the Engine plus stdio fixture upstreams host-side.
       - name: Start the layered Postgres
-        run: docker compose -f pg/docker/e2e-compose.yaml up -d --build
+        run: docker compose -f pg/docker/e2e-compose.yaml up -d
 
       - name: Run the e2e suite
         env:

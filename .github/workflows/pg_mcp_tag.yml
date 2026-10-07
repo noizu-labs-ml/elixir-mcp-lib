@@ -1,0 +1,23 @@
+# Tag-build entrypoint for pg_mcp. `pg_mcp.yml`'s `push:` block uses a
+# `paths:` filter, and GitHub rejects a single `push:` block that combines
+# `paths:` with `tags:` ("every top level event must have at most one of
+# 'tags' 'paths'") — which made pg_mcp.yml fail at parse time on every push.
+# This workflow owns the tag trigger and delegates to pg_mcp.yml (reusable
+# via workflow_call). `github.ref` inside the called workflow is the caller's
+# tag ref, so the image-publish gate there (`startsWith(github.ref,
+# 'refs/tags/pg_mcp-v')`) behaves exactly as before.
+
+name: pg_mcp (tag)
+
+on:
+  push:
+    tags:
+      - "pg_mcp-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  pg_mcp:
+    uses: ./.github/workflows/pg_mcp.yml
+    secrets: inherit

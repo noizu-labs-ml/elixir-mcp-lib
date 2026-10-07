@@ -25,6 +25,7 @@ defmodule Noizu.MCP.Fixtures.PgE2E do
 
   alias Noizu.MCP.Engine
   alias Noizu.MCP.Fixtures.Engine, as: EngineFixture
+  alias Noizu.MCP.Fixtures.Server
   alias Noizu.MCP.Test
 
   # ── token → claims (E9/E10 identity fixtures) ───────────────────────────────
@@ -120,6 +121,12 @@ defmodule Noizu.MCP.Fixtures.PgE2E do
   def boot do
     EngineFixture.setup_engine()
     EngineFixture.ensure_engine!()
+    # The generic router below serves `Fixtures.Server` over HTTP. Start its
+    # supervision tree here: SQL-driven tests (E11, E19) reach it through
+    # Postgres, not `Test.connect`, so without this they fail whenever
+    # shuffled order runs them before the first `bare_client/0` test starts
+    # the tree (handle_initialize hits a dead SessionSupervisor → HTTP 500).
+    Test.ensure_server_started(Server)
     PrincipalLog.start()
 
     client = Test.connect(Engine)

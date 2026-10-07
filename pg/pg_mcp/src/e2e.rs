@@ -17,7 +17,7 @@
 //! AP-P1's structural half (no registry writes outside the audit path) is a
 //! grep-level check in `run-tests.sh`, not a probe.
 
-use crate::cache::stub::{Reply, StubServer};
+use crate::cache::stub::{Reply, RouteFn, StubServer};
 use pgrx::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -200,25 +200,24 @@ mod e2e_test {
         by_token.insert("tok_admin".to_string(), tools_by_token(true));
         by_token.insert("".to_string(), tools_by_token(false));
 
-        let route: Arc<dyn Fn(&str, &Value) -> Reply + Send + Sync> =
-            Arc::new(|method, params| match method {
-                "tools/call" => {
-                    let name = params
-                        .pointer("/name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    match name {
-                        // `hidden` and a genuinely-absent tool get the same
-                        // server-authored invalid_params: the server, not the
-                        // extension, decides what an unauthorized caller sees.
-                        "echo" => Reply::Result(json!({
-                            "content": [{"type": "text", "text": "ok"}]
-                        })),
-                        _ => Reply::Error(-32602, "invalid arguments".to_string()),
-                    }
+        let route: RouteFn = Arc::new(|method, params| match method {
+            "tools/call" => {
+                let name = params
+                    .pointer("/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                match name {
+                    // `hidden` and a genuinely-absent tool get the same
+                    // server-authored invalid_params: the server, not the
+                    // extension, decides what an unauthorized caller sees.
+                    "echo" => Reply::Result(json!({
+                        "content": [{"type": "text", "text": "ok"}]
+                    })),
+                    _ => Reply::Error(-32602, "invalid arguments".to_string()),
                 }
-                _ => Reply::Error(-32601, "unexpected".to_string()),
-            });
+            }
+            _ => Reply::Error(-32601, "unexpected".to_string()),
+        });
 
         let replies = map(vec![
             ("initialize", init_reply("ap-p4")),
@@ -322,14 +321,13 @@ mod e2e_test {
     #[pgrx::pg_test]
     fn perf_100_row_insert_select_is_exactly_100_sequential_tools_call() {
         cache::clear_all();
-        let route: Arc<dyn Fn(&str, &Value) -> Reply + Send + Sync> =
-            Arc::new(|method, _params| match method {
-                "tools/call" => Reply::Result(json!({
-                    "content": [{"type": "text", "text": "ok"}],
-                    "structuredContent": {}
-                })),
-                _ => Reply::Error(-32601, "unexpected".to_string()),
-            });
+        let route: RouteFn = Arc::new(|method, _params| match method {
+            "tools/call" => Reply::Result(json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "structuredContent": {}
+            })),
+            _ => Reply::Error(-32601, "unexpected".to_string()),
+        });
         let replies = map(vec![
             ("initialize", init_reply("perf-100")),
             ("tools/call", Reply::Route(route)),
@@ -871,10 +869,8 @@ mod e2e_test {
         .unwrap();
         assert_eq!(returned.as_deref(), Some("true"));
         // call_tool_text under `return`: the text content, still not an error.
-        let text: Option<String> = Spi::get_one(
-            "SELECT mcp.call_tool_text('e2_api3', 'kaboom', '{}', 'return')",
-        )
-        .unwrap();
+        let text: Option<String> =
+            Spi::get_one("SELECT mcp.call_tool_text('e2_api3', 'kaboom', '{}', 'return')").unwrap();
         assert_eq!(text.as_deref(), Some("the fuse is blown"));
         assert!(stub.hits("tools/call") >= 3);
     }
@@ -889,7 +885,10 @@ mod e2e_test {
         // dies in flight.
         let replies = map(vec![
             ("initialize", init_reply("api-drop")),
-            (TOOLS_LIST, Reply::Result(json!({"tools": [{"name": "echo"}]}))),
+            (
+                TOOLS_LIST,
+                Reply::Result(json!({"tools": [{"name": "echo"}]})),
+            ),
             ("tools/call", Reply::Disconnect),
         ]);
         let stub = StubServer::start(replies, false);
@@ -911,8 +910,15 @@ mod e2e_test {
         expect_sqlstate("SELECT mcp.call_tool('e2_api4', 'echo')", "08006", None);
         let fresh: Option<i32> =
             Spi::get_one("SELECT mcp.session_initialize_count('e2_api4')").unwrap();
-        assert_eq!(fresh, None, "the retried session failed too and was dropped");
-        assert!(stub.hits("initialize") >= 2, "re-opened: {}", stub.hits("initialize"));
+        assert_eq!(
+            fresh, None,
+            "the retried session failed too and was dropped"
+        );
+        assert!(
+            stub.hits("initialize") >= 2,
+            "re-opened: {}",
+            stub.hits("initialize")
+        );
 
         // Contrast: a JSON-RPC error is a *successful* exchange at the
         // transport level — `on_error` covers only `isError` results, so a
@@ -920,8 +926,14 @@ mod e2e_test {
         // it: one initialize serves N failed calls (FR-6.4).
         let error_replies = map(vec![
             ("initialize", init_reply("api-keep")),
-            (TOOLS_LIST, Reply::Result(json!({"tools": [{"name": "echo"}]}))),
-            ("tools/call", Reply::Error(-32000, "tool exploded".to_string())),
+            (
+                TOOLS_LIST,
+                Reply::Result(json!({"tools": [{"name": "echo"}]})),
+            ),
+            (
+                "tools/call",
+                Reply::Error(-32000, "tool exploded".to_string()),
+            ),
         ]);
         let keep = StubServer::start(error_replies, false);
         Spi::run(&format!(

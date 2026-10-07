@@ -192,10 +192,7 @@ mod tests {
             map(r#"{"type":["string","null"],"format":"uuid"}"#),
             ColumnType::Uuid
         );
-        assert_eq!(
-            map(r#"{"type":["integer","null"]}"#),
-            ColumnType::Int8
-        );
+        assert_eq!(map(r#"{"type":["integer","null"]}"#), ColumnType::Int8);
         // Two non-null branches: the lossless fallback.
         assert_eq!(
             map(r#"{"type":["string","integer","null"]}"#),
@@ -219,10 +216,7 @@ mod tests {
         assert_eq!(map(r#"{"allOf":[{"type":"string"}]}"#), ColumnType::Jsonb);
         // Even when the keyword *duplicates* a usable type, the keyword wins:
         // the shape is not the simple closed vocabulary.
-        assert_eq!(
-            map(r#"{"type":"string","oneOf":[]}"#),
-            ColumnType::Jsonb
-        );
+        assert_eq!(map(r#"{"type":"string","oneOf":[]}"#), ColumnType::Jsonb);
     }
 
     #[pgrx::pg_test]
@@ -251,10 +245,8 @@ mod tests {
 
     #[pgrx::pg_test]
     fn required_set_reads_the_required_array() {
-        let schema: Value = serde_json::from_str(
-            r#"{"required":["query","limit"],"properties":{}}"#,
-        )
-        .unwrap();
+        let schema: Value =
+            serde_json::from_str(r#"{"required":["query","limit"],"properties":{}}"#).unwrap();
         let req = required_set(&schema);
         assert!(req.contains("query") && req.contains("limit"));
         assert_eq!(req.len(), 2);
@@ -273,11 +265,13 @@ mod tests {
 
     #[pgrx::pg_test]
     fn properties_preserve_published_order() {
-        let schema: Value = serde_json::from_str(
-            r#"{"properties":{"query":{},"limit":{},"since":{}}}"#,
-        )
-        .unwrap();
-        let names: Vec<&str> = properties(&schema).unwrap().into_iter().map(|(n, _)| n).collect();
+        let schema: Value =
+            serde_json::from_str(r#"{"properties":{"query":{},"limit":{},"since":{}}}"#).unwrap();
+        let names: Vec<&str> = properties(&schema)
+            .unwrap()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
         assert_eq!(names, vec!["query", "limit", "since"]);
 
         assert!(properties(&serde_json::from_str::<Value>(r#"{}"#).unwrap()).is_none());
@@ -288,21 +282,22 @@ mod tests {
 
     #[pgrx::pg_test]
     fn enum_hint_renders_permitted_values_for_the_column_comment() {
-        let hint = enum_hint(&serde_json::from_str::<Value>(r#"{"enum":["low","mid","high"]}"#).unwrap())
-            .unwrap();
+        let hint =
+            enum_hint(&serde_json::from_str::<Value>(r#"{"enum":["low","mid","high"]}"#).unwrap())
+                .unwrap();
         assert_eq!(hint, "Permitted values: low, mid, high");
 
         // Non-string members render as JSON, not Rust debug output.
-        let hint =
-            enum_hint(&serde_json::from_str::<Value>(r#"{"enum":[1,true,null]}"#).unwrap())
-                .unwrap();
+        let hint = enum_hint(&serde_json::from_str::<Value>(r#"{"enum":[1,true,null]}"#).unwrap())
+            .unwrap();
         assert_eq!(hint, "Permitted values: 1, true, null");
 
         // An empty enum documents nothing (nothing is permitted; the comment
         // would be noise).
         assert!(enum_hint(&serde_json::from_str::<Value>(r#"{"enum":[]}"#).unwrap()).is_none());
-        assert!(enum_hint(&serde_json::from_str::<Value>(r#"{"type":"string"}"#).unwrap())
-            .is_none());
+        assert!(
+            enum_hint(&serde_json::from_str::<Value>(r#"{"type":"string"}"#).unwrap()).is_none()
+        );
     }
 }
 
@@ -324,15 +319,27 @@ mod host_tests {
     #[test]
     fn the_normative_rows_hold_host_side() {
         assert_eq!(map(r#"{"type":"string"}"#), ColumnType::Text);
-        assert_eq!(map(r#"{"type":"string","format":"date-time"}"#), ColumnType::TimestampTz);
-        assert_eq!(map(r#"{"type":"string","format":"date"}"#), ColumnType::Date);
-        assert_eq!(map(r#"{"type":"string","format":"uuid"}"#), ColumnType::Uuid);
+        assert_eq!(
+            map(r#"{"type":"string","format":"date-time"}"#),
+            ColumnType::TimestampTz
+        );
+        assert_eq!(
+            map(r#"{"type":"string","format":"date"}"#),
+            ColumnType::Date
+        );
+        assert_eq!(
+            map(r#"{"type":"string","format":"uuid"}"#),
+            ColumnType::Uuid
+        );
         assert_eq!(map(r#"{"type":"string","enum":["a"]}"#), ColumnType::Text);
         assert_eq!(map(r#"{"type":"integer"}"#), ColumnType::Int8);
         assert_eq!(map(r#"{"type":"number"}"#), ColumnType::Float8);
         assert_eq!(map(r#"{"type":"boolean"}"#), ColumnType::Boolean);
         assert_eq!(map(r#"{"type":"object"}"#), ColumnType::Jsonb);
-        assert_eq!(map(r#"{"type":"array","items":{"type":"string"}}"#), ColumnType::Jsonb);
+        assert_eq!(
+            map(r#"{"type":"array","items":{"type":"string"}}"#),
+            ColumnType::Jsonb
+        );
     }
 
     /// `true` and `false` are legal (trivial) JSON Schemas; both carry no type
@@ -390,11 +397,12 @@ mod host_tests {
     /// this module never looks at `const`, and `enum` is comment metadata.
     #[test]
     fn const_and_single_member_enum_map_like_their_base() {
-        assert_eq!(map(r#"{"const":"lit"}"#), ColumnType::Jsonb, "no type: fallback");
         assert_eq!(
-            map(r#"{"type":"string","const":"lit"}"#),
-            ColumnType::Text
+            map(r#"{"const":"lit"}"#),
+            ColumnType::Jsonb,
+            "no type: fallback"
         );
+        assert_eq!(map(r#"{"type":"string","const":"lit"}"#), ColumnType::Text);
         assert_eq!(map(r#"{"type":"integer","enum":[1]}"#), ColumnType::Int8);
     }
 
@@ -406,10 +414,21 @@ mod host_tests {
         assert_eq!(map(r#"{"type":["string"]}"#), ColumnType::Text);
         // `uuid` is not a §4.1 *type name* (it is a string format), so a
         // union of it falls back even with the format present.
-        assert_eq!(map(r#"{"type":["uuid","null"],"format":"uuid"}"#), ColumnType::Jsonb);
+        assert_eq!(
+            map(r#"{"type":["uuid","null"],"format":"uuid"}"#),
+            ColumnType::Jsonb
+        );
         assert_eq!(map(r#"{"type":["null","null"]}"#), ColumnType::Jsonb);
-        assert_eq!(map(r#"{"type":[["string"]]}"#), ColumnType::Jsonb, "nested arrays are not type names");
-        assert_eq!(map(r#"{"type":["string",42,"null"]}"#), ColumnType::Text, "non-string members skipped");
+        assert_eq!(
+            map(r#"{"type":[["string"]]}"#),
+            ColumnType::Jsonb,
+            "nested arrays are not type names"
+        );
+        assert_eq!(
+            map(r#"{"type":["string",42,"null"]}"#),
+            ColumnType::Text,
+            "non-string members skipped"
+        );
     }
 
     /// Deeply-nested property paths cannot loop: the map never recurses, so
@@ -433,7 +452,11 @@ mod host_tests {
                 "properties":{"z":{},"a":{},"m":{},"q":{},"b":{}}}"#,
         )
         .unwrap();
-        let names: Vec<&str> = properties(&schema).unwrap().into_iter().map(|(n, _)| n).collect();
+        let names: Vec<&str> = properties(&schema)
+            .unwrap()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
         assert_eq!(names, vec!["z", "a", "m", "q", "b"]);
         assert_eq!(required_list(&schema), vec!["z", "a", "m"]);
         // `required` naming a property that does not exist is kept verbatim
@@ -466,12 +489,21 @@ mod host_tests {
             }
         }
         for raw in [
-            "null", "true", "false", "0", "-1.5e3", r#""string""#, "[]",
-            r#"{"type":null}"#, r#"{"type":{}}"#, r#"{"TYPE":"string"}"#,
+            "null",
+            "true",
+            "false",
+            "0",
+            "-1.5e3",
+            r#""string""#,
+            "[]",
+            r#"{"type":null}"#,
+            r#"{"type":{}}"#,
+            r#"{"TYPE":"string"}"#,
             r##"{"$ref":"#/a","type":"string"}"##,
             r#"{"allOf":[],"anyOf":[],"oneOf":[]}"#,
             r#"{"type":"string","oneOf":[{"type":"integer"}]}"#,
-            r#"{"type":"STRING"}"#, r#"{"type":""}"#,
+            r#"{"type":"STRING"}"#,
+            r#"{"type":""}"#,
             r#"{"type":["string","null","null"]}"#,
             r#"{"format":"date-time"}"#,
             r#"{"properties":null}"#,

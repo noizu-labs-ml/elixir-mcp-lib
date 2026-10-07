@@ -13,7 +13,7 @@
 //!    with `insert`), with *all* `pg_sys` types kept out: a track writes plain
 //!    Rust against [`ScanContext`] / [`ModifyContext`] and returns [`Row`]s.
 //! 3. **The registry** — name → spec → handler. Every table is registered
-//!    with a real handler as of PRD-7's tracks A-D (the [`StubTable`]
+//!    with a real handler as of PRD-7's tracks A-D (the `StubTable`
 //!    placeholder — scans empty, refuses INSERT — remains as the tripwire
 //!    the `stub_handlers_*` tests exercise should a handler ever revert).
 //!    A track owns its table's *handler* only: the `handler:` line in
@@ -351,17 +351,23 @@ pub trait ForeignTable: Sync {
 /// Compile-clean placeholder: scans as empty, never does I/O, refuses INSERT.
 /// `SELECT * FROM mcp.tools` returns zero rows with this handler installed —
 /// which is the foundation's acceptance bar — while every PRD-6 behaviour
-/// stays untouched.
+/// stays untouched. Test-only now: every registry slot holds a real handler,
+/// but the stub stays so `is_stub_handler` can flag any slot that ever
+/// reverts to it.
+#[cfg(any(test, feature = "pg_test"))]
 struct StubTable;
 
+#[cfg(any(test, feature = "pg_test"))]
 struct EmptyCursor;
 
+#[cfg(any(test, feature = "pg_test"))]
 impl ScanCursor for EmptyCursor {
     fn iter_scan(&mut self) -> McpResult<Option<Row>> {
         Ok(None)
     }
 }
 
+#[cfg(any(test, feature = "pg_test"))]
 impl ForeignTable for StubTable {
     fn begin_scan(&self, _ctx: ScanContext) -> McpResult<Box<dyn ScanCursor>> {
         Ok(Box::new(EmptyCursor))
@@ -369,6 +375,7 @@ impl ForeignTable for StubTable {
 }
 
 /// The one stub instance every table is registered with.
+#[cfg(any(test, feature = "pg_test"))]
 static STUB_TABLE: StubTable = StubTable;
 
 // Track B's read-through handlers (PRD-7 §6 step 7.4).
@@ -1100,9 +1107,21 @@ mod host_tests {
     static LOCAL_SPEC: TableSpec = TableSpec {
         name: "local",
         columns: &[
-            ColumnSpec { name: "alpha", pg_type: ColumnType::Text, source: Source::ServerIdentity },
-            ColumnSpec { name: "beta", pg_type: ColumnType::Jsonb, source: Source::List("tools/list") },
-            ColumnSpec { name: "gamma", pg_type: ColumnType::Int4, source: Source::Local },
+            ColumnSpec {
+                name: "alpha",
+                pg_type: ColumnType::Text,
+                source: Source::ServerIdentity,
+            },
+            ColumnSpec {
+                name: "beta",
+                pg_type: ColumnType::Jsonb,
+                source: Source::List("tools/list"),
+            },
+            ColumnSpec {
+                name: "gamma",
+                pg_type: ColumnType::Int4,
+                source: Source::Local,
+            },
         ],
     };
 
@@ -1116,7 +1135,10 @@ mod host_tests {
         assert_eq!(Cell::Bool(false).as_json(), json!(false));
         assert_eq!(Cell::Int4(-7).as_json(), json!(-7));
         assert_eq!(Cell::Int8(i64::MIN).as_json(), json!(i64::MIN));
-        assert_eq!(Cell::Date("2026-09-06".into()).as_json(), json!("2026-09-06"));
+        assert_eq!(
+            Cell::Date("2026-09-06".into()).as_json(),
+            json!("2026-09-06")
+        );
         for cell in [
             Cell::Bytea(vec![0, 1, 2]),
             Cell::Uuid([0u8; 16]),

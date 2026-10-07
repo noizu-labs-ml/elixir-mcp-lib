@@ -7,39 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.3] — 2026-09-16
+## [0.5.0] — 2026-10-07
 
-Runtime fixes for the VFS layer and the `mcp-mount` daemon write-back path
-(PRs #28 and #29).
+Changes since 0.4.2 (667dfaa..8ccae8f, PRs #28–#34). User-facing features
+warrant a minor bump.
+
+### Added
+
+- **VFS backends:** directory-backed and database-backed VFS mounts.
+- **Dynamic resources/prompts CRUD** on VFS mounts (epic.content-crud-auth, #31).
+- **Declarative ACL scopes provider** for toolset authorization.
+- **RFC 7617 basic auth:** verifier, password upstream, scheme-aware challenges.
+- **Threat model** documentation for noizu_mcp (#31, #34).
 
 ### Fixed
 
-- **Generated `/README.md` served on any backend read error:** `Features.VFS.read/4`
-  fell back to the generated document only on `:enoent`; a backend answering any
-  other errno for the reserved path (observed in the wild: `:eisdir` from a real
-  consumer) propagated the error and killed the mounter client's daemon sync
-  path, which then reconnect-looped. `/README.md` is reserved and advertised by
-  the dispatcher itself, so read errors of any errno now fall back to the
-  generated document. Backend-wins is preserved on success — a backend serving
-  its own `README.md` is untouched. (`#28`)
-- **`/etc/dev/runtime/status` listed as a control node:** the runtime listing
-  emitted the entry as a directory while `stat` reported a `:control` node and
-  read served a file payload, so listing the path answered `:enotdir` on the
-  wire and walker clients that trust list's type queued it as a dir and
-  crash-looped. `stat` and `list` now agree the node is file-shaped. (`#28`)
-- **`mcp-mount` write-back amplifier, flush crash, and `/etc/**` churn:** a
-  `vfs/create` ack whose server-side path diverged re-pushed unboundedly
-  (duplicate resources in seconds) because the flush loop discarded the state
-  write-backs returned, leaving a stale in-memory manifest. Flush now threads
-  state through (ack-as-synced, with sha256 content-hash manifests so
-  watcher noise such as chmod/touch is never re-pushed), initial pushes cap at
-  3 retries then park the path with a `.conflict-<ts>` copy until the local
-  file changes, acked-but-unconfirmed strands park instead of re-creating, a
-  lost connection no longer crashes the flush loop (deferred, retried, and
-  flushed automatically after the reconnect resync), and `/etc/**` control
-  files are excluded from write-back (materialized and readable, never
-  watched, pushed, or conflict-saved) with the policy documented in a new
-  README "Write-back safety" section. (`#29`)
+- VFS README fallback on any read error; /etc/dev/runtime/status entry type (#28).
+- mcp-mount write-back amplifier, flush crash, /etc control churn (#29).
+- Persistence heir option 3-tuple (fixes  badarg on OTP 27).
+- Client: cancelled/timed-out async requests hold their terminal result for
+  late awaiters.
+
+### Internal
+
+- CI: elixir test workflow, compile-warning gate, sharded test suite with
+  per-shard databases, pg_mcp workflow startup fixes (#33, #36).
 
 ## [0.4.2] — 2026-09-16
 
