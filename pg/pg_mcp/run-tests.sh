@@ -20,10 +20,10 @@ set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "$0")" && pwd)"
 PG_MAJOR="${PG_MAJOR:-18}"
-case "$PG_MAJOR" in
-  16) PGBIN_DEFAULT="$HOME/.pgrx/16.15/pgrx-install/bin" ;;   # pgrx-managed pg16
-  *)  PGBIN_DEFAULT="/opt/homebrew/opt/postgresql@$PG_MAJOR/bin" ;;
-esac
+# Prefer the pgrx-managed toolchain for this major (Linux CI; local pg16);
+# fall back to a Homebrew install for locally installed majors.
+PGBIN_DEFAULT="$(ls -d "$HOME"/.pgrx/"$PG_MAJOR".*/pgrx-install/bin 2>/dev/null | head -1)"
+[ -z "$PGBIN_DEFAULT" ] && PGBIN_DEFAULT="/opt/homebrew/opt/postgresql@$PG_MAJOR/bin"
 PGBIN="${PGBIN:-$PGBIN_DEFAULT}"
 TOOLCHAIN="${TOOLCHAIN:-}"    # e.g. +1.98.1; empty = default
 KEEP="${1:-}"
