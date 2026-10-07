@@ -22,7 +22,7 @@ defmodule Noizu.MCP.Fixtures.PersistenceDB do
     use Ecto.Repo, otp_app: :noizu_mcp, adapter: Ecto.Adapters.Postgres
   end
 
-  defmacro __using__(_opts) do
+  defmacro __using__(opts) do
     quote do
       alias Noizu.MCP.Fixtures.PersistenceDB.TestRepo
 
@@ -42,7 +42,14 @@ defmodule Noizu.MCP.Fixtures.PersistenceDB do
         )
 
         # Way IN, not on_exit: the repo is stopped by then either way.
-        Noizu.MCP.Fixtures.PersistenceDB.drop_lib_tables!(TestRepo)
+        # Opt out with `drop_lib_tables: false` for async suites that never
+        # touch the lib tables (e.g. the VFS battery's mcp_vfs_test_*): an
+        # async:true drop can yank a `noizu_mcp_%` table out from under a
+        # concurrently-running async:false DB suite mid-test.
+        if unquote(Keyword.get(opts, :drop_lib_tables, true)) do
+          Noizu.MCP.Fixtures.PersistenceDB.drop_lib_tables!(TestRepo)
+        end
+
         :ok
       end
     end
