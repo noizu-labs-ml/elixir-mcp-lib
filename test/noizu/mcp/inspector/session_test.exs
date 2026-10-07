@@ -162,28 +162,63 @@ defmodule Noizu.MCP.Inspector.SessionTest do
 
   # ── 5. progress ───────────────────────────────────────────────────────────
 
+  # Wait for ONE event of each of the two types matching `matcher`, inside a
+  # single deadline. Unlike `assert_event`, other-type events are buffered in
+  # the accumulator rather than drained-and-discarded — which matters because
+  # `progress` and `call_result` are sent to this mailbox by DIFFERENT
+  # processes (the client's progress callback vs the completion awaiter), so
+  # their arrival order is not guaranteed: a progress-first wait that drains
+  # can permanently swallow the call_result that raced ahead of it, and the
+  # next wait times out against an event that already arrived (CI flake).
+  defp await_both(type_a, type_b, matcher, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_both(type_a, type_b, matcher, deadline, %{})
+  end
+
+  defp do_await_both(type_a, type_b, matcher, deadline, acc) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:inspector_event, %{event: type} = event} when type in [type_a, type_b] ->
+        acc = if matcher.(event), do: Map.put(acc, type, event), else: acc
+
+        if Map.has_key?(acc, type_a) and Map.has_key?(acc, type_b) do
+          {acc[type_a], acc[type_b]}
+        else
+          do_await_both(type_a, type_b, matcher, deadline, acc)
+        end
+
+      {:inspector_event, _other} ->
+        do_await_both(type_a, type_b, matcher, deadline, acc)
+    after
+      remaining ->
+        flunk("Timed out waiting for inspector_events #{inspect([type_a, type_b])}")
+    end
+  end
+
   describe "progress events" do
-    test "weather tool emits progress events before call_result" do
+    test "weather tool emits progress events and a call_result for the call" do
       session = start_session()
 
       {:ok, call_id} = Session.call_tool(session, "get_weather", %{"location" => "NYC"})
 
-      # Progress must arrive before call_result
-      progress_event =
-        assert_event("progress", fn %{data: data} ->
-          data["call_id"] == call_id
-        end)
+      {progress_event, result_event} =
+        await_both(
+          "progress",
+          "call_result",
+          fn %{data: data} -> data["call_id"] == call_id end,
+          5_000
+        )
 
       assert progress_event.data["name"] == "get_weather"
-
-      # call_result still arrives
-      result_event =
-        assert_event("call_result", fn %{data: data} ->
-          data["call_id"] == call_id
-        end)
-
       assert result_event.data["ok"] == true
-      assert progress_event.seq < result_event.seq
+
+      # No seq-ordering assertion across the two events: each `seq` is
+      # assigned in the inspector session process, but the two messages are
+      # QUEUED from different senders (progress callback vs completion
+      # awaiter), so their arrival order — and therefore their seq order —
+      # races. What IS ordered is the wire: the server session emits
+      # notifications/progress before the tools/call result on the transport.
     end
   end
 

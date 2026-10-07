@@ -14,9 +14,13 @@ defmodule Noizu.MCP.Auth.Server.Store.EctoTest do
   """
   use ExUnit.Case, async: false
 
-  @database_url System.get_env("MCP_OAUTH_TEST_DATABASE_URL")
-
-  if @database_url do
+  # Compile-time gate only: it picks gated-module-vs-skipped-module at build
+  # time, which is fine — a wrong pick is visible (a suite that runs or skips).
+  # The URL itself, though, is read at RUNTIME in setup_all below, never baked
+  # into an attribute: CI's shared _build cache once restored beams compiled by
+  # another shard with ITS database frozen in (run 37563402933 — the lesson
+  # recorded in fixture_persistence_db.ex applies here too).
+  if System.get_env("MCP_OAUTH_TEST_DATABASE_URL") do
     defmodule Repo do
       @moduledoc false
       use Ecto.Repo, otp_app: :noizu_mcp, adapter: Ecto.Adapters.Postgres
@@ -32,7 +36,9 @@ defmodule Noizu.MCP.Auth.Server.Store.EctoTest do
       # shutdown`, ExUnit reports "failure on setup_all callback", and every test
       # in this module is invalidated. That turns a 2-failure run into a
       # 36-failure one and buries whatever actually broke.
-      start_supervised!({Repo, url: @database_url, pool_size: 25, log: false})
+      start_supervised!(
+        {Repo, url: System.get_env("MCP_OAUTH_TEST_DATABASE_URL"), pool_size: 25, log: false}
+      )
 
       # Cleanup happens HERE, on the way in, not in an on_exit on the way out.
       # By the time an on_exit callback runs the repo is already stopped — linked

@@ -26,9 +26,7 @@ defmodule Noizu.MCP.Persistence.Memory do
   def put(store_key, id, record, _opts) when is_binary(id) do
     with :ok <- Persistence.guard_store_key(store_key),
          {:ok, json, _fields, meta} <- Persistence.encode_record(store_key, record) do
-      table()
-
-      :ets.insert(@table, {
+      put_row!({
         {store_key, id},
         json,
         meta.expires_at,
@@ -155,6 +153,26 @@ defmodule Noizu.MCP.Persistence.Memory do
 
   # ── internals ─────────────────────────────────────────────────────────────
 
+  # Insert through the retry-hardened table path. `:ets.insert` is the one
+  # unguarded ETS call in this module (lookup/list/delete/version all catch):
+  # between `table()` resolving the name and the insert landing, the table can
+  # momentarily not exist — a dying table's name stays registered long enough
+  # for `:ets.whereis` to report :undefined AND a racing `:ets.new` to raise
+  # badarg, so the loser of that race used to return a name that does not
+  # resolve and crash the insert (CI run 37544001176: ArgumentError in
+  # `Servers.insert` under full-suite load). Retry the ensure+insert instead:
+  # the table is self-healing, so a bounded second lap converges.
+  defp put_row!(row, attempts \\ 3) do
+    table()
+
+    try do
+      :ets.insert(@table, row)
+    catch
+      :error, :badarg when attempts > 1 ->
+        put_row!(row, attempts - 1)
+    end
+  end
+
   defp lookup(store_key, id) do
     try do
       :ets.lookup(@table, {store_key, id})
@@ -196,34 +214,50 @@ defmodule Noizu.MCP.Persistence.Memory do
 
   # Lazily-created named public table; the catch makes the create race-safe
   # (the loser of a race keeps using the winner's table) — same posture as
-  # Noizu.MCP.Toolset.Cache.
-  defp table do
+  # Noizu.MCP.Toolset.Cache. Losing the race is only fine when the winner's
+  # table is LIVE: a name can also raise badarg while occupied by a table in
+  # its death throes (heir raced away before the creator's transfer landed),
+  # where `:ets.whereis` reports :undefined on the next look. Retry a bounded
+  # number of laps so a caller never walks away holding a name that does not
+  # resolve.
+  defp table, do: table(3)
+
+  defp table(0), do: @table
+
+  defp table(attempts) do
     case :ets.whereis(@table) do
       :undefined ->
         owner = spawn_table_owner()
 
-        try do
-          :ets.new(@table, [
-            :named_table,
-            :public,
-            # PRD-11: a put can arrive from an EPHEMERAL process (a session
-            # handler task). Without an heir the table would die with its
-            # creator, silently dropping every stored record — so ownership
-            # transfers to a parked owner process that never exits.
-            # The 3-tuple form is required: the `{heir, pid}` 2-tuple
-            # shorthand raises badarg on OTP 27 (fine on OTP 28+).
-            {:heir, owner, @table},
-            read_concurrency: true,
-            write_concurrency: true
-          ])
-        catch
-          _kind, _reason -> :ok
+        created =
+          try do
+            :ets.new(@table, [
+              :named_table,
+              :public,
+              # PRD-11: a put can arrive from an EPHEMERAL process (a session
+              # handler task). Without an heir the table would die with its
+              # creator, silently dropping every stored record — so ownership
+              # transfers to a parked owner process that never exits.
+              # The 3-tuple form is required: the `{heir, pid}` 2-tuple
+              # shorthand raises badarg on OTP 27 (fine on OTP 28+).
+              {:heir, owner, @table},
+              read_concurrency: true,
+              write_concurrency: true
+            ])
+
+            true
+          catch
+            _kind, _reason -> false
+          end
+
+        if created or :ets.whereis(@table) != :undefined do
+          @table
+        else
+          table(attempts - 1)
         end
 
+      _ref ->
         @table
-
-      ref ->
-        ref
     end
   end
 
