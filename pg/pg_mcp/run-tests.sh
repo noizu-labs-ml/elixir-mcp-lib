@@ -83,7 +83,16 @@ done
 echo "== initdb + start on port $PORT"
 rm -rf "$WORK/data" "$SOCK"
 mkdir -p "$SOCK"
-"$PGBIN/initdb" --locale=C --lc-ctype=UTF-8 -D "$WORK/data" > "$WORK/initdb.log" 2>&1
+# Surface cluster logs on early death — initdb/pg_ctl failures are otherwise
+# buried in these files with nothing on the console.
+dump_logs() {
+  for f in initdb.log postgres.log; do
+    [ -f "$WORK/$f" ] && { echo "--- $f (tail) ---" >&2; tail -15 "$WORK/$f" >&2; }
+  done
+}
+if ! "$PGBIN/initdb" --locale=C --lc-ctype=UTF-8 -D "$WORK/data" > "$WORK/initdb.log" 2>&1; then
+  dump_logs; exit 1
+fi
 cat >> "$WORK/data/postgresql.conf" <<EOF
 port = $PORT
 unix_socket_directories = '$SOCK'
@@ -95,7 +104,9 @@ unix_socket_directories = '$SOCK'
 dynamic_library_path = '$WORK:\$libdir'
 listen_addresses = ''
 EOF
-"$PGBIN/pg_ctl" -D "$WORK/data" -l "$WORK/postgres.log" start -w > /dev/null
+if ! "$PGBIN/pg_ctl" -D "$WORK/data" -l "$WORK/postgres.log" start -w > /dev/null; then
+  dump_logs; exit 1
+fi
 
 cleanup() {
   if [ "$KEEP" != "--keep" ]; then
