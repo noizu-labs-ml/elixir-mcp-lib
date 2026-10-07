@@ -139,7 +139,7 @@ defmodule Noizu.MCP.Persistence.Memory do
   conformance battery needs a store that starts empty; production callers have
   no business resetting a shared table.
   """
-  # ⟦𓊪𓅱𓏏⟧ reset :: Wipe every row (records AND version counters). Test/dev hygiene only — the.
+  # <REMOVED UUID HERE> reset :: Wipe every row (records AND version counters). Test/dev hygiene only — the.
   @spec reset() :: :ok
   def reset do
     try do

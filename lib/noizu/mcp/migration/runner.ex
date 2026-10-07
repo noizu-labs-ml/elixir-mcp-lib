@@ -35,7 +35,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     # ── up / down ─────────────────────────────────────────────────────────────
 
     @doc "Apply pending sets in order up to `to:` (default `:latest`)."
-    # ⟦𓎼𓊪⟧ up :: Apply pending sets in order up to `to:` (default `:latest`).
+    # <REMOVED UUID HERE> up :: Apply pending sets in order up to `to:` (default `:latest`).
     @spec up(module(), module(), keyword()) ::
             {:ok, [%{name: String.t(), version: integer()}]} | {:error, term()}
     def up(repo, migrations, opts \\ []) do
@@ -62,7 +62,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     end
 
     @doc "Revert applied sets in reverse order down to `to:` (required)."
-    # ⟦𓂧𓍯𓍢𓈖⟧ down :: Revert applied sets in reverse order down to `to:` (required).
+    # <REMOVED UUID HERE> down :: Revert applied sets in reverse order down to `to:` (required).
     @spec down(module(), module(), keyword()) ::
             {:ok, [%{name: String.t(), version: integer()}]} | {:error, term()}
     def down(repo, migrations, opts) do
@@ -92,7 +92,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     # ── introspection ─────────────────────────────────────────────────────────
 
     @doc "The ledger rows: `{:ok, [%{name, version, applied_at}]}` ordered by version."
-    # ⟦𓄿𓊪𓊪𓃭𓇋𓅂𓂧⟧ applied :: The ledger rows.
+    # <REMOVED UUID HERE> applied :: The ledger rows.
     @spec applied(module()) :: {:ok, [applied()]} | {:error, term()}
     def applied(repo) do
       with {:ok, _} <- ensure_versions_table(repo) do
@@ -114,7 +114,7 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     end
 
     @doc "Per-set `:applied | :pending` state for `migrations`."
-    # ⟦𓋴𓏏𓄿𓏏𓎲𓋴⟧ status :: Per-set `:applied | :pending` state for `migrations`.
+    # <REMOVED UUID HERE> status :: Per-set `:applied | :pending` state for `migrations`.
     @spec status(module(), module()) :: {:ok, [state()]} | {:error, term()}
     def status(repo, migrations) do
       with {:ok, _} <- ensure_versions_table(repo) do

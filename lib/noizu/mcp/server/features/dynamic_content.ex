@@ -89,7 +89,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   # ── registration config ───────────────────────────────────────────────────
 
   @doc "The server's `content/1,2` registrations: `[{backend, opts}]`."
-  # ⟦𓆒⟧ configs
+  # <REMOVED UUID HERE> configs
   def configs(server) do
     server.__mcp__(:content)
   rescue
@@ -118,7 +118,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   mount at all rather than falling through to the content backend ungated.
   `nil`/blank paths resolve to the first registered backend.
   """
-  # ⟦𓆒⟧ mount_for
+  # <REMOVED UUID HERE> mount_for
   def mount_for(_server, mounts, nil), do: first_mount(mounts)
 
   def mount_for(server, mounts, path) when is_binary(path) do
@@ -152,7 +152,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   glob, mirroring `Noizu.MCP.Auth.Principal.has_scope?/2`. Missing scope is
   `:eacces`; paths outside every content prefix pass untouched.
   """
-  # ⟦𓆒⟧ write_gate
+  # <REMOVED UUID HERE> write_gate
   def write_gate(server, path, ctx) do
     case Enum.find_value(configs(server), fn {_backend, opts} ->
            scope = opts[:write_scope]
@@ -208,7 +208,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   `notify_changed(:prompts)` for the prompts prefix. Mutations outside
   every content prefix are a no-op.
   """
-  # ⟦𓆒⟧ after_mutation
+  # <REMOVED UUID HERE> after_mutation
   def after_mutation(server, path) do
     for {_backend, opts} <- configs(server),
         match = match_prefix(opts, path) do
@@ -236,7 +236,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   # ── resources ─────────────────────────────────────────────────────────────
 
   @doc "Default `handle_list_resources` over static registrations + content mounts."
-  # ⟦𓆒⟧ list_resources
+  # <REMOVED UUID HERE> list_resources
   def list_resources(server, resources, templates, cursor, ctx) do
     case dynamic_resources(server, ctx) do
       [] ->
@@ -250,7 +250,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   end
 
   @doc "Default `handle_read_resource`: content-scheme URIs read off the mount, else static dispatch."
-  # ⟦𓆒⟧ read_resource
+  # <REMOVED UUID HERE> read_resource
   def read_resource(server, resources, templates, uri, ctx) do
     case resolve_uri(server, uri, ctx) do
       nil ->
@@ -279,7 +279,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   end
 
   @doc "Subscribe check: content-scheme resource URIs are subscribable (writes fan `notify_resource_updated/1`). `:pass` falls through to the static registry check."
-  # ⟦𓆒⟧ check_subscribe
+  # <REMOVED UUID HERE> check_subscribe
   def check_subscribe(server, uri, ctx) do
     case resolve_uri(server, uri, ctx, :resources) do
       {_backend, _opts, _path} -> :ok
@@ -361,7 +361,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   defp candidate_prefixes(opts, key), do: if(opts[key], do: [opts[key]], else: [])
 
   @doc "The `content://` URI for a vfs path under a registration's resources prefix."
-  # ⟦𓆒⟧ dynamic_uri
+  # <REMOVED UUID HERE> dynamic_uri
   def dynamic_uri(opts, vfs_path) do
     scheme = opts[:uri_scheme] || "content"
     prefix = norm(opts[:resources])
@@ -409,7 +409,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   # ── prompts ───────────────────────────────────────────────────────────────
 
   @doc "Default `handle_list_prompts` over static registrations + content mounts."
-  # ⟦𓆒⟧ list_prompts
+  # <REMOVED UUID HERE> list_prompts
   def list_prompts(server, prompts, cursor, ctx) do
     case dynamic_prompts(server, ctx) do
       [] ->
@@ -423,7 +423,7 @@ defmodule Noizu.MCP.Server.Features.DynamicContent do
   end
 
   @doc "Default `handle_get_prompt`: static dispatch first, then content-mount JSON prompts."
-  # ⟦𓆒⟧ get_prompt
+  # <REMOVED UUID HERE> get_prompt
   def get_prompt(server, prompts, name, args, ctx) do
     case Prompts.find(prompts, name) do
       {_module, _opts} ->

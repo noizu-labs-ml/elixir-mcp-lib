@@ -56,7 +56,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
 
   @doc "Connect to the VFS socket at `path`. Does not authenticate."
   @spec connect(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
-  # ⟦𓍝𓊝𓄿⟧ connect :: Connect to the VFS socket at `path`. Does not authenticate.
+  # <REMOVED UUID HERE> connect :: Connect to the VFS socket at `path`. Does not authenticate.
   def connect(path, opts \\ []) do
     case :gen_tcp.connect(
            {:local, String.to_charlist(path)},
@@ -72,7 +72,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
   @doc "Authenticate the connection with `api_key`. Must be the first call."
   @spec auth(t(), String.t(), keyword()) ::
           {:ok, map()} | {:error, map() | term()}
-  # ⟦𓂃𓎛𓃦⟧ auth :: Authenticate the connection with `api_key`. Must be the first call.
+  # <REMOVED UUID HERE> auth :: Authenticate the connection with `api_key`. Must be the first call.
   def auth(client, api_key, opts \\ []) do
     case request(client, "vfs/auth", %{"api_key" => api_key}, opts) do
       {:ok, result} -> {:ok, result}
@@ -82,7 +82,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
 
   @doc "vfs/stat: node metadata for `path`."
   @spec stat(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓊓𓃰𓁶⟧ stat :: vfs/stat: node metadata for `path`.
+  # <REMOVED UUID HERE> stat :: vfs/stat: node metadata for `path`.
   def stat(client, path, _opts \\ []), do: request(client, "vfs/stat", %{"path" => path})
 
   @doc """
@@ -90,7 +90,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
   Returns `{"entries" => [...], "nextCursor" => "..." (when more remain)}`.
   """
   @spec list(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓃔𓍱𓆏⟧ list :: vfs/list: children of `path`. Options: `:cursor` to fetch the next page.
+  # <REMOVED UUID HERE> list :: vfs/list: children of `path`. Options: `:cursor` to fetch the next page.
   def list(client, path, opts \\ []) do
     params = %{"path" => path} |> put_opt("cursor", opts[:cursor])
     request(client, "vfs/list", params)
@@ -101,7 +101,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
   Option: `:version` (optimistic concurrency check).
   """
   @spec read(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓆓𓁢𓍺⟧ read :: vfs/read: `{"content" => binary, "version" => int}` for `path`. Option: `:version`.
+  # <REMOVED UUID HERE> read :: vfs/read: `{"content" => binary, "version" => int}` for `path`. Option: `:version`.
   def read(client, path, opts \\ []) do
     params = %{"path" => path} |> put_opt("version", opts[:version])
     request(client, "vfs/read", params)
@@ -109,7 +109,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
 
   @doc "vfs/write: overwrite `path` with `data`."
   @spec write(t(), String.t(), binary(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓁂𓆑𓊩⟧ write :: vfs/write: overwrite `path` with `data`.
+  # <REMOVED UUID HERE> write :: vfs/write: overwrite `path` with `data`.
   def write(client, path, data, _opts \\ []),
     do: request(client, "vfs/write", %{"path" => path, "data" => data})
 
@@ -119,7 +119,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
   """
   @spec create(t(), String.t(), binary() | nil, keyword()) ::
           {:ok, map()} | {:error, map() | term()}
-  # ⟦𓄰𓍨𓎁⟧ create :: vfs/create: make `path`; `nil` data creates a directory, a binary makes a file.
+  # <REMOVED UUID HERE> create :: vfs/create: make `path`; `nil` data creates a directory, a binary makes a file.
   def create(client, path, data \\ nil, _opts \\ []) do
     params = %{"path" => path} |> put_opt("data", data)
     request(client, "vfs/create", params)
@@ -127,7 +127,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
 
   @doc "vfs/remove: delete `path`."
   @spec remove(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓉾𓊬𓂋⟧ remove :: vfs/remove: delete `path`.
+  # <REMOVED UUID HERE> remove :: vfs/remove: delete `path`.
   def remove(client, path, _opts \\ []), do: request(client, "vfs/remove", %{"path" => path})
 
   @doc """
@@ -135,7 +135,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
   `:cursor`. Returns `{"matches" => [...], "nextCursor" => ...}`.
   """
   @spec search(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓍄𓋹𓆗⟧ search :: vfs/search: line matches for `query` under `root` (default `"/"`). Option: `:cursor`.
+  # <REMOVED UUID HERE> search :: vfs/search: line matches for `query` under `root` (default `"/"`). Option: `:cursor`.
   def search(client, query, opts \\ []) do
     params =
       %{"query" => query}
@@ -147,7 +147,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
 
   @doc "vfs/xattr: extended attributes for `path`."
   @spec xattr(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
-  # ⟦𓇢𓎛𓂀⟧ xattr :: vfs/xattr: extended attributes for `path`.
+  # <REMOVED UUID HERE> xattr :: vfs/xattr: extended attributes for `path`.
   def xattr(client, path, _opts \\ []), do: request(client, "vfs/xattr", %{"path" => path})
 
   @doc """
@@ -157,7 +157,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
   """
   @spec request(t(), String.t(), map() | nil, keyword()) ::
           {:ok, map()} | {:error, map() | term()}
-  # ⟦𓍝𓆡𓇳⟧ request :: Send one request and await its response.
+  # <REMOVED UUID HERE> request :: Send one request and await its response.
   def request(client, method, params, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     id = :erlang.unique_integer([:positive, :monotonic])
@@ -178,7 +178,7 @@ defmodule Noizu.MCP.Transport.VFSClient do
 
   @doc "Close the connection."
   @spec close(t()) :: :ok
-  # ⟦𓊝𓁼𓍁⟧ close :: Close the connection.
+  # <REMOVED UUID HERE> close :: Close the connection.
   def close(%__MODULE__{socket: socket}) do
     :gen_tcp.close(socket)
     :ok

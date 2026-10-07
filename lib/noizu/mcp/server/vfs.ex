@@ -15,7 +15,7 @@ defmodule Noizu.MCP.Server.VFS do
   @mutators [:write, :create, :remove]
 
   @doc "True when the backend can mutate the tree."
-  # ⟦𓆒⟧ write_capable?
+  # <REMOVED UUID HERE> write_capable?
   @spec write_capable?(module()) :: boolean()
   def write_capable?(backend) do
     case implemented(backend) do
@@ -29,7 +29,7 @@ defmodule Noizu.MCP.Server.VFS do
   end
 
   @doc "Capability map contributed by a registered backend: `%{\"vfs\" => bool, \"vfs_write\" => bool}`."
-  # ⟦𓆒⟧ capabilities
+  # <REMOVED UUID HERE> capabilities
   @spec capabilities(module()) :: %{String.t() => boolean()}
   def capabilities(backend) do
     %{"vfs" => true, "vfs_write" => write_capable?(backend)}

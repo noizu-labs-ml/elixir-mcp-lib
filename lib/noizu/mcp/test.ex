@@ -45,7 +45,7 @@ defmodule Noizu.MCP.Test do
   `:protocol_version`.
   """
   @spec connect(module(), keyword()) :: %Client{}
-  # ⟦𓇀𓅦𓄃𓏎⟧ connect :: Start a session against `server` (a `use Noizu.MCP.Server` module) and run
+  # <REMOVED UUID HERE> connect :: Start a session against `server` (a `use Noizu.MCP.Server` module) and run
   def connect(server, opts \\ []) do
     ensure_server_started(server)
 
@@ -86,7 +86,7 @@ defmodule Noizu.MCP.Test do
   callers — waits until the tree is fully started before returning.
   """
   @spec ensure_server_started(module()) :: :ok
-  # ⟦𓂋𓄡𓌀𓏉⟧ ensure_server_started :: Ensure `server`'s supervision tree is running (shared across tests),
+  # <REMOVED UUID HERE> ensure_server_started :: Ensure `server`'s supervision tree is running (shared across tests),
   def ensure_server_started(server) do
     case Process.whereis(server) do
       nil ->
@@ -127,7 +127,7 @@ defmodule Noizu.MCP.Test do
   @doc "Send a request and await its result. Returns `{:ok, result} | {:error, error_map}`."
   @spec request(%Client{}, String.t(), map() | nil, keyword()) ::
           {:ok, map()} | {:error, map()}
-  # ⟦𓂕𓀂𓈬𓌰⟧ request :: auto-generated pointer for public function request
+  # <REMOVED UUID HERE> request :: auto-generated pointer for public function request
   def request(%Client{} = client, method, params \\ nil, opts \\ []) do
     id = send_request(client, method, params, opts)
     await(client, id, opts)
@@ -135,7 +135,7 @@ defmodule Noizu.MCP.Test do
 
   @doc "Send a request and return its id without awaiting the response."
   @spec send_request(%Client{}, String.t(), map() | nil, keyword()) :: integer()
-  # ⟦𓁎𓎼𓌮𓊚⟧ send_request :: Send a request and return its id without awaiting the response.
+  # <REMOVED UUID HERE> send_request :: Send a request and return its id without awaiting the response.
   def send_request(%Client{} = client, method, params \\ nil, opts \\ []) do
     :counters.add(client.counter, 1, 1)
     id = :counters.get(client.counter, 1)
@@ -145,7 +145,7 @@ defmodule Noizu.MCP.Test do
 
   @doc "Await the response for a previously sent request id."
   @spec await(%Client{}, integer(), keyword()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓌉𓁺𓂒𓌟⟧ await :: Await the response for a previously sent request id.
+  # <REMOVED UUID HERE> await :: Await the response for a previously sent request id.
   def await(%Client{} = client, id, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -154,14 +154,14 @@ defmodule Noizu.MCP.Test do
 
   @doc "Send a notification to the server."
   @spec notify(%Client{}, String.t(), map() | nil) :: :ok
-  # ⟦𓈄𓎢𓌔𓍍⟧ notify :: Send a notification to the server.
+  # <REMOVED UUID HERE> notify :: Send a notification to the server.
   def notify(%Client{} = client, method, params \\ nil) do
     deliver(client, %Notification{method: method, params: params})
   end
 
   @doc "Send `notifications/cancelled` for an in-flight request id."
   @spec cancel(%Client{}, integer(), String.t() | nil) :: :ok
-  # ⟦𓏗𓎌𓌝𓐕⟧ cancel :: Send `notifications/cancelled` for an in-flight request id.
+  # <REMOVED UUID HERE> cancel :: Send `notifications/cancelled` for an in-flight request id.
   def cancel(%Client{} = client, id, reason \\ nil) do
     params = %{"requestId" => id}
     params = if reason, do: Map.put(params, "reason", reason), else: params
@@ -170,7 +170,7 @@ defmodule Noizu.MCP.Test do
 
   @doc "Send a raw wire binary (escape hatch for malformed-input tests)."
   @spec deliver_raw(%Client{}, binary()) :: :ok
-  # ⟦𓉖𓆢𓇶𓏂⟧ deliver_raw :: Send a raw wire binary (escape hatch for malformed-input tests).
+  # <REMOVED UUID HERE> deliver_raw :: Send a raw wire binary (escape hatch for malformed-input tests).
   def deliver_raw(%Client{} = client, binary), do: Session.deliver(client.session, binary)
 
   # `opts[:claims]` scopes the request's principal (PRD-2 per-request identity):
@@ -190,7 +190,7 @@ defmodule Noizu.MCP.Test do
   @doc "Call a tool. Returns `{:ok, %ToolResult{}} | {:error, error_map}`. Args use string keys."
   @spec call_tool(%Client{}, String.t(), map(), keyword()) ::
           {:ok, ToolResult.t()} | {:error, map()}
-  # ⟦𓋀𓏿𓅓𓇝⟧ call_tool :: auto-generated pointer for public function call_tool
+  # <REMOVED UUID HERE> call_tool :: auto-generated pointer for public function call_tool
   def call_tool(%Client{} = client, name, args \\ %{}, opts \\ []) do
     params = %{"name" => name, "arguments" => args}
 
@@ -208,7 +208,7 @@ defmodule Noizu.MCP.Test do
 
   @doc "List all tools (auto-paginates). Returns `{:ok, [%Tool{}]} | {:error, error_map}`."
   @spec list_tools(%Client{}, keyword()) :: {:ok, [Tool.t()]} | {:error, map()}
-  # ⟦𓂀𓎸𓌄𓆏⟧ list_tools :: List all tools (auto-paginates).
+  # <REMOVED UUID HERE> list_tools :: List all tools (auto-paginates).
   def list_tools(%Client{} = client, opts \\ []) do
     collect_pages(client, "tools/list", "tools", &Tool.from_map/1, nil, [], opts)
   end
@@ -234,7 +234,7 @@ defmodule Noizu.MCP.Test do
   @doc "Read a resource. Returns `{:ok, [%ResourceContents{}]} | {:error, error_map}`."
   @spec read_resource(%Client{}, String.t(), keyword()) ::
           {:ok, [Noizu.MCP.Types.ResourceContents.t()]} | {:error, map()}
-  # ⟦𓍻𓄽𓇺𓎜⟧ read_resource :: auto-generated pointer for public function read_resource
+  # <REMOVED UUID HERE> read_resource :: auto-generated pointer for public function read_resource
   def read_resource(%Client{} = client, uri, opts \\ []) do
     case request(client, "resources/read", %{"uri" => uri}, opts) do
       {:ok, result} ->
@@ -248,7 +248,7 @@ defmodule Noizu.MCP.Test do
   @doc "List all resources (auto-paginates). Returns `{:ok, [%Resource{}]}`."
   @spec list_resources(%Client{}, keyword()) ::
           {:ok, [Noizu.MCP.Types.Resource.t()]} | {:error, map()}
-  # ⟦𓁛𓋒𓀒𓏼⟧ list_resources :: auto-generated pointer for public function list_resources
+  # <REMOVED UUID HERE> list_resources :: auto-generated pointer for public function list_resources
   def list_resources(%Client{} = client, opts \\ []) do
     collect_pages(
       client,
@@ -264,7 +264,7 @@ defmodule Noizu.MCP.Test do
   @doc "List all resource templates (auto-paginates)."
   @spec list_resource_templates(%Client{}, keyword()) ::
           {:ok, [Noizu.MCP.Types.ResourceTemplate.t()]} | {:error, map()}
-  # ⟦𓏄𓎆𓌡𓎜⟧ list_resource_templates :: auto-generated pointer for public function list_resource_templates
+  # <REMOVED UUID HERE> list_resource_templates :: auto-generated pointer for public function list_resource_templates
   def list_resource_templates(%Client{} = client, opts \\ []) do
     collect_pages(
       client,
@@ -279,14 +279,14 @@ defmodule Noizu.MCP.Test do
 
   @doc "Subscribe to resource update notifications for `uri`."
   @spec subscribe(%Client{}, String.t()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓋸𓌵𓀮𓉾⟧ subscribe :: Subscribe to resource update notifications for `uri`.
+  # <REMOVED UUID HERE> subscribe :: Subscribe to resource update notifications for `uri`.
   def subscribe(%Client{} = client, uri) do
     request(client, "resources/subscribe", %{"uri" => uri})
   end
 
   @doc "Unsubscribe from resource update notifications for `uri`."
   @spec unsubscribe(%Client{}, String.t()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓄧𓅡𓍂𓋀⟧ unsubscribe :: Unsubscribe from resource update notifications for `uri`.
+  # <REMOVED UUID HERE> unsubscribe :: Unsubscribe from resource update notifications for `uri`.
   def unsubscribe(%Client{} = client, uri) do
     request(client, "resources/unsubscribe", %{"uri" => uri})
   end
@@ -294,7 +294,7 @@ defmodule Noizu.MCP.Test do
   @doc "List all prompts (auto-paginates). Returns `{:ok, [%Prompt{}]}`."
   @spec list_prompts(%Client{}, keyword()) ::
           {:ok, [Noizu.MCP.Types.Prompt.t()]} | {:error, map()}
-  # ⟦𓅪𓂽𓌃𓐨⟧ list_prompts :: auto-generated pointer for public function list_prompts
+  # <REMOVED UUID HERE> list_prompts :: auto-generated pointer for public function list_prompts
   def list_prompts(%Client{} = client, opts \\ []) do
     collect_pages(
       client,
@@ -312,7 +312,7 @@ defmodule Noizu.MCP.Test do
   Args use string keys.
   """
   @spec get_prompt(%Client{}, String.t(), map(), keyword()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓈁𓅿𓌅𓊎⟧ get_prompt :: Get a prompt.
+  # <REMOVED UUID HERE> get_prompt :: Get a prompt.
   def get_prompt(%Client{} = client, name, args \\ %{}, opts \\ []) do
     case request(client, "prompts/get", %{"name" => name, "arguments" => args}, opts) do
       {:ok, result} ->
@@ -333,7 +333,7 @@ defmodule Noizu.MCP.Test do
   `{:ok, %{values: _, total: _, has_more: _}}`.
   """
   @spec complete(%Client{}, tuple(), String.t(), String.t()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓈁𓇌𓈲𓊜⟧ complete :: Request completion values.
+  # <REMOVED UUID HERE> complete :: Request completion values.
   def complete(%Client{} = client, ref, arg_name, value) do
     ref_map =
       case ref do
@@ -359,7 +359,7 @@ defmodule Noizu.MCP.Test do
 
   @doc "Set the MCP log level for this session."
   @spec set_log_level(%Client{}, atom() | String.t()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓂸𓐞𓆑𓈎⟧ set_log_level :: Set the MCP log level for this session.
+  # <REMOVED UUID HERE> set_log_level :: Set the MCP log level for this session.
   def set_log_level(%Client{} = client, level) do
     request(client, "logging/setLevel", %{"level" => to_string(level)})
   end
@@ -375,7 +375,7 @@ defmodule Noizu.MCP.Test do
   (PRD-9 FR-9.12); `:timeout`.
   """
   @spec sql_schema(%Client{}, keyword()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓍜𓎏𓋰𓃭⟧ sql_schema :: Call `sql/schema` (PRD-9).
+  # <REMOVED UUID HERE> sql_schema :: Call `sql/schema` (PRD-9).
   def sql_schema(%Client{} = client, opts \\ []) do
     sql_request(client, "sql/schema", %{}, opts)
   end
@@ -390,7 +390,7 @@ defmodule Noizu.MCP.Test do
   — rows are positional against `columns` (PRD-9 §4.5).
   """
   @spec sql_scan(%Client{}, String.t(), keyword()) :: {:ok, map()} | {:error, map()}
-  # ⟦𓄿𓆗𓋹𓍝⟧ sql_scan :: Call `sql/scan` for `relation` (PRD-9).
+  # <REMOVED UUID HERE> sql_scan :: Call `sql/scan` for `relation` (PRD-9).
   def sql_scan(%Client{} = client, relation, opts \\ []) do
     params =
       %{"relation" => relation}
@@ -410,7 +410,7 @@ defmodule Noizu.MCP.Test do
   """
   @spec sql_modify(%Client{}, String.t(), :insert | :update | :delete, keyword(), keyword()) ::
           {:ok, map()} | {:error, map()}
-  # ⟦𓎼𓍁𓅃𓆓⟧ sql_modify :: Call `sql/modify` for `relation` (PRD-9).
+  # <REMOVED UUID HERE> sql_modify :: Call `sql/modify` for `relation` (PRD-9).
   def sql_modify(%Client{} = client, relation, op, args \\ [], opts \\ [])
       when op in [:insert, :update, :delete] do
     params =
@@ -502,7 +502,7 @@ defmodule Noizu.MCP.Test do
   notification params.
   """
   @spec assert_notification(%Client{}, String.t(), map() | nil, keyword()) :: map() | nil
-  # ⟦𓇉𓃑𓈪𓍘⟧ assert_notification :: Assert the server emitted a notification with `method`; returns its params.
+  # <REMOVED UUID HERE> assert_notification :: Assert the server emitted a notification with `method`; returns its params.
   def assert_notification(%Client{} = client, method, match \\ nil, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -518,14 +518,14 @@ defmodule Noizu.MCP.Test do
 
   @doc "Assert the server emitted at least one `notifications/progress`; returns its params."
   @spec assert_progress(%Client{}, keyword()) :: map()
-  # ⟦𓍰𓎩𓉱𓎷⟧ assert_progress :: Assert the server emitted at least one `notifications/progress`; returns its params.
+  # <REMOVED UUID HERE> assert_progress :: Assert the server emitted at least one `notifications/progress`; returns its params.
   def assert_progress(%Client{} = client, opts \\ []) do
     assert_notification(client, "notifications/progress", nil, opts)
   end
 
   @doc "Assert no notification with `method` arrives within `opts[:timeout]` (default 100ms)."
   @spec refute_notification(%Client{}, String.t(), keyword()) :: :ok
-  # ⟦𓍁𓄮𓊦𓈬⟧ refute_notification :: Assert no notification with `method` arrives within `opts[:timeout]` (default 100ms).
+  # <REMOVED UUID HERE> refute_notification :: Assert no notification with `method` arrives within `opts[:timeout]` (default 100ms).
   def refute_notification(%Client{} = client, method, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 100)
     deadline = System.monotonic_time(:millisecond) + timeout

@@ -39,7 +39,7 @@ defmodule Noizu.MCP.Toolset.Cache do
   Memoized composed catalog for `key`, or `:miss` (absent, TTL-expired — the
   row is dropped lazily — or the table never existed).
   """
-  # ⟦𓋴𓄿𓎡𓉔𓅱⟧ get :: Memoized composed catalog for `key`, or `:miss` (absent, TTL-expired — the row is dropped lazily — or the table never existed).
+  # <REMOVED UUID HERE> get :: Memoized composed catalog for `key`, or `:miss` (absent, TTL-expired — the row is dropped lazily — or the table never existed).
   @spec get(key()) :: {:ok, composed()} | :miss
   def get(key) do
     case :ets.lookup(table(), key) do
@@ -60,7 +60,7 @@ defmodule Noizu.MCP.Toolset.Cache do
   end
 
   @doc "Memoize `composed` under `key`. `opts`: `[ttl: ms]` (default 60_000)."
-  # ⟦𓊪𓅱𓏏⟧ put :: Memoize `composed` under `key`. `opts`: `[ttl: ms]` (default 60_000).
+  # <REMOVED UUID HERE> put :: Memoize `composed` under `key`. `opts`: `[ttl: ms]` (default 60_000).
   @spec put(key(), composed(), keyword()) :: :ok
   def put(key, composed, opts \\ []) when is_map(composed) do
     ttl = Keyword.get(opts, :ttl, default_ttl())
@@ -69,7 +69,7 @@ defmodule Noizu.MCP.Toolset.Cache do
   end
 
   @doc "Drop every row for `toolset_id` (PRD-4 Store writes call this before notify_changed/1)."
-  # ⟦𓂝𓈖𓆑𓄿𓃭⟧ invalidate :: Drop every row for `toolset_id`.
+  # <REMOVED UUID HERE> invalidate :: Drop every row for `toolset_id`.
   @spec invalidate(String.t()) :: :ok
   def invalidate(toolset_id) when is_binary(toolset_id) do
     # Never CREATES the table — invalidating a cache that was never on stays a no-op.
@@ -89,7 +89,7 @@ defmodule Noizu.MCP.Toolset.Cache do
   version fingerprints). Claims/metadata deliberately excluded — they never
   affect layer selection. `nil` (anonymous) hashes to a fixed value.
   """
-  # ⟦𓊪𓂋𓆑⟧ principal_hash :: Stable hash of the principal's LAYER-RELEVANT identity: sha256 over.
+  # <REMOVED UUID HERE> principal_hash :: Stable hash of the principal's LAYER-RELEVANT identity: sha256 over.
   @spec principal_hash(Principal.t() | nil) :: binary()
   def principal_hash(nil), do: hash({nil, nil, nil})
 

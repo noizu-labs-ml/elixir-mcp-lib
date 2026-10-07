@@ -10,7 +10,7 @@ defmodule Noizu.MCP.Server.Resource do
           subscribable: true
 
         @impl true
-        # ⟦𓆶𓀧𓆽𓁰⟧ read :: auto-generated pointer for public function read
+        # <REMOVED UUID HERE> read :: auto-generated pointer for public function read
         def read(_uri, _ctx), do: {:ok, Jason.encode!(MyApp.config())}
       end
 
@@ -44,7 +44,7 @@ defmodule Noizu.MCP.Server.Resource do
   @doc false
   @callback __mcp_resource__(:subscribable | :mime_type | :hidden) :: term()
 
-  # ⟦𓆒𓐡𓋬𓄎⟧ __using__ :: auto-generated pointer for public function __using__
+  # <REMOVED UUID HERE> __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server.Resource
@@ -55,7 +55,7 @@ defmodule Noizu.MCP.Server.Resource do
       @__mcp_resource_opts__ opts
 
       @impl Noizu.MCP.Server.Resource
-      # ⟦𓀷𓏱𓍭𓍴⟧ definition :: auto-generated pointer for public function definition
+      # <REMOVED UUID HERE> definition :: auto-generated pointer for public function definition
       def definition do
         opts = @__mcp_resource_opts__
 
@@ -73,7 +73,7 @@ defmodule Noizu.MCP.Server.Resource do
       end
 
       @impl Noizu.MCP.Server.Resource
-      # ⟦𓅼𓂁𓃿𓐪⟧ __mcp_resource__ :: auto-generated pointer for public function __mcp_resource__
+      # <REMOVED UUID HERE> __mcp_resource__ :: auto-generated pointer for public function __mcp_resource__
       def __mcp_resource__(:subscribable), do: @__mcp_resource_opts__[:subscribable] == true
       def __mcp_resource__(:mime_type), do: @__mcp_resource_opts__[:mime_type]
       def __mcp_resource__(:hidden), do: @__mcp_resource_opts__[:hidden] == true
