@@ -43,7 +43,8 @@ mkdir -p "$WORK"
 # shellcheck disable=SC2086
 cargo $TOOLCHAIN pgrx schema --no-default-features --features "pg${PG_MAJOR:-18} pg_test" \
   > "$WORK/pg_mcp--0.1.0.sql" 2>"$WORK/schema.log"
-sed -i '' "s|'MODULE_PATHNAME'|'$WORK/pg_mcp'|g" "$WORK/pg_mcp--0.1.0.sql"
+sed "s|'MODULE_PATHNAME'|'$WORK/pg_mcp'|g" "$WORK/pg_mcp--0.1.0.sql" > "$WORK/pg_mcp--0.1.0.sql.tmp" \
+  && mv "$WORK/pg_mcp--0.1.0.sql.tmp" "$WORK/pg_mcp--0.1.0.sql"
 
 DYLIB=$(find "$CRATE_DIR/target" -maxdepth 3 -name "libpg_mcp.dylib" -newer "$WORK/schema.log" 2>/dev/null | head -1)
 [ -z "$DYLIB" ] && DYLIB=$(find "$CRATE_DIR/target" -maxdepth 3 -name "libpg_mcp.dylib" | head -1)
