@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-10-07
+
+Patch release: one product fix from the de-flake investigation (#38).
+
+### Fixed
+
+- **Persistence.Memory ETS race:** `:ets.insert` could raise `badarg` when the
+  named table was in its death window between name resolution and the insert
+  landing (visible as an `ArgumentError` in `Servers.insert` under load).
+  The ensure+insert path now retries a bounded number of laps against the
+  self-healing table.
+
+### Changed
+
+- Test battery de-flaked (SSE-upgrade decode, compile-time env trap, async
+  table-drop race, shared-table poison-row scrub) — test-only, no runtime
+  impact (#38).
+
 ## [0.5.0] — 2026-10-07
 
 Changes since 0.4.2 (667dfaa..8ccae8f, PRs #28–#34). User-facing features
