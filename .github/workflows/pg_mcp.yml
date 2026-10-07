@@ -92,9 +92,7 @@ jobs:
         working-directory: pg/pg_mcp
         env:
           PG_MAJOR: ${{ matrix.pg }}
-        run: |
-          PGBIN="$(ls -d ~/.pgrx/*/pgrx-install/bin | head -1)"
-          ./run-tests.sh
+        run: ./run-tests.sh
 
   package:
     name: package (pg${{ matrix.pg }})

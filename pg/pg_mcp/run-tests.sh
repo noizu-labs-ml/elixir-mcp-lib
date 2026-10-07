@@ -25,6 +25,10 @@ PG_MAJOR="${PG_MAJOR:-18}"
 PGBIN_DEFAULT="$(ls -d "$HOME"/.pgrx/"$PG_MAJOR".*/pgrx-install/bin 2>/dev/null | head -1)"
 [ -z "$PGBIN_DEFAULT" ] && PGBIN_DEFAULT="/opt/homebrew/opt/postgresql@$PG_MAJOR/bin"
 PGBIN="${PGBIN:-$PGBIN_DEFAULT}"
+if [ ! -x "$PGBIN/initdb" ]; then
+  echo "FATAL: no initdb under PGBIN=$PGBIN" >&2
+  exit 1
+fi
 TOOLCHAIN="${TOOLCHAIN:-}"    # e.g. +1.98.1; empty = default
 KEEP="${1:-}"
 
