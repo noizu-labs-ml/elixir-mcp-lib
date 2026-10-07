@@ -1,8 +1,8 @@
 # Local Surface: VFS Mounts, Inspector, Transports
 
-Detail for T-009…T-011.
+Detail for T-028 (Inspector), T-029 (DoS), T-018 (mount daemons).
 
-## VFS mount daemons (T-010)
+## VFS mount daemons (T-018)
 
 Two paths put an MCP server's VFS on the local desktop:
 
@@ -17,7 +17,7 @@ boundary: the **unix socket's accessibility rides on filesystem permissions**
 The FUSE mount itself makes remote content executable-adjacent local files;
 treat mounted data as untrusted input (same rule as any network fetch).
 
-## Inspector (T-009)
+## Inspector (T-028)
 
 - Bandit bound to `127.0.0.1` only; localhost `Origin` check rejects
   cross-origin browser requests; random per-run bearer token.
@@ -28,7 +28,7 @@ treat mounted data as untrusted input (same rule as any network fetch).
   Inspector against a production credential puts those frames on localhost
   display; prefer scratch credentials.
 
-## Transport DoS posture (T-011)
+## Transport DoS posture (T-029)
 
 - Task-per-request: handler code runs in supervised tasks; ping,
   cancellation, and progress stay responsive during long tool calls.
