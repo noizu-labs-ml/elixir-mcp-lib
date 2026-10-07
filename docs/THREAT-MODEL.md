@@ -1,9 +1,16 @@
 # Threat Model — noizu_mcp (elixir-mcp-lib)
 
 Grounded in code on `develop` + the `epic.content-crud-auth` changeset (review:
-w3-review 2026-10-06; CI/publish: ci-scout 2026-10-07). This repo has no
-PROJ-ARCH/PROJ-LAYOUT docs yet, so register entries cite modules and test files
-directly. Maintained via `/npl-update-threat-model`.
+w3-review 2026-10-06; CI/publish: ci-scout 2026-10-07) and the 2026-10-07
+fleet sweep. This repo has no PROJ-ARCH/PROJ-LAYOUT docs yet, so register
+entries cite modules and test files directly. Maintained via
+`/npl-update-threat-model`.
+
+> Register provenance: the PR #31 merge resolution dropped the fleet-sweep
+> entries (Engine upstream, Inspector, mcp_sync/RLS, and others); they are
+> restored below as **T-020…T-033** (renumbered — original IDs T-001…T-015
+> collided with the epic-side register; mount-daemon entry folded into
+> T-018).
 
 ## Overview — assets & trust boundaries
 
@@ -42,9 +49,19 @@ graph LR
     VFS --> FS[(host filesystem)]
     VFS --> DB[(SQL store)]
     OAU[OAuth server: DCR · PKCE · consent] --> IDP[Upstreams: OIDC · HostSession · Password]
+    ENG[Engine] <-->|upstream MCP, auth_ref / passthrough| UP[Upstream servers]
+    SYNC[Sync.Worker] <-->|RLS-guarded| PG[(mcp_sync source + cache DBs)]
+    INS[Inspector 127.0.0.1] -->|bearer + Origin| CLI[Noizu.MCP.Client]
     CI[GitHub Actions] --> REL[Releases: mcp-mount · mcp-fuse · pg_mcp · DockerHub]
     LM[mcp-mount / mcp-fuse] -->|api_key, loopback| TR
+    HEX[Hex consumers] -->|noizu_mcp package| LIB[Library]
 ```
+
+→ *Control details: [threats/authn-authz.md](threats/authn-authz.md) ·
+[threats/sync-and-stores.md](threats/sync-and-stores.md) ·
+[threats/local-surface.md](threats/local-surface.md) ·
+[threats/supply-chain.md](threats/supply-chain.md) ·
+[threats/attack-surface.md](threats/attack-surface.md)*
 
 ## Vulnerability Register
 
@@ -67,8 +84,26 @@ graph LR
 | T-015 | Med | Tampering (regression) | `.github/workflows/elixir.yml` | **No Elixir CI workflow** — library suite never runs on PR/push; security regressions undetected until a host runs tests | **Partial** — workflow added in this epic (dual matrix 1.20.1/29 + 1.18.4/27, SHA-pinned actions, Postgres 17 service feeding `MCP_OAUTH_TEST_DATABASE_URL` so the pg battery finally runs per-PR); closes on merge |
 | T-016 | Med | Tampering | `fuse.yml` | Floating action tags (`checkout@v4`, `setup-go@v5`), no SHA pinning | **Open** |
 | T-017 | Low | EoP | repo process | No CODEOWNERS / branch protection; hex publish is manual | **Partial** — manual publish is a human gate; ownership/protection absent |
-| T-018 | Low | Spoofing | `mcp-mount` / `mcp-fuse` | Local-socket api_key, loopback trust | **Accepted** — documented local-trust boundary |
+| T-018 | Med | Spoofing/Tampering | `mcp-mount` / `mcp-fuse` | VFS mount daemons on the local desktop | **Accepted (partial controls)** — `vfs/auth` API-key handshake required before any other method; residual local trust: unix-socket accessibility rides on filesystem permissions — host/operator must restrict the socket directory (restored from fleet sweep, folded in here) |
 | T-019 | — | — | embedding hosts | Store choice, secret custody, TLS, throttling | **Accepted** — host obligation; seams documented |
+
+Restored fleet-sweep entries (2026-10-07 sweep; renumbered from T-001…T-015 —
+see provenance note above):
+
+| T-020 | High | Spoofing | Streamable HTTP server surface | Unauthenticated callers reaching tools | **Mitigated** — token-verifier family + `Auth.Server` AS facade (PKCE S256-only, access-token TTL ≤ 900s); wiring it is host responsibility |
+| T-021 | High | Spoofing | OAuth token lifecycle | Token/code replay (codes, refresh rotation, assertion JTIs) | **Mitigated** — atomic `used_at` redemption, family-wide revocation on rotation replay, SETNX JTI guard |
+| T-022 | High | Info disclosure | shipped schemas | Credential material at rest | **Mitigated** — SHA-256 hex / Argon2-PBKDF2 hashing convention in all shipped schemas; no plaintext columns |
+| T-023 | High | EoP | toolset resolution | Tool invocation bypassing authorization | **Mitigated** — single toolset resolution path; ACL chokepoint (`filter_entries/4`) cannot be bypassed by feature shims |
+| T-024 | Med | Info disclosure | ACL | ACL as an oracle (tool existence/policy inference) | **Mitigated** — silent denials; hidden tools indistinguishable from absent ones (identical error) |
+| T-025 | Med | EoP | `acl/` provider wiring | No ACL provider wired by host ⇒ inert `:allow` | **Open by design** — documented back-compat default; host responsibility |
+| T-026 | Med | Tampering | `mcp_sync` | Sync write races / lost updates / stale worker leases | **Mitigated in-database** — CAS via `expected_local_revision`, fencing tokens, outbox leases, FORCE RLS + SECURITY DEFINER guards |
+| T-027 | Med | EoP | `Sync.Source` contract | Sync principal/relation derived from request params | **Host audit** — server-controlled state, host-resolved principal; enforcement is host code; audit when adding sources |
+| T-028 | Low | Info disclosure | Inspector dev surface | Local exposure of MCP frames via dev UI | **Mitigated** — 127.0.0.1 bind, per-run random bearer, localhost `Origin` check; residual: any local process/user |
+| T-029 | Med | DoS | transports | Long-running tools, SSE floods, session exhaustion | **Mitigated** — task-per-request supervision with cancellation, bounded EventStore ring, no JSON-RPC batching; transport hardening (timeouts, body limits) is host/plug responsibility |
+| T-030 | Med | Tampering | supply chain (Hex, SQL templates) | Supply chain: Hex package, CI, shipped SQL templates | **Partial** — locked deps (`mix.lock`), 2FA publish discipline, raw-SQL templates are reviewed artifacts; no artifact signing |
+| T-031 | Low | Info disclosure | crash dumps / logs | Frames or secrets in crash dumps / structured logs | **Partial** — `erl_crash.dump` gitignored; hosts must keep dumps/logs out of shared storage |
+| T-032 | Med | Spoofing | Engine upstreams | Upstream impersonation / credential leakage | **Partial** — `auth_ref` stored-credential indirection; `passthrough` forwards caller credential — upstream transport authenticity is host responsibility |
+| T-033 | Low | Repudiation | agent account/key lifecycle | Lifecycle disputes over agent accounts/keys | **Mitigated** — append-only `mcp_agent_account_events` (no update path), revoked keys kept |
 
 Verified-in-code positives (not registered): no hardcoded secrets (grep clean;
 doc placeholder + test-compose `postgres` only); workflow permissions
@@ -78,9 +113,10 @@ least-privilege (`contents: read` default, `write` only on release jobs);
 
 ## Mitigation Coverage
 
-**13 mitigated · 2 open · 2 partial · 2 accepted** (19 registered). Remaining
-open: T-013 (Password login CSRF — decision pending) and T-016 (fuse.yml
-action pinning). No tickets exist; **this register is the tracker**.
+**22 mitigated · 2 open · 1 open-by-design · 5 partial · 2 accepted · 1 host-audit** (33 registered).
+Remaining open: T-013 (Password login CSRF — decision pending) and T-016 (fuse.yml
+action pinning). Open by design: T-025 (no-ACL-provider inert allow).
+No tickets exist; **this register is the tracker**.
 
 ## Residual Risk
 
@@ -89,3 +125,14 @@ run. T-013 (Password CSRF) is acceptable for first ship only if hosts are told
 the upstream is intranet-grade. T-015's workflow lands with this epic —
 wire it before merge. Hex publishing stays manual — the human in the loop is
 the current supply-chain gate for the package itself.
+
+From the restored fleet sweep:
+- **Anti-oracle vs. debuggability** (T-024): silent ACL denials trade
+  observability for non-disclosure; hosts must opt into auditing at their own
+  seam.
+- **Local-desktop trust** (T-018, T-028): the mount daemons and Inspector
+  assume a trusted multi-user-locality is out of scope; on a shared machine
+  they are exposure, not protection.
+- **Experimental surfaces** (`sql/*`, `mcp_sync` v1 — T-026/T-027): carry
+  correctness proofs but a shorter field history; treat upstream-derived data
+  as untrusted input at the host boundary.

@@ -1,6 +1,6 @@
 # Supply Chain
 
-Detail for T-012.
+Detail for T-030; CI-workflow gaps live in the main register (T-015…T-017).
 
 ## Package path
 

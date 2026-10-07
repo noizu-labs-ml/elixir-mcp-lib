@@ -1,9 +1,9 @@
 # Data Stores & Synchronization Controls
 
-Detail for T-003, T-007, T-008, T-013. Schema reference:
+Detail for T-022, T-026, T-027, T-031. Schema reference:
 [../PROJ-SCHEMA.md](../PROJ-SCHEMA.md) (per-table detail under `schema/`).
 
-## Credentials at rest (T-003)
+## Credentials at rest (T-022)
 
 - Convention enforced across all shipped schemas: hash columns hold SHA-256
   hex (64 chars); password-ish columns (`secret_hash`, `password_hash`,
@@ -14,7 +14,7 @@ Detail for T-003, T-007, T-008, T-013. Schema reference:
 - Purge sweeps (`purge_expired/2`) garbage-collect expired sessions, codes,
   JTIs; undefined-table during the agent sweep is tolerated (optional tables).
 
-## Synchronization correctness (T-007, ADR-009)
+## Synchronization correctness (T-026, ADR-009)
 
 All correctness is PostgreSQL-owned — the library holds no authority state in
 process memory:
@@ -34,7 +34,7 @@ process memory:
   outbound intents; **one open conflict per operation** keeps resolution
   single-threaded.
 
-## Principal binding (T-008 — host audit)
+## Principal binding (T-027 — host audit)
 
 The `Sync.Source` contract requires state to be server-controlled and bound
 to one principal+relation, resolved from the authenticated principal — never
@@ -43,7 +43,7 @@ the database cannot distinguish a correctly derived `principal_id` from a
 sloppily derived one. Any new Source implementation must be reviewed against
 this rule (see `Sync.Source` moduledoc; ADR-009).
 
-## Operational hygiene (T-013)
+## Operational hygiene (T-031)
 
 `erl_crash.dump` is gitignored; hosts running the library must keep crash
 dumps and structured logs (which may carry JSON-RPC frames) out of
