@@ -46,13 +46,14 @@ cargo $TOOLCHAIN pgrx schema --no-default-features --features "pg${PG_MAJOR:-18}
 sed "s|'MODULE_PATHNAME'|'$WORK/pg_mcp'|g" "$WORK/pg_mcp--0.1.0.sql" > "$WORK/pg_mcp--0.1.0.sql.tmp" \
   && mv "$WORK/pg_mcp--0.1.0.sql.tmp" "$WORK/pg_mcp--0.1.0.sql"
 
-DYLIB=$(find "$CRATE_DIR/target" -maxdepth 3 -name "libpg_mcp.dylib" -newer "$WORK/schema.log" 2>/dev/null | head -1)
-[ -z "$DYLIB" ] && DYLIB=$(find "$CRATE_DIR/target" -maxdepth 3 -name "libpg_mcp.dylib" | head -1)
+# Linux cdylibs are .so; macOS are .dylib (script predates Linux CI).
+DYLIB=$(find "$CRATE_DIR/target" -maxdepth 3 \( -name "libpg_mcp.dylib" -o -name "libpg_mcp.so" \) -newer "$WORK/schema.log" 2>/dev/null | head -1)
+[ -z "$DYLIB" ] && DYLIB=$(find "$CRATE_DIR/target" -maxdepth 3 \( -name "libpg_mcp.dylib" -o -name "libpg_mcp.so" \) | head -1)
 if [ -z "$DYLIB" ]; then
   echo "FATAL: built dylib not found" >&2
   exit 1
 fi
-cp "$DYLIB" "$WORK/pg_mcp.dylib"
+cp "$DYLIB" "$WORK/pg_mcp.${DYLIB##*.}"
 
 echo "== AP-P1: no registry writes outside the audit path (structural)"
 # §7.4 AP-P1: the extension's only local INSERT is `tool_calls.rs`'s audit
