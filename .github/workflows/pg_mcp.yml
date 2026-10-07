@@ -1,7 +1,10 @@
 # pg_mcp CI (PRD-10 §4.2) — runs independently of the Elixir pipeline: a Rust
 # failure never blocks a pure-Elixir PR and vice versa.
 #
-# Triggers: pull_request / push touching pg/** or this file.
+# Triggers: pull_request / push touching pg/** or this file; tag pushes
+# (pg_mcp-v*) are routed here by pg_mcp_tag.yml (GitHub rejects a `push:`
+# block that combines `paths:` with `tags:` — "at most one of 'tags' 'paths'"),
+# so this workflow is also a workflow_call target.
 #
 # Jobs:
 #   test    pg16/17/18 — fmt, clippy -D warnings, the trusted run-tests.sh
@@ -28,13 +31,12 @@ on:
     paths:
       - "pg/**"
       - ".github/workflows/pg_mcp.yml"
-    tags:
-      - "pg_mcp-v*"
   schedule:
     # Nightly: production-base image verification (manual re-run also works
     # via workflow_dispatch on any branch).
     - cron: "23 6 * * *"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
