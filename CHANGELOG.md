@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-10-07
+
+Patch release: transport hardening from the e2e-fix follow-up (#43, #45).
+
+### Fixed
+
+- **Streamable HTTP initialize vs. a down server tree:** `handle_initialize`
+  matched `{:ok, session}` on `start_session`; when the mounted server's
+  supervision tree wasn't running the MatchError crashed the request into an
+  opaque HTML 500 no MCP client could parse. Initialize now answers
+  in-protocol — HTTP 503 with a JSON-RPC error envelope (code -32603). Only
+  tree-down exits (`:noproc`/`:badarg`) take that path; other exits re-raise.
+  The concrete failure reason is logged server-side, never sent to the client
+  (#45).
+- **VFS registry cache namespace:** VFS watch/registry entries were keyed
+  without the server module, so two mounted servers could resolve each
+  other's entries (surfaced as a version-assert flake under the CI shard
+  partition-keyed `_build` caches). Registry keys are now namespaced per
+  server (#43).
+
 ## [0.5.1] — 2026-10-07
 
 Patch release: one product fix from the de-flake investigation (#38).
