@@ -8,7 +8,7 @@ on:
       - ".tool-versions"
       - ".github/workflows/fuse.yml"
   push:
-    branches: [develop]
+    branches: [develop, stage]
     tags: ["v*"]
   workflow_dispatch:
 
