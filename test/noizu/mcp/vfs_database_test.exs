@@ -36,7 +36,11 @@ if db_url do
       backend: Noizu.MCP.VFS.Database.TestFS,
       seed: {__MODULE__, :conformance_seed}
 
-    use Noizu.MCP.Fixtures.PersistenceDB
+    # Repo startup only — `drop_lib_tables: false`. This suite is async:true
+    # and lives entirely in its own mcp_vfs_test_* tables; the fixture's
+    # default drop of every noizu_mcp_% table would fire mid-run against the
+    # concurrently-running async:false DB suites (Ecto/Runner/V1Toolsets).
+    use Noizu.MCP.Fixtures.PersistenceDB, drop_lib_tables: false
 
     @table_prefix "mcp_vfs_test_"
     @gc_age_ms :timer.hours(1)

@@ -56,6 +56,29 @@ defmodule Noizu.MCP.AuthTest do
       |> StreamableHTTP.Plug.call(@auth_opts)
     end
 
+    # The plug upgrades a request to chunked SSE whenever no response arrives
+    # within its `sse_commit_after` heuristic (200ms) — and under full-suite
+    # load even this trivial handler can miss that window, so the body comes
+    # back as `data: {...}\n\n` instead of bare JSON (CI run 37563402933:
+    # Jason.decode! choked on 0x64, the "d" of "data"). The upgrade is legal
+    # per spec, so decode whichever wire format arrived rather than pinning
+    # the knob: the assertion is about auth claims reaching the handler, not
+    # about the response encoding racing the scheduler.
+    defp decode_response_body(body) do
+      try do
+        Jason.decode!(body)
+      rescue
+        Jason.DecodeError ->
+          [payload] =
+            body
+            |> String.split("\n")
+            |> Enum.filter(&String.starts_with?(&1, "data: "))
+            |> Enum.map(&String.trim_leading(&1, "data: "))
+
+          Jason.decode!(payload)
+      end
+    end
+
     @initialize %{
       "jsonrpc" => "2.0",
       "id" => 1,
@@ -121,7 +144,7 @@ defmodule Noizu.MCP.AuthTest do
       assert conn.status == 200
 
       assert %{"result" => %{"content" => [%{"text" => "sub=user-1"}]}} =
-               Jason.decode!(conn.resp_body)
+               decode_response_body(conn.resp_body)
     end
   end
 
