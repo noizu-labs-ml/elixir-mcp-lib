@@ -40,19 +40,10 @@ pub fn view_name(tool: &PlannedTool) -> String {
 }
 
 /// One `(name, value)` table option pair, in emission order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExtraOptions {
     pub upstream: Option<String>,
     pub cache_ttl_ms: Option<u64>,
-}
-
-impl Default for ExtraOptions {
-    fn default() -> Self {
-        ExtraOptions {
-            upstream: None,
-            cache_ttl_ms: None,
-        }
-    }
 }
 
 /// The per-tool table's full OPTIONS clause contents (without the

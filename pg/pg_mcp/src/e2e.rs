@@ -17,7 +17,7 @@
 //! AP-P1's structural half (no registry writes outside the audit path) is a
 //! grep-level check in `run-tests.sh`, not a probe.
 
-use crate::cache::stub::{Reply, StubServer};
+use crate::cache::stub::{Reply, RouteFn, StubServer};
 use pgrx::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -200,25 +200,24 @@ mod e2e_test {
         by_token.insert("tok_admin".to_string(), tools_by_token(true));
         by_token.insert("".to_string(), tools_by_token(false));
 
-        let route: Arc<dyn Fn(&str, &Value) -> Reply + Send + Sync> =
-            Arc::new(|method, params| match method {
-                "tools/call" => {
-                    let name = params
-                        .pointer("/name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    match name {
-                        // `hidden` and a genuinely-absent tool get the same
-                        // server-authored invalid_params: the server, not the
-                        // extension, decides what an unauthorized caller sees.
-                        "echo" => Reply::Result(json!({
-                            "content": [{"type": "text", "text": "ok"}]
-                        })),
-                        _ => Reply::Error(-32602, "invalid arguments".to_string()),
-                    }
+        let route: RouteFn = Arc::new(|method, params| match method {
+            "tools/call" => {
+                let name = params
+                    .pointer("/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                match name {
+                    // `hidden` and a genuinely-absent tool get the same
+                    // server-authored invalid_params: the server, not the
+                    // extension, decides what an unauthorized caller sees.
+                    "echo" => Reply::Result(json!({
+                        "content": [{"type": "text", "text": "ok"}]
+                    })),
+                    _ => Reply::Error(-32602, "invalid arguments".to_string()),
                 }
-                _ => Reply::Error(-32601, "unexpected".to_string()),
-            });
+            }
+            _ => Reply::Error(-32601, "unexpected".to_string()),
+        });
 
         let replies = map(vec![
             ("initialize", init_reply("ap-p4")),
@@ -322,14 +321,13 @@ mod e2e_test {
     #[pgrx::pg_test]
     fn perf_100_row_insert_select_is_exactly_100_sequential_tools_call() {
         cache::clear_all();
-        let route: Arc<dyn Fn(&str, &Value) -> Reply + Send + Sync> =
-            Arc::new(|method, _params| match method {
-                "tools/call" => Reply::Result(json!({
-                    "content": [{"type": "text", "text": "ok"}],
-                    "structuredContent": {}
-                })),
-                _ => Reply::Error(-32601, "unexpected".to_string()),
-            });
+        let route: RouteFn = Arc::new(|method, _params| match method {
+            "tools/call" => Reply::Result(json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "structuredContent": {}
+            })),
+            _ => Reply::Error(-32601, "unexpected".to_string()),
+        });
         let replies = map(vec![
             ("initialize", init_reply("perf-100")),
             ("tools/call", Reply::Route(route)),

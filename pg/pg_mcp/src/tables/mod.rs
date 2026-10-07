@@ -13,7 +13,7 @@
 //!    with `insert`), with *all* `pg_sys` types kept out: a track writes plain
 //!    Rust against [`ScanContext`] / [`ModifyContext`] and returns [`Row`]s.
 //! 3. **The registry** — name → spec → handler. Every table is registered
-//!    with a real handler as of PRD-7's tracks A-D (the [`StubTable`]
+//!    with a real handler as of PRD-7's tracks A-D (the `StubTable`
 //!    placeholder — scans empty, refuses INSERT — remains as the tripwire
 //!    the `stub_handlers_*` tests exercise should a handler ever revert).
 //!    A track owns its table's *handler* only: the `handler:` line in
@@ -351,17 +351,23 @@ pub trait ForeignTable: Sync {
 /// Compile-clean placeholder: scans as empty, never does I/O, refuses INSERT.
 /// `SELECT * FROM mcp.tools` returns zero rows with this handler installed —
 /// which is the foundation's acceptance bar — while every PRD-6 behaviour
-/// stays untouched.
+/// stays untouched. Test-only now: every registry slot holds a real handler,
+/// but the stub stays so `is_stub_handler` can flag any slot that ever
+/// reverts to it.
+#[cfg(any(test, feature = "pg_test"))]
 struct StubTable;
 
+#[cfg(any(test, feature = "pg_test"))]
 struct EmptyCursor;
 
+#[cfg(any(test, feature = "pg_test"))]
 impl ScanCursor for EmptyCursor {
     fn iter_scan(&mut self) -> McpResult<Option<Row>> {
         Ok(None)
     }
 }
 
+#[cfg(any(test, feature = "pg_test"))]
 impl ForeignTable for StubTable {
     fn begin_scan(&self, _ctx: ScanContext) -> McpResult<Box<dyn ScanCursor>> {
         Ok(Box::new(EmptyCursor))
@@ -369,6 +375,7 @@ impl ForeignTable for StubTable {
 }
 
 /// The one stub instance every table is registered with.
+#[cfg(any(test, feature = "pg_test"))]
 static STUB_TABLE: StubTable = StubTable;
 
 // Track B's read-through handlers (PRD-7 §6 step 7.4).

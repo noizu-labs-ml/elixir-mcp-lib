@@ -77,7 +77,7 @@ impl Qual {
             Operator::AnyEqual => self
                 .value
                 .as_array()
-                .is_some_and(|items| items.iter().all(|v| is_qual_primitive(v))),
+                .is_some_and(|items| items.iter().all(is_qual_primitive)),
         }
     }
 

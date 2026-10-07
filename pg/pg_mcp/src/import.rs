@@ -243,10 +243,10 @@ pub fn statements_with(
 }
 
 /// The PRD-8 per-tool layout (FR-8.14): for each tool in `tools` (the
-/// effective `tools/list` — D2), the §4.2 foreign table, §4.3 typed function
-/// + comment, and §4.4 gated view. Skipped tools are silently absent here —
-/// callers (`mcp.import`, `mcp.generate_functions`) surface the skip list and
-/// warnings from the shared planner themselves.
+/// effective `tools/list` — D2), the §4.2 foreign table, the §4.3 typed
+/// function and comment, and the §4.4 gated view. Skipped tools are silently
+/// absent here — callers (`mcp.import`, `mcp.generate_functions`) surface the
+/// skip list and warnings from the shared planner themselves.
 ///
 /// The statement list is paired with the planned tools so callers can write
 /// the `mcp.generated` rows (via [`codegen::registry`]) once the DDL lands.
@@ -279,11 +279,12 @@ pub fn per_tool_plan(
     let mut created_schemas: Vec<&str> = Vec::new();
     for tool in planned.tools.iter() {
         // Per-upstream schemas are created ahead of their objects (once).
-        if opts.per_upstream_schema && tool.schema != local_schema {
-            if !created_schemas.contains(&tool.schema.as_str()) {
-                out.push(format!("CREATE SCHEMA {};", quote_ident(&tool.schema)));
-                created_schemas.push(&tool.schema);
-            }
+        if opts.per_upstream_schema
+            && tool.schema != local_schema
+            && !created_schemas.contains(&tool.schema.as_str())
+        {
+            out.push(format!("CREATE SCHEMA {};", quote_ident(&tool.schema)));
+            created_schemas.push(&tool.schema);
         }
         let extra = codegen::table::ExtraOptions {
             // The engine-slice marker: per-upstream tables are scoped to
@@ -603,8 +604,10 @@ mod tests {
             ]"#,
         )
         .unwrap();
-        let mut opts = ImportOptions::default();
-        opts.per_tool = true;
+        let opts = ImportOptions {
+            per_tool: true,
+            ..Default::default()
+        };
         let (stmts, planned) = per_tool_plan("npl", "npl_s", &tools, &opts).unwrap();
         assert_eq!(planned.tools.len(), 2);
         assert!(planned.skipped.is_empty());
@@ -648,10 +651,12 @@ mod tests {
                  "inputSchema": {"type": "object", "properties": {}}}]"#,
         )
         .unwrap();
-        let mut opts = ImportOptions::default();
-        opts.per_tool = true;
-        opts.prefix = "mcp_".to_string();
-        opts.cache_ttl_ms = Some(2500);
+        let opts = ImportOptions {
+            per_tool: true,
+            prefix: "mcp_".to_string(),
+            cache_ttl_ms: Some(2500),
+            ..Default::default()
+        };
         let (stmts, _) = per_tool_plan("npl", "s", &tools, &opts).unwrap();
         assert!(stmts.iter().any(|s| s
             .starts_with("CREATE FOREIGN TABLE \"s\".\"tool_mcp_echo\" (")
@@ -669,9 +674,11 @@ mod tests {
             ]"#,
         )
         .unwrap();
-        let mut opts = ImportOptions::default();
-        opts.per_tool = true;
-        opts.per_upstream_schema = true;
+        let opts = ImportOptions {
+            per_tool: true,
+            per_upstream_schema: true,
+            ..Default::default()
+        };
         let (stmts, _) = per_tool_plan("engine", "eng_s", &tools, &opts).unwrap();
 
         assert_eq!(stmts[0], "CREATE SCHEMA \"github\";");

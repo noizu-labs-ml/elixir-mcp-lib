@@ -366,7 +366,7 @@ pub fn page_items(result: &Value, array_key: &str) -> (Vec<Value>, Option<String
     let items = result
         .get(array_key)
         .and_then(Value::as_array)
-        .map(|a| a.clone())
+        .cloned()
         .unwrap_or_default();
     let next = result
         .get("nextCursor")

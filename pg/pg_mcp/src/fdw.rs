@@ -612,9 +612,7 @@ unsafe fn var_column(
 
     match target {
         Target::Registry(entry) => {
-            if entry.spec.attno(&column).is_none() {
-                return None;
-            }
+            entry.spec.attno(&column)?;
             if !entry.handler.pushdown_columns().contains(&column.as_str()) {
                 return None;
             }
@@ -690,8 +688,8 @@ unsafe fn datum_to_json(type_oid: pg_sys::Oid, datum: pg_sys::Datum) -> Option<J
             serde_json::from_str(&raw).ok()
         }
         t if t == pg_sys::BOOLOID => bool::from_datum(datum, false).map(Json::Bool),
-        t if t == pg_sys::INT4OID => i32::from_datum(datum, false).map(|v| Json::from(v)),
-        t if t == pg_sys::INT8OID => i64::from_datum(datum, false).map(|v| Json::from(v)),
+        t if t == pg_sys::INT4OID => i32::from_datum(datum, false).map(Json::from),
+        t if t == pg_sys::INT8OID => i64::from_datum(datum, false).map(Json::from),
         // PRD-8 §4.1: per-tool input columns can be typed `double precision`,
         // `uuid`, `date` and `timestamptz`; their constants become JSON so the
         // qual can be pushed into `arguments` and echoed back.
@@ -1013,7 +1011,7 @@ unsafe fn resolve_param_quals(
         return out;
     }
     let planstate = &mut (*node).ss.ps;
-    let econtext = (*planstate).ps_ExprContext;
+    let econtext = planstate.ps_ExprContext;
     for pq in params {
         let expr_node = list_node_at((*plan).fdw_exprs, pq.index);
         if expr_node.is_null() {
@@ -1181,8 +1179,8 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
             server_name,
             session,
         } => {
-            let cells = read_slot(slot, *spec);
-            let input = InsertRow::new(*spec, cells);
+            let cells = read_slot(slot, spec);
+            let input = InsertRow::new(spec, cells);
             match session.insert(&input) {
                 Ok(r) => r,
                 Err(e) => e.raise_ctx(server_name, "tools/call"),

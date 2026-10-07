@@ -620,6 +620,10 @@ pub mod stub {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    /// The routed closure: method + request params in, a plain `Reply` out
+    /// (flattened like any other by the dispatcher).
+    pub type RouteFn = std::sync::Arc<dyn Fn(&str, &Value) -> Reply + Send + Sync>;
+
     /// What a configured method answers with.
     pub enum Reply {
         /// The same JSON-RPC `result` every time.
@@ -636,7 +640,7 @@ pub mod stub {
         /// probes that must branch per tool name or arguments (PRD-7.E:
         /// AP-P4's hidden-tool reply). The closure returns a plain `Reply`,
         /// which is then flattened like any other.
-        Route(std::sync::Arc<dyn Fn(&str, &Value) -> Reply + Send + Sync>),
+        Route(RouteFn),
         /// Close the connection without answering anything (PRD-7.E AC-7.11:
         /// a server dying mid-request is a transport failure, `08006`).
         Disconnect,

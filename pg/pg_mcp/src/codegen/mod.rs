@@ -302,9 +302,9 @@ fn plan_one(
     let input_properties = match types::properties(&input_schema) {
         Some(props) if input_schema.as_object().is_some() => props,
         _ => {
-            return Err(format!(
-                "inputSchema is not a JSON Schema object with properties (PRD-8 §4.2)"
-            ))
+            return Err(
+                "inputSchema is not a JSON Schema object with properties (PRD-8 §4.2)".to_string(),
+            )
         }
     };
     let required = types::required_set(&input_schema);
@@ -1170,7 +1170,7 @@ mod host_tests {
             ]),
         ) {
             let prefix = prefix.unwrap_or_default();
-            let result = plan(&tools, "target", &prefix, gate, SchemaMode::Single);
+            let result = plan(&tools, "target", prefix, gate, SchemaMode::Single);
             prop_assert!(result.is_ok(), "planning never fails on named tools");
             let plan = result.unwrap();
 

@@ -309,14 +309,14 @@ fn sha256(message: &[u8]) -> [u8; 32] {
     // Padding: message + 0x80 + zeros + 64-bit big-endian bit length, to a
     // multiple of 64 bytes.
     let bit_len = (message.len() as u64).wrapping_mul(8);
-    let padded_len = ((message.len() + 9 + 63) / 64) * 64;
+    let padded_len = (message.len() + 9).div_ceil(64) * 64;
     let mut block = vec![0u8; padded_len];
     block[..message.len()].copy_from_slice(message);
     block[message.len()] = 0x80;
     block[padded_len - 8..].copy_from_slice(&bit_len.to_be_bytes());
 
     let mut w = [0u32; 64];
-    for chunk in block.chunks_exact(64) {
+    for chunk in block.as_chunks::<64>().0 {
         for (i, word) in w.iter_mut().take(16).enumerate() {
             *word = u32::from_be_bytes([
                 chunk[i * 4],
@@ -444,7 +444,7 @@ mod tests {
         // The fixed vector: identical across runs and machines (AC-8.8).
         assert_eq!(
             derived,
-            format!("{}{}", &long[..55].to_lowercase(), {
+            format!("{}{}", long[..55].to_lowercase(), {
                 let h = sha256_hex7(long.to_lowercase().as_bytes());
                 format!("_{h}")
             })
