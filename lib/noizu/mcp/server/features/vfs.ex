@@ -8,8 +8,10 @@ defmodule Noizu.MCP.Server.Features.VFS do
       `remove/3`, `search/4`, `xattr/3`) — cache-aware wrappers over a backend
       module. Read results go through `Noizu.MCP.VFS.Cache` and get the
       backend's generation stamped into node versions; successful writes bump
-      the generation first. This is the layer the conformance battery
-      (`Noizu.MCP.VFS.Conformance`) exercises.
+      the generation first. Cache entries are namespaced by the mount's
+      `vfs_opts` (see `ns/1`) so two mounts sharing a backend module —
+      per-user roots — never serve each other's entries. This is the layer
+      the conformance battery (`Noizu.MCP.VFS.Conformance`) exercises.
     * Server-level (`stat(server, params, ctx)`, ...) — param extraction and
       validation over the server's registered backend (first entry of
       `__mcp__(:vfs)`), returning wire-shaped maps or `Noizu.MCP.Error` structs.
@@ -50,11 +52,11 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @spec stat(module(), String.t(), Ctx.t()) ::
           {:ok, VFS.t()} | {:error, term()}
   def stat(backend, path, ctx) when is_binary(path) do
-    case Cache.get(backend, :stat, path) do
+    case Cache.get(backend, :stat, path, ns: ns(ctx)) do
       nil ->
         case backend.stat(path, ctx) do
           {:ok, node} ->
-            Cache.put(backend, :stat, path, node, ttl())
+            Cache.put(backend, :stat, path, node, ttl(), ns: ns(ctx))
             {:ok, stamp(backend, node)}
 
           {:error, :enoent} = error ->
@@ -72,7 +74,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # Generated /README.md fallback — cached like any backend node.
   defp readme_stat(backend, path, ctx) do
     node = Readme.node(backend, ctx)
-    Cache.put(backend, :stat, path, node, ttl())
+    Cache.put(backend, :stat, path, node, ttl(), ns: ns(ctx))
     {:ok, stamp(backend, node)}
   end
 
@@ -83,13 +85,13 @@ defmodule Noizu.MCP.Server.Features.VFS do
   def list(backend, path, cursor, ctx) when is_binary(path) do
     cache_key = "#{path}\0#{cursor || ""}"
 
-    case Cache.get(backend, :list, cache_key) do
+    case Cache.get(backend, :list, cache_key, ns: ns(ctx)) do
       nil ->
         case backend.list(path, cursor, ctx) do
           {:ok, entries, next_cursor} ->
             entries = Enum.map(entries, &stamp_entry(backend, &1))
             entries = first_root_page(path, cursor, entries, backend, ctx)
-            Cache.put(backend, :list, cache_key, {entries, next_cursor}, ttl())
+            Cache.put(backend, :list, cache_key, {entries, next_cursor}, ttl(), ns: ns(ctx))
             {:ok, entries, next_cursor}
 
           {:error, _} = error ->
@@ -111,13 +113,15 @@ defmodule Noizu.MCP.Server.Features.VFS do
   @spec read(module(), String.t(), Ctx.t(), non_neg_integer() | nil) ::
           {:ok, binary(), non_neg_integer()} | {:error, term()}
   def read(backend, path, ctx, expected_version \\ nil) when is_binary(path) do
-    cache_opts = if expected_version, do: [version: unstamp(backend, expected_version)], else: []
+    cache_opts =
+      [ns: ns(ctx)] ++
+        if(expected_version, do: [version: unstamp(backend, expected_version)], else: [])
 
     case Cache.get(backend, :read, path, cache_opts) do
       nil ->
         case backend.read(path, ctx) do
           {:ok, content, version} = result ->
-            Cache.put(backend, :read, path, result, ttl())
+            Cache.put(backend, :read, path, result, ttl(), ns: ns(ctx))
             {:ok, content, version + Cache.generation(backend)}
 
           # /README.md is reserved and advertised by the dispatcher itself —
@@ -139,7 +143,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # Generated /README.md fallback — cached like any backend node.
   defp readme_read(backend, path, ctx) do
     result = {:ok, Readme.content(backend, ctx), 1}
-    Cache.put(backend, :read, path, result, ttl())
+    Cache.put(backend, :read, path, result, ttl(), ns: ns(ctx))
     {:ok, elem(result, 1), 1 + Cache.generation(backend)}
   end
 
@@ -333,7 +337,8 @@ defmodule Noizu.MCP.Server.Features.VFS do
     with_backend(server, params, fn backend, opts ->
       with_path(params, fn path ->
         with :ok <- DynamicContent.write_gate(server, path, ctx) do
-          case remove(backend, path, opts_ctx(ctx, opts)) |> to_result(fn :ok -> %{"removed" => path} end) do
+          case remove(backend, path, opts_ctx(ctx, opts))
+               |> to_result(fn :ok -> %{"removed" => path} end) do
             {:ok, _} = ok ->
               DynamicContent.after_mutation(server, path)
               ok
@@ -417,6 +422,14 @@ defmodule Noizu.MCP.Server.Features.VFS do
   # ctx assigns — backends are stateless modules, the opts are per-mount state.
   defp opts_ctx(ctx, []), do: ctx
   defp opts_ctx(ctx, opts), do: Ctx.assign(ctx, :vfs_opts, opts)
+
+  # Cache namespace: backends resolve roots and capabilities from `vfs_opts`,
+  # so the same backend module under two mounts (per-user roots, per-test
+  # tmpdirs) must never serve one mount's cached entry to the other. Mounts
+  # with identical opts (or none — `opts_ctx/2` skips the assign) still share
+  # one namespace, preserving the hit rate for the common one-mount case.
+  defp ns(%Ctx{} = ctx), do: Map.get(ctx.assigns, :vfs_opts, :default)
+  defp ns(_ctx), do: :default
 
   defp with_path(params, fun) do
     with {:ok, path} <- validate_binary((params || %{})["path"], "path"), do: fun.(path)

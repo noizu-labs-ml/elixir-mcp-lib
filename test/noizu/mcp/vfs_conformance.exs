@@ -84,6 +84,19 @@ defmodule Noizu.MCP.VFS.CacheTest do
     assert Cache.get(Backend, :read, "/x", version: 8) == nil
   end
 
+  test "entries are isolated by namespace" do
+    # Two mounts share the backend module; their opts are the namespace. One
+    # mount's cached entry must never surface for the other — a ctx-blind
+    # cache served cross-mount content (CI flake: VFS.FileTest version assert).
+    Cache.put(Backend, :stat, "/hello.txt", :node_a, 60_000, ns: [root: "/a"])
+    assert Cache.get(Backend, :stat, "/hello.txt", ns: [root: "/a"]) == :node_a
+    assert Cache.get(Backend, :stat, "/hello.txt", ns: [root: "/b"]) == nil
+    # No namespace given (or identical mounts) still share :default.
+    Cache.put(Backend, :stat, "/y", :node, 60_000)
+    assert Cache.get(Backend, :stat, "/y") == :node
+    assert Cache.get(Backend, :stat, "/y", ns: :default) == :node
+  end
+
   test "purge drops everything for the module" do
     Cache.put(Backend, :stat, "/x", :node, 60_000)
     Cache.put(Backend, :list, "/", {:e, nil}, 60_000)

@@ -43,8 +43,15 @@ defmodule Noizu.MCP.VFS.Conformance do
       alias Noizu.MCP.VFS.Cache
 
       setup do
-        ctx = apply(unquote(seed_mod), unquote(seed_fun), [])
         backend = unquote(backend)
+        # Fresh cache at test start, not just on_exit: the previous test's
+        # on_exit purge runs asynchronously and can land after this test's
+        # first stat — and concurrent modules share the backend's global
+        # persistent_term cache. Cache entries are namespaced by vfs_opts
+        # (see Features.VFS.ns/1), but purge anyway so a battery run starts
+        # from a known cache state.
+        Cache.purge(backend)
+        ctx = apply(unquote(seed_mod), unquote(seed_fun), [])
 
         on_exit(fn -> Cache.purge(backend) end)
         %{backend: backend, ctx: ctx}
