@@ -11,6 +11,26 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
   alias Noizu.MCP.Fixtures
   alias Noizu.MCP.Transport.StreamableHTTP
 
+  # A real `use Noizu.MCP.Server` module whose supervision tree is never
+  # started — initialize against it exercises the tree-down path.
+  defmodule UnstartedServer do
+    @moduledoc false
+    use Noizu.MCP.Server, name: "unstarted", version: "1.0.0"
+  end
+
+  defp initialize_body do
+    Jason.encode!(%{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "initialize",
+      "params" => %{
+        "protocolVersion" => "2025-11-25",
+        "capabilities" => %{},
+        "clientInfo" => %{"name" => "plug_test", "version" => "1.0.0"}
+      }
+    })
+  end
+
   # `sse_commit_after` is generous here on purpose. The plug waits this long for
   # a handler's final response and then *deliberately* commits to SSE, so a slow
   # call reaches the client promptly with keepalives. At the 200ms default, a
@@ -96,6 +116,29 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
         ])
 
       assert conn.status == 404
+    end
+
+    test "initialize against an unstarted server tree answers JSON-RPC 503, not a raw 500" do
+      # Regression: the {:ok, session} match used to raise MatchError and the
+      # request died as an opaque 500 HTML page. An MCP client should be able
+      # to parse the failure in-protocol.
+      opts = StreamableHTTP.Plug.init(server: UnstartedServer)
+
+      conn =
+        conn(:post, "/", initialize_body())
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("accept", "application/json, text/event-stream")
+        |> StreamableHTTP.Plug.call(opts)
+
+      assert conn.status == 503
+      assert get_resp_header(conn, "content-type") |> hd() =~ "application/json"
+
+      body = Jason.decode!(conn.resp_body)
+      assert body["id"] == 1
+      assert body["error"]["code"] == -32603
+      assert body["error"]["message"] == "Server unavailable"
+      # The underlying reason (:noproc et al.) rides along as data for ops.
+      assert is_binary(body["error"]["data"])
     end
 
     test "json-path request answers as application/json" do

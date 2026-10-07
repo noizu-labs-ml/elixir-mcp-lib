@@ -444,30 +444,55 @@ if Code.ensure_loaded?(Plug.Conn) do
           end
         end)
 
-      {:ok, session} =
-        Noizu.MCP.Server.Supervisor.start_session(server,
-          sink: {Sink, {server, session_id}},
-          transport: :http,
-          session_id: session_id,
-          idle_timeout: opts.idle_timeout,
-          assigns: assigns
-        )
+      # Tree-down shows up two ways: an exit from GenServer.call when the
+      # SessionSupervisor name isn't registered at all, or an {:error, reason}
+      # return when the name resolves but the child refuses to start. Normalize
+      # both so the case below can answer in-protocol.
+      session_start =
+        try do
+          Noizu.MCP.Server.Supervisor.start_session(server,
+            sink: {Sink, {server, session_id}},
+            transport: :http,
+            session_id: session_id,
+            idle_timeout: opts.idle_timeout,
+            assigns: assigns
+          )
+        catch
+          :exit, reason -> {:error, reason}
+        end
 
-      registry = Module.concat(server, Registry)
-      Registry.register(registry, {:http_stream, session_id, id}, nil)
-      Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
+      case session_start do
+        {:ok, session} ->
+          registry = Module.concat(server, Registry)
+          Registry.register(registry, {:http_stream, session_id, id}, nil)
+          Session.deliver(session, Jason.encode!(body), conn.assigns[:mcp_auth_claims])
 
-      receive do
-        {:mcp_http, binary} ->
-          Registry.unregister(registry, {:http_stream, session_id, id})
+          receive do
+            {:mcp_http, binary} ->
+              Registry.unregister(registry, {:http_stream, session_id, id})
 
+              conn
+              |> put_resp_content_type("application/json")
+              |> put_resp_header("mcp-session-id", session_id)
+              |> send_resp(200, binary)
+          after
+            opts.init_timeout ->
+              send_resp(conn, 500, "Initialize timed out")
+          end
+
+        {:error, reason} ->
+          # Server tree not running (or the session child refused to start):
+          # answer in-protocol with a JSON-RPC error instead of a MatchError
+          # crashing the request to a raw 500 the client can't parse.
           conn
           |> put_resp_content_type("application/json")
-          |> put_resp_header("mcp-session-id", session_id)
-          |> send_resp(200, binary)
-      after
-        opts.init_timeout ->
-          send_resp(conn, 500, "Initialize timed out")
+          |> send_resp(
+            503,
+            Noizu.MCP.JsonRpc.encode!(%Noizu.MCP.JsonRpc.ErrorResponse{
+              id: id,
+              error: Noizu.MCP.Error.internal("Server unavailable", inspect(reason))
+            })
+          )
       end
     end
 
