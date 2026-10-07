@@ -6,7 +6,10 @@ defmodule Noizu.MCP.VFS.Cache do
   Mirrors NPL's toolset cache: a `:persistent_term` entry per backend holding
   `{generation, entries}` —
 
-    * Entries are keyed `{kind, path}` and carry a TTL deadline. `read` results
+    * Entries are keyed `{ns, kind, path}` and carry a TTL deadline. `ns` is a
+      caller-supplied namespace (default `:default`); the dispatcher passes the
+      backend's `vfs_opts` so two mounts sharing a backend module — per-user
+      roots, test fixtures — never see each other's entries. `read` results
       embed their version (`{:ok, content, version}`), so a caller can pass
       `expected_version:` to `get/4` to only accept a cached value whose
       version still matches what it saw in `stat`.
@@ -41,17 +44,18 @@ defmodule Noizu.MCP.VFS.Cache do
   end
 
   @doc """
-  Cached value for `{module, kind, path}`, or `nil`. Expired entries are
+  Cached value for `{module, ns, kind, path}`, or `nil`. Expired entries are
   erased and reported as misses. `:read` entries can be version-checked with
-  the `:version` option.
+  the `:version` option; `:ns` selects the namespace (default `:default`).
   """
   # ⟦𓆒⟧ get
   @spec get(module(), :stat | :list | :read, String.t(), keyword()) :: term() | nil
   def get(module, kind, path, opts \\ []) when kind in @kind do
     if enabled?() do
       now = now_millis()
+      key = {Keyword.get(opts, :ns, :default), kind, path}
 
-      case entries(module)[{kind, path}] do
+      case entries(module)[key] do
         {expires_at, value} when expires_at > now ->
           if expected = opts[:version] do
             if read_version(value) == expected, do: value, else: nil
@@ -62,7 +66,7 @@ defmodule Noizu.MCP.VFS.Cache do
         {_, _} ->
           :persistent_term.put(
             {@base, module},
-            {generation(module), Map.delete(entries(module), {kind, path})}
+            {generation(module), Map.delete(entries(module), key)}
           )
 
           nil
@@ -75,16 +79,18 @@ defmodule Noizu.MCP.VFS.Cache do
     end
   end
 
-  @doc "Cache `value` for `{module, kind, path}` under the current generation."
+  @doc "Cache `value` for `{module, ns, kind, path}` under the current generation."
   # ⟦𓆒⟧ put
-  @spec put(module(), :stat | :list | :read, String.t(), term(), pos_integer()) :: :ok
-  def put(module, kind, path, value, ttl_ms) when kind in @kind do
+  @spec put(module(), :stat | :list | :read, String.t(), term(), pos_integer(), keyword()) ::
+          :ok
+  def put(module, kind, path, value, ttl_ms, opts \\ []) when kind in @kind do
     if enabled?() do
       {gen, entries} = :persistent_term.get({@base, module}, {0, %{}})
+      key = {Keyword.get(opts, :ns, :default), kind, path}
 
       :persistent_term.put(
         {@base, module},
-        {gen, Map.put(entries, {kind, path}, {now_millis() + ttl_ms, value})}
+        {gen, Map.put(entries, key, {now_millis() + ttl_ms, value})}
       )
     end
 
