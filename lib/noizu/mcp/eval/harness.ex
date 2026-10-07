@@ -56,7 +56,6 @@ defmodule Noizu.MCP.Eval.Harness do
 
   @doc "Run the selected evals and return a JSON-ready report map."
   @spec run(keyword()) :: map()
-  # ⟦𓋴𓇈𓋇𓊹⟧ run :: Run the selected evals and return a JSON-ready report map.
   def run(opts) do
     server = Keyword.fetch!(opts, :server)
 

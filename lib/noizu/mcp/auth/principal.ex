@@ -47,7 +47,6 @@ defmodule Noizu.MCP.Auth.Principal do
   way to be anonymous, and never synthesized by the library.
   """
   @spec anonymous?(t() | nil) :: boolean()
-  # ⟦𓂷𓊽𓆑𓅓⟧ anonymous? :: True when there is no principal.
   def anonymous?(nil), do: true
   def anonymous?(%__MODULE__{}), do: false
 
@@ -58,7 +57,6 @@ defmodule Noizu.MCP.Auth.Principal do
   globs — i.e. nothing.
   """
   @spec has_scope?(t(), String.t()) :: boolean()
-  # ⟦𓋴𓎛𓂋𓆓⟧ has_scope? :: True when the principal holds `scope`.
   def has_scope?(%__MODULE__{granted_scopes: scopes}, scope) when is_binary(scope) do
     cond do
       String.ends_with?(scope, "*") ->
@@ -72,6 +70,5 @@ defmodule Noizu.MCP.Auth.Principal do
 
   @doc "The granted scopes as a list (unordered)."
   @spec scope_list(t()) :: [String.t()]
-  # ⟦𓎝𓋹𓊪𓏏⟧ scope_list :: The granted scopes as a list (unordered).
   def scope_list(%__MODULE__{granted_scopes: scopes}), do: MapSet.to_list(scopes)
 end

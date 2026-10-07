@@ -17,7 +17,6 @@ defmodule Noizu.MCP.Transport.SSE do
 
   @doc "Encode one SSE event as iodata."
   @spec encode(String.t() | iodata(), keyword()) :: iodata()
-  # ⟦𓁱𓐝𓂦𓊯⟧ encode :: Encode one SSE event as iodata.
   def encode(data, opts \\ []) do
     data_lines =
       data
@@ -39,7 +38,6 @@ defmodule Noizu.MCP.Transport.SSE do
   events and the new buffer. Multi-line `data:` fields are joined per spec.
   """
   @spec parse(binary(), binary()) :: {[Event.t()], binary()}
-  # ⟦𓎯𓁽𓌺𓍑⟧ parse :: Incremental parse: feed a chunk plus the leftover buffer, get completed
   def parse(buffer, chunk) do
     data = buffer <> chunk
 

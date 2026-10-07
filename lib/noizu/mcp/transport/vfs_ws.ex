@@ -58,7 +58,6 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
     alias Noizu.MCP.Server.VFSPubSub
 
     @impl Plug
-    # ⟦𓆒⟧ init
     def init(opts) do
       %{
         server: Keyword.fetch!(opts, :server),
@@ -70,7 +69,6 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
     end
 
     @impl Plug
-    # ⟦𓆒⟧ call
     def call(conn, opts) do
       cond do
         conn.method != "GET" ->

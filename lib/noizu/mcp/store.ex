@@ -27,7 +27,6 @@ defmodule Noizu.MCP.Store do
   @type kind :: :toolset | :grant | :negotiation
 
   @doc "The store key each kind maps to (§4.7)."
-  # ⟦𓎡𓇋𓈖𓂧⟧ store_key :: The store key each kind maps to (§4.7).
   @spec store_key(kind()) :: {:ok, Persistence.store_key()} | {:error, {:unknown_kind, term()}}
   def store_key(kind) when is_atom(kind) do
     case Keyword.fetch(@kind_store, kind) do
@@ -43,7 +42,6 @@ defmodule Noizu.MCP.Store do
   negotiations), then rotate the affected toolset's cache and notify live
   sessions.
   """
-  # ⟦𓊪𓅱𓏏⟧ put :: Upsert `record` by its id.
   @spec put(kind(), map() | struct(), keyword()) :: :ok | {:error, term()}
   def put(kind, record, opts \\ []) do
     with {:ok, store_key} <- store_key(kind),
@@ -67,7 +65,6 @@ defmodule Noizu.MCP.Store do
   end
 
   @doc "Fetch one record (`{:ok, record} | :error` — expiry applied by the store)."
-  # ⟦𓎼𓅱𓏏⟧ get :: Fetch one record.
   @spec get(kind(), String.t(), keyword()) :: {:ok, map() | struct()} | :error | {:error, term()}
   def get(kind, id, opts \\ []) do
     with {:ok, store_key} <- store_key(kind),
@@ -79,7 +76,6 @@ defmodule Noizu.MCP.Store do
   end
 
   @doc "List records for `kind` under an exact-match `filter` (inserted_at desc)."
-  # ⟦𓃭𓇋𓋴𓏏⟧ list :: List records for `kind` under an exact-match `filter` (inserted_at desc).
   @spec list(kind(), map() | nil, keyword()) :: {:ok, [map() | struct()]} | {:error, term()}
   def list(kind, filter, opts \\ []) do
     with {:ok, store_key} <- store_key(kind),
@@ -91,7 +87,6 @@ defmodule Noizu.MCP.Store do
   end
 
   @doc "Delete by id (idempotent), rotating the affected toolset's cache and notifying."
-  # ⟦𓂧𓅱𓃭𓅱𓏏⟧ delete :: Delete by id (idempotent), rotating the affected toolset's cache and notifying.
   @spec delete(kind(), String.t(), keyword()) :: :ok | {:error, term()}
   def delete(kind, id, opts \\ []) do
     with {:ok, store_key} <- store_key(kind),
@@ -118,7 +113,6 @@ defmodule Noizu.MCP.Store do
   end
 
   @doc "The store's monotonic version (`kind` or raw store_key) — the FR-4.11 rotation proof."
-  # ⟦𓆑𓅱𓈖⟧ version :: The store's monotonic version.
   @spec version(kind() | Persistence.store_key(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def version(kind_or_key, opts \\ [])

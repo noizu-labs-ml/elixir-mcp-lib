@@ -21,7 +21,6 @@ if Code.ensure_loaded?(Ecto.Adapters.SQL) do
     alias Noizu.MCP.Migrations.ChangeSet
 
     @doc "The v1 change set (`\"v1_toolsets\"`, version 1)."
-    # ⟦𓎝𓉔𓄿𓈖𓎼𓅱⟧ change_set :: The v1 change set.
     @spec change_set() :: ChangeSet.t()
     def change_set do
       %ChangeSet{

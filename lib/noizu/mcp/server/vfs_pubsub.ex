@@ -61,13 +61,11 @@ defmodule Noizu.MCP.Server.VFSPubSub do
 
   # ── Supervisor ────────────────────────────────────────────────────────────
 
-  # ⟦𓆒⟧ start_link
   def start_link(opts \\ []) do
     Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @impl Supervisor
-  # ⟦𓆒⟧ init
   def init(_opts) do
     Supervisor.init([{@hub, name: @hub}], strategy: :one_for_one)
   end
@@ -79,7 +77,6 @@ defmodule Noizu.MCP.Server.VFSPubSub do
   subtree delivery (default `:infinity`). Returns `:ok` or
   `{:error, :ewouldwatch}` when the caller is already at the watch cap.
   """
-  # ⟦𓆒⟧ watch
   @spec watch(module(), [String.t()] | String.t(), keyword()) :: :ok | {:error, :ewouldwatch}
   def watch(backend, paths, opts \\ []) do
     paths = List.wrap(paths)
@@ -93,14 +90,12 @@ defmodule Noizu.MCP.Server.VFSPubSub do
   end
 
   @doc "Stop watching `paths` on `backend` from the calling process."
-  # ⟦𓆒⟧ unwatch
   @spec unwatch(module(), [String.t()] | String.t()) :: :ok
   def unwatch(backend, paths) do
     GenServer.call(@hub, {:unwatch, self(), backend, List.wrap(paths)})
   end
 
   @doc "Pids currently watching `{backend, path}` (debug/test aid)."
-  # ⟦𓆒⟧ watchers
   @spec watchers(module(), String.t()) :: [pid()]
   def watchers(backend, path) do
     try do
@@ -116,7 +111,6 @@ defmodule Noizu.MCP.Server.VFSPubSub do
   end
 
   @doc "Current watch count for a subscriber (cap bookkeeping; test/debug aid)."
-  # ⟦𓆒⟧ watch_count
   @spec watch_count(pid()) :: non_neg_integer()
   def watch_count(pid) do
     try do
@@ -133,7 +127,6 @@ defmodule Noizu.MCP.Server.VFSPubSub do
   crash-proof: a no-op when the pubsub is not running, never raises into the
   caller (the write path treats this as best-effort).
   """
-  # ⟦𓆒⟧ publish
   @spec publish(module(), op(), String.t(), non_neg_integer(), term()) :: :ok
   def publish(backend, op, path, version, ctx) do
     case Process.whereis(@hub) do

@@ -229,7 +229,6 @@ defmodule Noizu.MCP.VFS.File do
   end
 
   @doc "Mime type for a VFS path — builtin extension map, overridable with `:mime_types`."
-  # ⟦𓆒⟧ mime_type
   def mime_type(path, opts \\ [])
 
   def mime_type(path, opts) when is_binary(path) and is_list(opts) do

@@ -136,7 +136,6 @@ defmodule Noizu.MCP.VFS do
 
   @optional_callbacks write: 3, create: 3, remove: 2, search: 3, xattr: 2
 
-  # ⟦𓆒⟧ __using__
   defmacro __using__(_opts) do
     quote do
       @behaviour Noizu.MCP.VFS
@@ -148,7 +147,6 @@ defmodule Noizu.MCP.VFS do
   # rest with defaults. The implemented list is what `Noizu.MCP.Server.VFS`
   # reads to derive the `vfs_write` capability flag — a backend that defines
   # `write/3`, `create/3`, or `remove/2` is writable.
-  # ⟦𓆒⟧ __before_compile__
   defmacro __before_compile__(env) do
     required = [stat: 2, list: 3, read: 2]
     optional = [write: 3, create: 3, remove: 2, search: 3, xattr: 2]

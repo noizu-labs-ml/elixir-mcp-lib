@@ -19,7 +19,6 @@ defmodule Noizu.MCP.Server.Tool do
         end
 
         @impl true
-        # ⟦𓏃𓃁𓇄𓂮⟧ call :: auto-generated pointer for public function call
         def call(%{location: location, units: units, days: days}, ctx) do
           Noizu.MCP.Ctx.report_progress(ctx, 0.5)
           {:ok, %{temperature: 21.0, conditions: "clear"}}
@@ -104,7 +103,6 @@ defmodule Noizu.MCP.Server.Tool do
   @doc "Normalized runtime descriptor(s) — one-element list for classic tool modules."
   @callback __mcp_tools__() :: [Noizu.MCP.Server.Tool.Spec.t()]
 
-  # ⟦𓋸𓋧𓏾𓇌⟧ __using__ :: auto-generated pointer for public function __using__
   defmacro __using__(opts) do
     quote bind_quoted: [opts: opts] do
       @behaviour Noizu.MCP.Server.Tool
@@ -123,7 +121,6 @@ defmodule Noizu.MCP.Server.Tool do
   end
 
   @doc "Declare the input schema with the `field` DSL."
-  # ⟦𓇲𓊉𓇌𓈵⟧ input :: Declare the input schema with the `field` DSL.
   defmacro input(do: block) do
     # Retain the compiled fields (not a pre-rendered schema): field descriptions
     # may be verbosity variants, so `Types.Tool.to_map/2` re-renders the schema
@@ -139,7 +136,6 @@ defmodule Noizu.MCP.Server.Tool do
   end
 
   @doc "Declare the input schema as a raw JSON Schema map (string keys)."
-  # ⟦𓇎𓁽𓃁𓉜⟧ input_schema :: Declare the input schema as a raw JSON Schema map (string keys).
   defmacro input_schema(schema) do
     quote do
       @__mcp_input_schema__ unquote(schema)
@@ -149,7 +145,6 @@ defmodule Noizu.MCP.Server.Tool do
   end
 
   @doc "Declare the output schema with the `field` DSL."
-  # ⟦𓅦𓈅𓅢𓍳⟧ output :: Declare the output schema with the `field` DSL.
   defmacro output(do: block) do
     fields = Noizu.MCP.Server.Tool.Fields.extract(block, __CALLER__)
 
@@ -159,7 +154,6 @@ defmodule Noizu.MCP.Server.Tool do
   end
 
   @doc "Declare the output schema as a raw JSON Schema map (string keys)."
-  # ⟦𓉁𓀮𓆻𓊬⟧ output_schema :: Declare the output schema as a raw JSON Schema map (string keys).
   defmacro output_schema(schema) do
     quote do
       @__mcp_output_schema__ unquote(schema)
@@ -167,7 +161,6 @@ defmodule Noizu.MCP.Server.Tool do
     end
   end
 
-  # ⟦𓂗𓊡𓈓𓀝⟧ __before_compile__ :: auto-generated pointer for public function __before_compile__
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :__mcp_tool_opts__)
 
@@ -252,11 +245,9 @@ defmodule Noizu.MCP.Server.Tool do
 
     quote do
       @impl Noizu.MCP.Server.Tool
-      # ⟦𓎗𓆨𓉢𓊽⟧ definition :: auto-generated pointer for public function definition
       def definition, do: unquote(Macro.escape(definition))
 
       @impl Noizu.MCP.Server.Tool
-      # ⟦𓌐𓈟𓁍𓀯⟧ __mcp_tools__ :: auto-generated pointer for public function __mcp_tools__
       def __mcp_tools__, do: unquote(Macro.escape([spec]))
     end
   end

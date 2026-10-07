@@ -16,7 +16,6 @@ defmodule Noizu.MCP.Persistence.Ping do
   require Logger
 
   @doc false
-  # ⟦𓊪𓇋𓈖𓎼⟧ start_link :: auto-generated pointer for public function start_link
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name))
   end

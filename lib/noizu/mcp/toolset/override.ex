@@ -49,7 +49,6 @@ defmodule Noizu.MCP.Toolset.Override do
 
   @doc "True for field-level ops (their `target` is a field atom, not a tool name)."
   @spec field_op?(op()) :: boolean()
-  # ⟦𓊪𓍿𓆄𓎡⟧ field_op? :: True for field-level ops (their `target` is a field atom, not a tool name).
   def field_op?(op) when op in @field_ops, do: true
   def field_op?(_op), do: false
 
@@ -60,7 +59,6 @@ defmodule Noizu.MCP.Toolset.Override do
   layer revives them. `op` is stored as its string name (atoms flatten in
   JSON).
   """
-  # ⟦𓋴𓍿𓄿𓃭⟧ to_map :: JSON/storage map for one op (PRD-4 record encoding).
   @spec to_map(t()) :: %{optional(String.t()) => term()}
   def to_map(%__MODULE__{} = op) do
     %{
@@ -78,7 +76,6 @@ defmodule Noizu.MCP.Toolset.Override do
   as a literal in this module, so the atom always pre-exists; a foreign name
   raises ArgumentError (stored ops come from the closed set).
   """
-  # ⟦𓆑𓂋𓍯𓅓⟧ from_map :: Restore one `to_map/1` product back to an op.
   @spec from_map(map()) :: t()
   def from_map(%{} = map) do
     %__MODULE__{

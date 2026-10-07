@@ -91,12 +91,10 @@ defmodule Noizu.MCP.Persistence do
   # ── store keys ────────────────────────────────────────────────────────────
 
   @doc "The three store keys (§4.1)."
-  # ⟦𓋴𓏏𓂋𓅱⟧ store_keys :: The three store keys (§4.1).
   @spec store_keys() :: [String.t()]
   def store_keys, do: @store_keys
 
   @doc ":ok when `key` is a store key, else `{:error, {:unknown_store_key, key}}`."
-  # ⟦𓎼𓅱𓄿𓂋𓂧⟧ guard_store_key :: :ok when `key` is a store key, else `{:error, {:unknown_store_key, key}}`.
   @spec guard_store_key(term()) :: :ok | {:error, {:unknown_store_key, term()}}
   def guard_store_key(key) when key in @store_keys, do: :ok
   def guard_store_key(key), do: {:error, {:unknown_store_key, key}}
@@ -108,7 +106,6 @@ defmodule Noizu.MCP.Persistence do
   Application env (call time), then `:memory`. See `resolved/2` for the full
   chain including the per-server stash.
   """
-  # ⟦𓂋𓅱𓋴𓍯𓃭𓆑⟧ resolved :: The provider for a call with no server context (§4.3).
   @spec resolved(opts()) :: {module(), opts()} | nil
   def resolved(opts) when is_list(opts), do: resolved(opts[:server], opts)
 
@@ -120,7 +117,6 @@ defmodule Noizu.MCP.Persistence do
   form, then individual) > `:memory`. Used by Store, the Context pass, and
   direct `Toolset` calls without a session.
   """
-  # ⟦𓂋𓅱𓋴𓍯𓃭𓆑⟧ resolved :: The persistence provider governing this call (§4.3, lazy — D3).
   @spec resolved(server :: term(), opts()) :: {module(), opts()} | nil
   def resolved(server, opts) when is_list(opts) do
     case combined(opts[:providers]) || opts[:persistence] || server_stash(server) ||
@@ -140,7 +136,6 @@ defmodule Noizu.MCP.Persistence do
   resolve `nil` (the use-time validator is the config gate; this is the
   back-compat floor — same posture as `Noizu.MCP.ACL.Provider`).
   """
-  # ⟦𓂋𓄿𓊪⟧ normalize :: Normalize a selection value shape.
   @spec normalize(term()) :: {module(), opts()} | nil
   def normalize(:memory), do: {Noizu.MCP.Persistence.Memory, []}
   def normalize(:disabled), do: {Noizu.MCP.Persistence.Disabled, []}
@@ -156,7 +151,6 @@ defmodule Noizu.MCP.Persistence do
   layers, not an outage — the context pass skips silently) and unresolvable
   values. Every other provider is enabled, and its failures are D5 outages.
   """
-  # ⟦𓊂𓈖𓄿𓃭⟧ enabled? :: False ONLY for the `Disabled` provider (§4.2).
   @spec enabled?({module(), opts()} | nil) :: boolean()
   def enabled?({Noizu.MCP.Persistence.Disabled, _}), do: false
   def enabled?({provider, _}) when is_atom(provider) and provider != nil, do: true
@@ -184,7 +178,6 @@ defmodule Noizu.MCP.Persistence do
   impl — a `version/2` roundtrip on `"toolsets"` (house style: direct call,
   rescue only the expected UndefinedFunctionError; no exported probing).
   """
-  # ⟦𓊪𓇋𓈖𓎼⟧ ping :: Dispatch `ping/1` against `provider`, normalizing the miss to the DEFAULT.
   @spec ping(module(), opts()) :: :ok | {:error, term()}
   def ping(provider, opts) when is_atom(provider) and is_list(opts) do
     provider.ping(opts)
@@ -254,7 +247,6 @@ defmodule Noizu.MCP.Persistence do
   Shared by Memory, Ecto and any host provider — the conformance suite is the
   fork guard (AP-8).
   """
-  # ⟦𓂋𓈖𓎡𓍯𓂧𓅱⟧ encode_record :: Encode `record` for storage (§4.1).
   @spec encode_record(store_key(), map() | struct()) ::
           {:ok, String.t(), fields :: map(),
            %{expires_at: DateTime.t() | nil, inserted_at: DateTime.t()}}
@@ -277,7 +269,6 @@ defmodule Noizu.MCP.Persistence do
   `%Noizu.MCP.Permission.Negotiation{}`). `{:error, {:unknown_base, name}}`
   when a stored toolset's base module atom no longer exists (§4.4).
   """
-  # ⟦𓂧𓅱𓎡𓍯𓂧𓅱⟧ decode_record :: Restore one stored `json` payload to its record.
   @spec decode_record(store_key(), String.t()) :: {:ok, map() | struct()} | {:error, term()}
   def decode_record(store_key, json) when is_binary(json) do
     with :ok <- guard_store_key(store_key) do
@@ -290,7 +281,6 @@ defmodule Noizu.MCP.Persistence do
   @doc false
   # The revive step proper — shared by decode_record/2 (blob stores) and by
   # structured stores that read COLUMNS and rebuild the string-keyed raw map.
-  # ⟦𓂋𓅂𓆑⟧ revive_record :: The revive step proper — shared by decode_record/2 (blob stores) and by.
   @spec revive_record(store_key(), map()) :: {:ok, map() | struct()} | {:error, term()}
   def revive_record(store_key, raw) when is_map(raw) do
     with :ok <- guard_store_key(store_key) do
@@ -299,7 +289,6 @@ defmodule Noizu.MCP.Persistence do
   end
 
   @doc "The store invariant (§4.1): `expires_at <= at` ⇒ expired."
-  # ⟦𓊋𓊪𓇋𓂋⟧ expired? :: The store invariant (§4.1).
   @spec expired?(map() | struct(), DateTime.t()) :: boolean()
   def expired?(%{expires_at: nil}, _at), do: false
 
@@ -312,7 +301,6 @@ defmodule Noizu.MCP.Persistence do
   `:authenticator` compare string-normalized (atom callers match string
   records); a filter key the record kind lacks excludes the record.
   """
-  # ⟦𓅓𓄿𓏏𓎡𓉔⟧ match_filter? :: Exact-match filter (§4.1).
   @spec match_filter?(map() | struct(), map() | nil) :: boolean()
   def match_filter?(_record, filter) when filter in [nil, %{}], do: true
 

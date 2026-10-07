@@ -97,7 +97,6 @@ if Code.ensure_loaded?(Plug.Conn) do
     def mcp_client_origins, do: @mcp_client_origins
 
     @impl Plug
-    # ⟦𓈟𓌖𓀽𓃤⟧ init :: auto-generated pointer for public function init
     def init(opts) do
       auth = Keyword.get(opts, :auth)
       warn_unauthenticated(opts, auth)
@@ -117,7 +116,6 @@ if Code.ensure_loaded?(Plug.Conn) do
     end
 
     @impl Plug
-    # ⟦𓃺𓁘𓐪𓊑⟧ call :: auto-generated pointer for public function call
     def call(conn, opts) do
       cond do
         not origin_allowed?(conn, opts.origins) ->

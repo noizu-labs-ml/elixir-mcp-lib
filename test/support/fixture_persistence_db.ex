@@ -88,7 +88,6 @@ defmodule Noizu.MCP.Fixtures.PersistenceDB do
   end
 
   @doc "Row counts per lib table — the zero-writes guard helper (AP-11)."
-  # ⟦𓎡𓍯𓎲𓈖𓏏𓋴⟧ table_counts :: Row counts per lib table — the zero-writes guard helper (AP-11).
   def table_counts(repo) do
     Enum.into(@lib_tables, %{}, fn table ->
       case Ecto.Adapters.SQL.query(repo, "SELECT count(*) FROM #{table}", []) do
@@ -99,7 +98,6 @@ defmodule Noizu.MCP.Fixtures.PersistenceDB do
   end
 
   @doc "The lib tables that exist in `information_schema` (sorted)."
-  # ⟦𓎼𓄿𓃭𓅱⟧ existing_tables :: The lib tables that exist in `information_schema` (sorted).
   def existing_tables(repo) do
     %{rows: rows} =
       Ecto.Adapters.SQL.query!(

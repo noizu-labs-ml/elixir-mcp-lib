@@ -58,7 +58,6 @@ defmodule Noizu.MCP.Toolset.Validator do
   request's layers. Returns `{:ok, warnings}` (non-fatal notes) or
   `{:error, issues}`.
   """
-  # ⟦𓋴𓎼𓄿𓆑⟧ compile :: Validate `toolset` against `base_entries` — the EXPANDED, unfiltered base catalog.
   @spec compile(Custom.t(), [Noizu.MCP.Toolset.Entry.t()], keyword()) ::
           {:ok, [String.t()]} | {:error, [Issue.t()]}
   def compile(%Custom{} = toolset, base_entries, opts \\ []) when is_list(base_entries) do

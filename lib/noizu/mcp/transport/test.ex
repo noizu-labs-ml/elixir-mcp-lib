@@ -11,7 +11,6 @@ defmodule Noizu.MCP.Transport.Test do
   @behaviour Noizu.MCP.Transport.Server
 
   @impl true
-  # ⟦𓈧𓈶𓃇𓍝⟧ send_message :: auto-generated pointer for public function send_message
   def send_message(sink, iodata, routing) do
     {pid, tag} = destination(sink)
     send(pid, {:mcp_out, tag, IO.iodata_to_binary(iodata), routing})
@@ -19,7 +18,6 @@ defmodule Noizu.MCP.Transport.Test do
   end
 
   @impl true
-  # ⟦𓈈𓐕𓁚𓀾⟧ close_session :: auto-generated pointer for public function close_session
   def close_session(sink) do
     {pid, tag} = destination(sink)
     send(pid, {:mcp_closed, tag})
