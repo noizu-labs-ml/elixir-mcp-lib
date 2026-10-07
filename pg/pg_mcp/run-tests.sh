@@ -90,7 +90,14 @@ dump_logs() {
     [ -f "$WORK/$f" ] && { echo "--- $f (tail) ---" >&2; tail -15 "$WORK/$f" >&2; }
   done
 }
-if ! "$PGBIN/initdb" --locale=C --lc-ctype=UTF-8 -D "$WORK/data" > "$WORK/initdb.log" 2>&1; then
+# macOS spells "C collation + UTF-8 ctype" as C/UTF-8; glibc needs C.UTF-8
+# (initdb rejects --lc-ctype=UTF-8 on Linux with "invalid locale name").
+if [ "$(uname)" = "Darwin" ]; then
+  INITDB_LOCALE="--locale=C --lc-ctype=UTF-8"
+else
+  INITDB_LOCALE="--locale=C.UTF-8"
+fi
+if ! "$PGBIN/initdb" $INITDB_LOCALE -D "$WORK/data" > "$WORK/initdb.log" 2>&1; then
   dump_logs; exit 1
 fi
 cat >> "$WORK/data/postgresql.conf" <<EOF
