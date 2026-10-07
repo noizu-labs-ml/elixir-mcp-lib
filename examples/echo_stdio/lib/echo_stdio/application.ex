@@ -4,7 +4,7 @@ defmodule EchoStdio.Application do
   use Application
 
   @impl true
-  # ⟦𓌘𓊦𓇦𓇡⟧ start :: auto-generated pointer for public function start
+  # <REMOVED UUID HERE> start :: auto-generated pointer for public function start
   def start(_type, _args) do
     children = [
       {EchoStdio.MCP, transport: :stdio}
