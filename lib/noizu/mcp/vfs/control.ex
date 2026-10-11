@@ -364,7 +364,10 @@ defmodule Noizu.MCP.VFS.Control do
   end
 
   defp control_list(backend, @mount <> "/runtime/sessions", cursor, _ctx) do
-    entries = Enum.map(session_ids(backend), &dir_entry/1)
+    # Session ids are file-shaped control nodes (see control_stat/2) — like
+    # status/cache above, the LIST view must agree or walker clients queue
+    # them as dirs and crash-loop on the enotdir.
+    entries = Enum.map(session_ids(backend), &control_entry/1)
     Pagination.paginate(entries, cursor)
   end
 
