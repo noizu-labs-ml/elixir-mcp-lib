@@ -358,6 +358,21 @@ defmodule Noizu.MCP.VFS.ControlTest do
     assert Jason.decode!(body)["id"] == id
   end
 
+  test "sessions: stat and list agree they are file-shaped control nodes", %{ctx: ctx} do
+    %Noizu.MCP.Test.Client{} = Noizu.MCP.Test.connect(@server)
+
+    assert {:ok, sessions, nil} = VFS.list(@wrapper, "/etc/dev/runtime/sessions", nil, ctx)
+    assert sessions != []
+
+    # Every listed entry is a control node — stat of each id returns :control
+    # (asserted in the test above), so list must not report :dir or walker
+    # clients crash-loop on the enotdir.
+    assert Enum.all?(sessions, &(&1.type == :control))
+
+    [%{name: id} | _] = sessions
+    assert {:error, :enotdir} = VFS.list(@wrapper, "/etc/dev/runtime/sessions/#{id}", nil, ctx)
+  end
+
   # Session registration happens as the connection handshake lands — poll
   # briefly so the listing doesn't race it.
   defp wait_for_new_sessions(before, ctx, tries \\ 50) do
