@@ -46,9 +46,10 @@ defmodule McpMount.MounterWritebackRegressionTest do
     [
       {"/docs", %{type: :dir, version: 1}},
       {"/docs/hello.txt", %{type: :file, version: 1, content: "hello world\n"}},
-      # control tree: server-side configuration surface, materialized but
-      # never pushed
+      # control tree: server-side configuration surface; etc/dev/config/**
+      # pushes (runtime writes toggle), every other control path is a no-op
       {"/etc", %{type: :dir, version: 1}},
+      {"/etc/motd", %{type: :file, version: 1, content: "welcome\n"}},
       {"/etc/dev", %{type: :dir, version: 1}},
       {"/etc/dev/config", %{type: :dir, version: 1}},
       {"/etc/dev/config/writes", %{type: :file, version: 1, content: "true\n"}}
@@ -59,30 +60,78 @@ defmodule McpMount.MounterWritebackRegressionTest do
 
   defp fake_conn(mounter), do: :sys.get_state(mounter).conn
 
-  test "control tree /etc/** is materialized but excluded from write-back", %{
-    dir: dir,
-    mounter: mounter
+  test "etc/dev/config/** pushes through the ordinary vfs/write (runtime writes toggle)", %{
+    dir: dir
   } do
     writes = Path.join(dir, "etc/dev/config/writes")
     assert File.read!(writes) == "true\n"
     assert Manifest.read(dir)["etc/dev/config/writes"] != nil
 
-    # a local edit must be a no-op: no push, no conflict churn
-    File.write!(writes, "false\n")
+    # flip the gate by editing the mounted file — plain vfs/write, no new op
+    write_and_wait_push(dir, "etc/dev/config/writes", "false\n", fn ->
+      case McpMount.Test.FakeVfs.handler().("vfs/read", %{"path" => "/etc/dev/config/writes"}) do
+        {:ok, %{"content" => "false\n", "version" => v}} when v >= 2 ->
+          Manifest.read(dir)["etc/dev/config/writes"].version >= 2
+
+        _ ->
+          false
+      end
+    end)
+
+    # flipping back works the same way (server version moved ahead in between)
+    write_and_wait_push(dir, "etc/dev/config/writes", "true\n", fn ->
+      case McpMount.Test.FakeVfs.handler().("vfs/read", %{"path" => "/etc/dev/config/writes"}) do
+        {:ok, %{"content" => "true\n", "version" => v}} when v >= 3 -> :ok
+        _ -> nil
+      end
+    end)
+
+    # no conflict copies anywhere under the control tree
+    refute conflict_under?(Path.join(dir, "etc"))
+  end
+
+  test "control paths outside etc/dev/config/** stay excluded from write-back", %{
+    dir: dir,
+    mounter: mounter
+  } do
+    motd = Path.join(dir, "etc/motd")
+    assert File.read!(motd) == "welcome\n"
+    assert Manifest.read(dir)["etc/motd"] != nil
+
+    # a local edit must be a no-op: never queued, no push, no conflict churn
+    File.write!(motd, "local graffiti\n")
     Process.sleep(900)
 
     assert Process.alive?(mounter)
 
     {:ok, %{"content" => content, "version" => version}} =
-      McpMount.Test.FakeVfs.handler().("vfs/read", %{"path" => "/etc/dev/config/writes"})
+      McpMount.Test.FakeVfs.handler().("vfs/read", %{"path" => "/etc/motd"})
 
-    assert content == "true\n"
+    assert content == "welcome\n"
     assert version == 1
-    assert File.read!(writes) == "false\n"
-    assert Manifest.read(dir)["etc/dev/config/writes"].version == 1
+    assert File.read!(motd) == "local graffiti\n"
+    assert Manifest.read(dir)["etc/motd"].version == 1
 
     # no conflict copies anywhere under the control tree
     refute conflict_under?(Path.join(dir, "etc"))
+  end
+
+  test "non-regular control-config nodes are never created or pushed", %{
+    dir: dir,
+    mounter: mounter
+  } do
+    # a directory under the writable corner: whitelisted by prefix, so it is
+    # queued — but write-back refuses non-regular files (no vfs/create, no
+    # crash, nothing left pending)
+    File.mkdir!(Path.join(dir, "etc/dev/config/newdir"))
+    Process.sleep(900)
+
+    assert Process.alive?(mounter)
+
+    assert McpMount.Test.FakeVfs.handler().("vfs/stat", %{"path" => "/etc/dev/config/newdir"}) ==
+             {:error, :enoent}
+
+    assert :sys.get_state(mounter).pending == MapSet.new()
   end
 
   defp conflict_under?(dir) do
@@ -107,7 +156,13 @@ defmodule McpMount.MounterWritebackRegressionTest do
     :sys.replace_state(
       mounter,
       fn st ->
-        %{st | state: :reconnecting, conn: nil, pending: MapSet.new(["docs/hello.txt"]), timer: nil}
+        %{
+          st
+          | state: :reconnecting,
+            conn: nil,
+            pending: MapSet.new(["docs/hello.txt"]),
+            timer: nil
+        }
       end
     )
 

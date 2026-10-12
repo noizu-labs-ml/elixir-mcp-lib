@@ -78,16 +78,27 @@ defmodule McpMount.IntegrationWSTest do
          dir: dir,
          mounter: mounter
        } do
-    # next op blocks past the 5s stat budget (+1s WSConn GenServer margin):
+    # the next op blocks past the 5s stat budget (+1s WSConn GenServer margin):
     # before deadline hardening this raised out of the flush loop and killed
     # the daemon (supervisor restart = new pid; the original pid must live)
     McpMount.Test.VfsServer.set_stall_once("vfs/stat", "/docs/hello.txt", 7_000)
 
     # the push's stat hits the deadline -> {:error, :timeout} -> deferred;
-    # the deadline fires as a VALUE out of the flush loop (no raise, no crash)
-    write_and_wait_push(dir, "docs/hello.txt", "stalled push\n", fn ->
-      Process.alive?(mounter)
-    end)
+    # the deadline fires as a VALUE out of the flush loop (no raise, no crash).
+    # The check is deliberately progress-based (pending holds the path once
+    # the deadline fired): a trivially-true `Process.alive?/1` check disabled
+    # Support's re-touch recovery, so one swallowed fsevents event (the known
+    # delivery wobble) failed the whole test — flaked ~50% under load.
+    write_and_wait_push(
+      dir,
+      "docs/hello.txt",
+      "stalled push\n",
+      fn ->
+        Process.alive?(mounter) and
+          MapSet.member?(:sys.get_state(mounter).pending, "docs/hello.txt")
+      end,
+      20_000
+    )
 
     # stall window over: the deferred flush retries and the push lands
     wait_until(

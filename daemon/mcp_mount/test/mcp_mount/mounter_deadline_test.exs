@@ -233,6 +233,71 @@ defmodule McpMount.MounterDeadlineTest do
     assert Process.alive?(mounter)
   end
 
+  test "short pull_backoff_ms seam clamps the retry cap (no nil send_after crash)", %{
+    dir: dir,
+    name: name
+  } do
+    # regression (robot review, PR #57): Enum.at(pull_backoff_ms, n) ran past
+    # a test-seam list shorter than the retry cap and handed nil to
+    # Process.send_after/3, crashing the Mounter. The cap now derives from
+    # the list length, so a 1-entry list means 1 backoff attempt, then drop.
+    {:ok, switch} = Agent.start_link(fn -> false end)
+    base = McpMount.Test.FakeVfs.handler()
+
+    handler = fn
+      "vfs/read", %{"path" => "/docs/hello.txt"} ->
+        if Agent.get(switch, & &1) do
+          {:error, :eio}
+        else
+          base.("vfs/read", %{"path" => "/docs/hello.txt"})
+        end
+
+      m, p ->
+        base.(m, p)
+    end
+
+    mounter = start_mount(dir, name, handler: handler, pull_backoff_ms: [20])
+    wait_until(fn -> if live?(mounter), do: :ok end)
+
+    # drift AFTER live: the v2 event is a real pull, not a self-echo
+    McpMount.Test.FakeVfs.write("/docs/hello.txt", "clamp target\n")
+
+    logs =
+      capture_log(fn ->
+        Agent.update(switch, fn _ -> true end)
+
+        FakeConn.inject_event(fake_conn(mounter), %{
+          op: "write",
+          path: "/docs/hello.txt",
+          version: 2
+        })
+
+        # 2 failed pulls (initial + the single 20ms retry) -> drop + nudge;
+        # the failing in-place resync escalates to reconnect
+        wait_until(
+          fn ->
+            case :sys.get_state(mounter) do
+              %{state: :reconnecting} -> :ok
+              _ -> nil
+            end
+          end,
+          5_000
+        )
+      end)
+
+    assert logs =~ "dropping event"
+    assert Process.alive?(mounter)
+
+    # server recovers: the reconnect resync lands the content
+    Agent.update(switch, fn _ -> false end)
+
+    wait_until(fn -> if live?(mounter), do: :ok end, 15_000)
+
+    wait_until(fn -> if File.read!(hello(dir)) == "clamp target\n", do: :ok end)
+    assert Manifest.read(dir)["docs/hello.txt"].version == 2
+    assert Process.alive?(mounter)
+  end
+
   test "resync nudge heals drift in place, keeping the watcher and manifest", %{
     dir: dir,
     name: name

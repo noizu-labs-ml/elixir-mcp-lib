@@ -18,8 +18,10 @@ defmodule McpMount.Mounter do
   * **Write-back** — a `file_system` watcher on the mount dir debounces 250ms
     then pushes each dirty path: server version unchanged -> `vfs/write`;
     otherwise the local edit is moved aside to `<path>.conflict-<ISO-ts>` and
-    the server version re-pulled. `--ro` mounts have no watcher and never
-    push.
+    the server version re-pulled. Control paths (`etc/**`) are read-only
+    except `etc/dev/config/**` (the runtime writes toggle), which pushes
+    through the ordinary `vfs/write`. `--ro` mounts have no watcher and
+    never push.
   """
 
   use GenServer
@@ -50,9 +52,11 @@ defmodule McpMount.Mounter do
   @flush_retry_ms 2_000
   # pulls: event-driven read/stat retries at 1s -> 4s -> 16s (3 backoff
   # attempts); exhausted pulls are dropped and a resync nudge is queued.
-  # Pulls are the system's healing direction — they are never parked.
+  # Pulls are the system's healing direction — they are never parked. The
+  # retry cap derives from this list's length (not a separate constant), so
+  # a shorter test-seam list can never run Enum.at past its end and hand a
+  # nil delay to Process.send_after/3 (robot review follow-up, PR #57).
   @pull_backoff_ms [1_000, 4_000, 16_000]
-  @max_pull_retries 3
 
   defstruct [
     :conn_mod,
@@ -80,7 +84,7 @@ defmodule McpMount.Mounter do
     # rels whose last create/write was acked by the server but not yet
     # confirmed by a read-back (self-echo tolerance)
     pushed_ack: MapSet.new(),
-    # rel => scheduled pull retries (bounded by @max_pull_retries)
+    # rel => scheduled pull retries (bounded by length(pull_backoff_ms))
     pull_attempts: %{},
     # set when an event pull exhausted its backoff: quiescence (live, nothing
     # pending) triggers an in-place diff resync; persistent failure escalates
@@ -209,7 +213,8 @@ defmodule McpMount.Mounter do
   def handle_info({:file_event, _watcher, {path, _events}}, s) do
     rel = relative(s, path)
 
-    if rel != nil and !Manifest.ignored?(rel) and !control_path?(rel) and s.state == :live do
+    if rel != nil and !Manifest.ignored?(rel) and
+         (!control_path?(rel) or control_config_path?(rel)) and s.state == :live do
       timer = start_debounce(s.timer)
       {:noreply, %{s | pending: MapSet.put(s.pending, rel), timer: timer}}
     else
@@ -443,7 +448,7 @@ defmodule McpMount.Mounter do
 
   # Event-driven pull of one path (server truth), with bounded backoff.
   # Pulls are never parked — they are the system's healing direction. A pull
-  # that exhausts @max_pull_retries retries is dropped, the per-path counter
+  # that exhausts its backoff schedule is dropped, the per-path counter
   # is cleared, a resync nudge is queued (the quiescence check runs the diff
   # resync in place) and the drop is logged once.
   defp pull(s, rel, path) do
@@ -488,7 +493,7 @@ defmodule McpMount.Mounter do
   defp pull_failed(s, rel, path, reason) do
     n = Map.get(s.pull_attempts, rel, 0)
 
-    if n >= @max_pull_retries do
+    if n >= length(s.pull_backoff_ms) do
       Logger.warning(
         "mcp-mount[#{s.name}]: pull for #{path} failed #{n + 1}x " <>
           "(last: #{inspect(reason)}); dropping event — resync queued"
@@ -547,9 +552,13 @@ defmodule McpMount.Mounter do
     abs = Path.join(s.mount, rel)
 
     cond do
-      # control tree (/etc/**) is a server-side configuration surface: never
-      # pushed, local edits are a documented no-op (still materialized/readable)
-      control_path?(rel) ->
+      # control tree (/etc/**) is a server-side configuration surface. One
+      # corner is writable: etc/dev/config/** (the runtime writes toggle)
+      # pushes through the ordinary vfs/write below — the server validates
+      # the data, so a malformed edit fails like any write error (retries,
+      # then park; the gate is untouched). Every other etc/** path stays a
+      # documented no-op: never queued, never pushed, never conflict-saved.
+      control_path?(rel) and !control_config_path?(rel) ->
         {s, false}
 
       s.ro ->
@@ -889,10 +898,14 @@ defmodule McpMount.Mounter do
     end
   end
 
-  # Control tree: server-side configuration surfaces. Local edits via the
-  # mount are a documented no-op — never watched, never pushed.
+  # Control tree: server-side configuration surfaces. etc/dev/config/** is
+  # the one writable corner (runtime toggle writes reach the ordinary
+  # vfs/write — VFS-FEATURES-DESIGN §3/D3, zero protocol change); every
+  # other control path is read-only: never queued, never pushed.
   defp control_path?("etc"), do: true
   defp control_path?(rel), do: String.starts_with?(rel, "etc/")
+
+  defp control_config_path?(rel), do: String.starts_with?(rel, "etc/dev/config/")
 
   defp ts, do: DateTime.utc_now() |> DateTime.to_iso8601() |> String.replace(":", "-")
 

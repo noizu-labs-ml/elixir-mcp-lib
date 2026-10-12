@@ -17,8 +17,14 @@ Result: `grep`, `cat`, `tail -f`, pipes and cron all work on your MCP data.
 ### Write-back safety
 
 - **Control tree** — `/etc/**` is a server-side configuration surface. It is
-  materialized and readable, but local edits via the mount are a **no-op**: the
-  watcher never queues it and the daemon never pushes or conflict-saves it.
+  materialized and readable, and exactly one corner is writable:
+  `etc/dev/config/**` — local edits there push through the ordinary
+  `vfs/write` (e.g. flip the runtime writes toggle by writing `true`/`false`
+  to `/etc/dev/config/writes`; the server validates the data, so a malformed
+  edit fails the push like any write error and parks after the retry cap,
+  leaving the gate untouched). Every other `/etc/**` path stays a **no-op**:
+  the watcher never queues it and the daemon never pushes or conflict-saves
+  it.
 - **Ack-as-synced** — a successful `vfs/create`/`vfs/write` ack immediately
   marks the path synced (an ack without a version is recorded unconfirmed
   until a read-back confirms it); unchanged content is never re-pushed on
