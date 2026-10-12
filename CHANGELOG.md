@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 2026-10-13
+
+Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
+(client-only; no server changes) — #57.
+
+- **Timeouts are values, not crashes.** `WSConn.call/4` rescues GenServer
+  exits: a deadline surfaces as `{:error, :timeout}`, a dead conn as
+  `{:error, :closed}` — previously a single slow server response (>6s)
+  raised out of the flush loop and killed the unsupervised escript.
+- **Per-op budgets:** ping/stat 5s, list 10s, read/create 15s, write 30s
+  (WSConn keeps a +1s GenServer margin); sync's task timeout scales to the
+  largest budget.
+- **Push timeouts defer and count.** Transport timeouts retry on the flush
+  cadence, count toward the existing 4-attempt cap, and park with the
+  content preserved in a `.conflict-<ts>` copy; a confirmed push clears the
+  path's attempt counter. Debounce and park machinery otherwise unchanged.
+- **Pulls back off, then heal by resync.** Failed pulls retry on a
+  1s/4s/16s backoff (3 attempts); after that the event is dropped and a
+  resync nudge runs the existing diff sync in place when the mount is live
+  and quiescent — the watcher and manifest survive; a full reconnect is
+  only the escalation path when the in-place resync fails.
+
 ## [0.5.3] — 2026-10-08
 
 Patch release: `Client.close/1` process-leak fix.
