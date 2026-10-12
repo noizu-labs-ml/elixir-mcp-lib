@@ -29,6 +29,25 @@ Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
   and quiescent — the watcher and manifest survive; a full reconnect is
   only the escalation path when the in-place resync fails.
 
+Control-write whitelist for the mcp-mount daemon, per VFS-FEATURES-DESIGN
+§3/D3 (client half; no server or auth changes) — #58.
+
+- **`etc/dev/config/**` is writable from a mount edit.** The watcher queues
+  config paths and write-back pushes them through the ordinary `vfs/write`
+  (e.g. flip the runtime writes toggle by writing `true`/`false` to
+  `/etc/dev/config/writes`); the server validates the data, so a malformed
+  edit fails like any write error (retries, then park; the gate untouched).
+  Every other `/etc/**` path stays a documented no-op: never queued, never
+  pushed, never conflict-saved.
+- **Pull retry cap follows the backoff list.** The cap derives from
+  `length(pull_backoff_ms)` instead of a hardcoded constant (#57 robot-review
+  follow-up), so a short test-seam list can no longer hand a nil delay to
+  `Process.send_after/3` and crash the daemon.
+- **Stall-test stabilization.** The #57 integration stall test's trivially
+  true survival check disabled the test helper's fsevents re-touch recovery;
+  one swallowed watcher event failed the test (~50% under load, proven on
+  unmodified develop). The check is now progress-based.
+
 ## [0.5.3] — 2026-10-08
 
 Patch release: `Client.close/1` process-leak fix.
