@@ -73,9 +73,43 @@ defmodule McpMount.IntegrationWSTest do
     assert Manifest.read(dir)["docs/note.md"].version == 2
   end
 
+  test "stalled server: deadline fires as a deferred error value, mount survives and pushes after recovery",
+       %{
+         dir: dir,
+         mounter: mounter
+       } do
+    # next op blocks past the 5s stat budget (+1s WSConn GenServer margin):
+    # before deadline hardening this raised out of the flush loop and killed
+    # the daemon (supervisor restart = new pid; the original pid must live)
+    McpMount.Test.VfsServer.set_stall_once("vfs/stat", "/docs/hello.txt", 7_000)
+
+    # the push's stat hits the deadline -> {:error, :timeout} -> deferred;
+    # the deadline fires as a VALUE out of the flush loop (no raise, no crash)
+    write_and_wait_push(dir, "docs/hello.txt", "stalled push\n", fn ->
+      Process.alive?(mounter)
+    end)
+
+    # stall window over: the deferred flush retries and the push lands
+    wait_until(
+      fn ->
+        case server_read("/docs/hello.txt") do
+          {:ok, %{"content" => "stalled push\n"}} -> :ok
+          _ -> nil
+        end
+      end,
+      15_000
+    )
+
+    # the ORIGINAL process survived the deadline: no raise killed it, no
+    # supervisor restart replaced it — and the mount settled back to :live
+    assert Process.alive?(mounter)
+    assert elem(Mounter.state(mounter), 0) == :live
+    assert Manifest.read(dir)["docs/hello.txt"].version >= 2
+  end
+
   defp server_read(path) do
     handler_result =
-      case :sys.get_state(Process.whereis(McpMount.Test.VfsServer.Store)) do
+      case :sys.get_state(Process.whereis(McpMount.Test.VfsServer.Store), 10_000) do
         %{nodes: nodes} ->
           case nodes[path] do
             %{content: c, version: v} -> {:ok, %{"content" => c, "version" => v}}

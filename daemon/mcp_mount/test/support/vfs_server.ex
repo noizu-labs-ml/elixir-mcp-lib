@@ -21,6 +21,15 @@ defmodule McpMount.Test.VfsServer do
   @doc "Remote mutation; broadcasts an event to subscribed connections."
   def mutate(path, op, data \\ nil), do: Store.mutate(path, op, data)
 
+  @doc """
+  Make the NEXT matching vfs op block `ms` ms before answering (one-shot).
+  Lets tests stall the server past a client deadline budget without stalling
+  the rest of the suite. Matched on {method, path} so stray ops from other
+  connections can't consume the stall.
+  """
+  def set_stall_once(method, path, ms),
+    do: GenServer.call(Store, {:set_stall_once, method, path, ms})
+
   @impl Supervisor
   def init(_opts) do
     port = free_port()
@@ -50,6 +59,9 @@ defmodule McpMount.Test.VfsServer do
     def call(method, params, session),
       do: GenServer.call(__MODULE__, {:op, method, params, session})
 
+    def call(method, params, session, timeout),
+      do: GenServer.call(__MODULE__, {:op, method, params, session}, timeout)
+
     def subscribe(pid), do: GenServer.call(__MODULE__, {:subscribe, pid})
     def unsubscribe(pid), do: GenServer.call(__MODULE__, {:unsubscribe, pid})
 
@@ -66,11 +78,36 @@ defmodule McpMount.Test.VfsServer do
         "/docs/note.md" => %{type: :file, version: 1, content: "# note\n\nseed body\n"}
       }
 
-      {:ok, %{nodes: seed, port: Keyword.fetch!(opts, :port), subs: %{}, seq: 0}}
+      {:ok, %{nodes: seed, port: Keyword.fetch!(opts, :port), subs: %{}, seq: 0, stall: nil}}
     end
 
     @impl GenServer
     def handle_call(:port, _from, state), do: {:reply, state.port, state}
+
+    def handle_call({:set_stall_once, method, path, ms}, _from, state),
+      do: {:reply, :ok, %{state | stall: {method, path, ms}}}
+
+    # One-shot stall (see set_stall_once/3): a matching op blocks past the
+    # caller's deadline, then falls through to the normal handler.
+    def handle_call({:op, method, params, _session}, _from, state) do
+      state = maybe_stall(state, method, params)
+
+      case op(method, params, state) do
+        {reply, state} -> {:reply, {:ok, reply}, state}
+        {:error, errno} -> {:reply, {:error, errno}, state}
+      end
+    end
+
+    defp maybe_stall(%{stall: {method, path, ms}} = state, method, params) when ms > 0 do
+      if Map.get(params, "path") == path do
+        Process.sleep(ms)
+        %{state | stall: nil}
+      else
+        state
+      end
+    end
+
+    defp maybe_stall(state, _method, _params), do: state
 
     def handle_call({:subscribe, pid}, _from, state) do
       ref = Process.monitor(pid)
@@ -85,13 +122,6 @@ defmodule McpMount.Test.VfsServer do
         {ref, subs} ->
           Process.demonitor(ref, [:flush])
           {:reply, :ok, %{state | subs: subs}}
-      end
-    end
-
-    def handle_call({:op, method, params, _session}, _from, state) do
-      case op(method, params, state) do
-        {reply, state} -> {:reply, {:ok, reply}, state}
-        {:error, errno} -> {:reply, {:error, errno}, state}
       end
     end
 
@@ -296,7 +326,11 @@ defmodule McpMount.Test.VfsServer do
     end
 
     defp handle_frame(id, method, params, state) do
-      case Store.call(method, params, nil) do
+      # generous call timeout: set_stall_once/1 blocks the Store past client
+      # deadlines on purpose — the server connection must survive the stall
+      # (slow server, healthy link) so the client exercises ITS deadline, not
+      # a severed transport
+      case Store.call(method, params, nil, 15_000) do
         {:ok, result} ->
           {:push, {:text, ok(id, result)}, state}
 
