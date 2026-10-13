@@ -6,6 +6,8 @@
 `vfs/subscribe` (WS), pushes local edits back (250 ms debounce), syncs on reconnect by manifest
 version-diff. Runs in the **foreground** until killed; the mounted directory remains as plain
 files afterward (a later remount resyncs by version, deletions included).
+**New to mounting?** Start with [`VFS-MOUNT-GUIDE.md`](VFS-MOUNT-GUIDE.md) — the zero-to-mounted
+walkthrough (macOS prerequisites, build, first mount, everyday use, troubleshooting).
 
 ---
 
