@@ -445,6 +445,191 @@ defmodule Noizu.MCP.Transport.VFSWSTest do
              WSClient.request(client, "vfs/stat", %{}, 1)
   end
 
+  # ── vfs/move + handshake extras ───────────────────────────────────────────
+
+  test "auth result carries proto and caps for a move-capable backend", %{port: port} do
+    client = connect_ok!(port, [{"authorization", "Bearer " <> @key}])
+
+    assert {:ok, _, %{"result" => %{"proto" => 3, "caps" => ["move"], "authenticated" => true}}} =
+             WSClient.request(client, "vfs/auth", %{"api_key" => @key}, 1)
+  end
+
+  test "auth caps are empty for a backend without move", %{null_port: port} do
+    client = connect_ok!(port, [{"authorization", "Bearer " <> @key}])
+
+    assert {:ok, _, %{"result" => %{"proto" => 3, "caps" => []}}} =
+             WSClient.request(client, "vfs/auth", %{"api_key" => @key}, 1)
+  end
+
+  test "vfs_move renames a file: old path gone, content at the new one", %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"result" => %{"type" => "file", "size" => 12}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/hello.txt", "to" => "/renamed.txt"},
+               1
+             )
+
+    assert {:ok, _, %{"error" => %{"code" => -32002}}} =
+             WSClient.request(client, "vfs/stat", %{"path" => "/hello.txt"}, 2)
+
+    assert {:ok, _, %{"result" => %{"content" => "hello world\n"}}} =
+             WSClient.request(client, "vfs/read", %{"path" => "/renamed.txt"}, 3)
+  end
+
+  test "vfs_move re-paths a directory's subtree", %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"result" => %{"type" => "dir"}}} =
+             WSClient.request(client, "vfs/move", %{"from" => "/docs/sub", "to" => "/sub2"}, 1)
+
+    assert {:ok, _, %{"result" => %{"content" => "deep\n"}}} =
+             WSClient.request(client, "vfs/read", %{"path" => "/sub2/deep.md"}, 2)
+
+    assert {:ok, _, %{"error" => %{"code" => -32002}}} =
+             WSClient.request(client, "vfs/stat", %{"path" => "/docs/sub/deep.md"}, 3)
+  end
+
+  test "vfs_move errno matrix: enoent from, eexist to, missing parent", %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"error" => %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}}} =
+             WSClient.request(client, "vfs/move", %{"from" => "/nope.txt", "to" => "/x.txt"}, 1)
+
+    assert {:ok, _, %{"error" => %{"code" => -32041, "data" => %{"errno_atom" => "eexist"}}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/hello.txt", "to" => "/docs/a.md"},
+               2
+             )
+
+    assert {:ok, _, %{"error" => %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/hello.txt", "to" => "/no/dir/x.txt"},
+               3
+             )
+  end
+
+  test "vfs_move on a backend without move is -32601 and the connection survives", %{
+    null_port: port
+  } do
+    client = authed!(port)
+
+    assert {:ok, client, %{"error" => %{"code" => -32601}}} =
+             WSClient.request(client, "vfs/move", %{"from" => "/a", "to" => "/b"}, 1)
+
+    assert {:ok, _, %{"result" => %{"type" => "dir"}}} =
+             WSClient.request(client, "vfs/stat", %{"path" => "/"}, 2)
+  end
+
+  test "vfs_move invalid params are -32602", %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"error" => %{"code" => -32602}}} =
+             WSClient.request(client, "vfs/move", %{"from" => "/hello.txt"}, 1)
+
+    assert {:ok, _, %{"error" => %{"code" => -32602}}} =
+             WSClient.request(client, "vfs/move", %{"to" => "/x.txt"}, 2)
+  end
+
+  test "vfs_move publishes a remove/create event pair", %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, client, %{"result" => %{"subscribed" => true}}} =
+             WSClient.request(client, "vfs/subscribe", %{"paths" => ["/"]}, 1)
+
+    assert {:ok, _, %{"result" => %{}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/hello.txt", "to" => "/renamed.txt"},
+               2
+             )
+
+    # Thread the client: both events may arrive in one chunk, and the queue
+    # lives on the updated client struct.
+    assert {:ok, client, %{"op" => "remove", "path" => "/hello.txt"}} = event(client)
+    assert {:ok, _, %{"op" => "create", "path" => "/renamed.txt"}} = event(client)
+  end
+
+  test "vfs_move invalidates cached listings", %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"result" => %{"entries" => entries}}} =
+             WSClient.request(client, "vfs/list", %{"path" => "/"}, 1)
+
+    refute Enum.any?(entries, &(&1["name"] == "renamed.txt"))
+
+    assert {:ok, _, %{"result" => %{}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/hello.txt", "to" => "/renamed.txt"},
+               2
+             )
+
+    assert {:ok, _, %{"result" => %{"entries" => entries}}} =
+             WSClient.request(client, "vfs/list", %{"path" => "/"}, 3)
+
+    assert Enum.any?(entries, &(&1["name"] == "renamed.txt"))
+  end
+
+  test "vfs_move into its own subtree is refused (fixture guards the corrupting shape)",
+       %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"error" => %{"code" => -32048, "data" => %{"errno_atom" => "eio"}}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/docs", "to" => "/docs/sub2"},
+               1
+             )
+
+    # the tree is untouched: /docs still lists both children
+    assert {:ok, _, %{"result" => %{"entries" => entries}}} =
+             WSClient.request(client, "vfs/list", %{"path" => "/docs"}, 2)
+
+    assert Enum.any?(entries, &(&1["name"] == "a.md"))
+  end
+
+  test "a watcher strictly inside a moved subtree is NOT notified (fan-out is the backend's job)",
+       %{port: port} do
+    # two clients: one watches /docs/a.md precisely, one watches /
+    inside = authed!(port)
+
+    assert {:ok, inside, %{"result" => %{"subscribed" => true}}} =
+             WSClient.request(inside, "vfs/subscribe", %{"paths" => ["/docs/a.md"]}, 1)
+
+    root = authed!(port)
+
+    assert {:ok, root, %{"result" => %{"subscribed" => true}}} =
+             WSClient.request(root, "vfs/subscribe", %{"paths" => ["/"]}, 1)
+
+    assert {:ok, _, %{"result" => %{}}} =
+             WSClient.request(
+               root,
+               "vfs/move",
+               %{"from" => "/docs", "to" => "/docs-moved"},
+               2
+             )
+
+    # the root watcher sees the top-level remove/create pair… (thread the
+    # client: coalesced events ride its queue)
+    assert {:ok, root, %{"op" => "remove", "path" => "/docs"}} = event(root)
+    assert {:ok, _, %{"op" => "create", "path" => "/docs-moved"}} = event(root)
+
+    # …while the strictly-inside watcher hears nothing: the substrate
+    # publishes only the top-level pair (ancestors-of-event delivery), so a
+    # moved parent's descendants must be fan-out by the backend itself.
+    assert {:error, _, :timeout} = event(inside, 300)
+  end
+
   # ── framing / lifecycle ───────────────────────────────────────────────────
 
   test "malformed json draws a parse error without closing the connection", %{port: port} do

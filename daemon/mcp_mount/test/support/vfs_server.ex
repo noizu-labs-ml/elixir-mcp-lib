@@ -185,6 +185,48 @@ defmodule McpMount.Test.VfsServer do
       end
     end
 
+    defp op("vfs/move", %{"from" => from, "to" => to}, state) do
+      from = String.trim_trailing(from, "/")
+      to = String.trim_trailing(to, "/")
+
+      cond do
+        state.nodes[from] == nil ->
+          {:error, :enoent}
+
+        Map.has_key?(state.nodes, to) ->
+          {:error, :eexist}
+
+        String.starts_with?(to, from <> "/") ->
+          {:error, :eio}
+
+        true ->
+          prefix = from <> "/"
+
+          moved =
+            for {p, _node} <- state.nodes,
+                p == from or String.starts_with?(p, prefix),
+                do: p
+
+          version = state.nodes[from].version
+
+          nodes =
+            Enum.reduce(moved, state.nodes, fn p, acc ->
+              acc
+              |> Map.delete(p)
+              |> Map.put(
+                to <> binary_part(p, byte_size(from), byte_size(p) - byte_size(from)),
+                Map.fetch!(state.nodes, p)
+              )
+            end)
+
+          state = %{state | nodes: nodes}
+          broadcast(state, "remove", from, state.seq + 1)
+          state = %{state | seq: state.seq + 1}
+          broadcast(state, "create", to, version)
+          {%{"version" => version, "executable" => false}, state}
+      end
+    end
+
     defp op("vfs/ping", _, state), do: {%{"pong" => true}, state}
     defp op(_m, _p, state), do: {{}, state}
 
@@ -303,8 +345,16 @@ defmodule McpMount.Test.VfsServer do
     def handle_info(_, state), do: {:ok, state}
 
     defp handle_frame(id, "vfs/auth", %{"token" => @token}, state) do
-      {:push, {:text, ok(id, %{"authenticated" => true, "session_id" => "test"})},
-       %{state | authed: true}}
+      # proto/caps handshake extras (SS5.1): the fixture advertises move
+      # support the way a current server does.
+      {:push,
+       {:text,
+        ok(id, %{
+          "authenticated" => true,
+          "session_id" => "test",
+          "proto" => 3,
+          "caps" => ["move"]
+        })}, %{state | authed: true}}
     end
 
     defp handle_frame(id, "vfs/auth", _, state) do

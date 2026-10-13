@@ -174,6 +174,56 @@ defmodule Noizu.MCP.VFS.Fixture.Memory do
   end
 
   @impl true
+  def move(from, to, ctx) do
+    transact(ctx, fn {tree, contents} ->
+      prefix = from <> "/"
+      moves? = fn path -> path == from or String.starts_with?(path, prefix) end
+
+      renamed = fn path ->
+        to <> binary_part(path, byte_size(from), byte_size(path) - byte_size(from))
+      end
+
+      cond do
+        from == "/" or to == "/" ->
+          {:error, :eacces}
+
+        # `to` inside `from`'s own subtree (rename a dir into itself).
+        # rename(2) answers EINVAL here; :eio stands in because the wire's
+        # errno→code table has no :einval. The naive re-path below would
+        # silently corrupt the tree on this shape (robot review, PR #61).
+        String.starts_with?(to, from <> "/") ->
+          {:error, :eio}
+
+        not Map.has_key?(tree, from) ->
+          {:error, :enoent}
+
+        Map.has_key?(tree, to) ->
+          {:error, :eexist}
+
+        not dir?(tree, parent(to)) ->
+          {:error, :enoent}
+
+        true ->
+          moved_paths = for {path, _node} <- tree, moves?.(path), do: path
+          moved_nodes = Map.take(tree, moved_paths)
+          moved_contents = Map.take(contents, moved_paths)
+
+          tree =
+            tree
+            |> Map.drop(moved_paths)
+            |> Map.merge(Map.new(moved_nodes, fn {path, node} -> {renamed.(path), node} end))
+
+          contents =
+            contents
+            |> Map.drop(moved_paths)
+            |> Map.merge(Map.new(moved_contents, fn {path, c} -> {renamed.(path), c} end))
+
+          {:ok, {tree, contents}, {:ok, Map.fetch!(moved_nodes, from)}}
+      end
+    end)
+  end
+
+  @impl true
   def search(root, query, ctx) do
     peek(ctx, fn {tree, contents} ->
       prefix = if String.ends_with?(root, "/"), do: root, else: root <> "/"
