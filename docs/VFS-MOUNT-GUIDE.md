@@ -3,7 +3,7 @@
 **Status**: canonical newcomer walkthrough · 2026-10-13 · targets `develop`
 **Scope**: the full path from a bare macOS machine to a live, read-write mount of a
 Docmost wiki at `~/wiki`, using only this document. Deeper references are linked at the
-bottom ([§7](#7-pointers)); nothing earlier is required reading.
+bottom ([§8](#8-pointers)); nothing earlier is required reading.
 
 ---
 
@@ -249,7 +249,46 @@ re-pulls the full tree once — expected, not a bug.
 | Docmost web edits don't show up in the mount | Live mounts see VFS events only; web-side changes surface at the next reconnect/resync. Restart `mcp-mount` to force a diff resync (and reconcile before writing — mount writes replace page content wholesale). |
 | Full re-pull after a server restart | Expected: versions are boot-epoch-stamped; one full re-pull per server restart. |
 
-## 7. Pointers
+## 7. Restarting the local stack (server + mount)
+
+Server (docmost-mcp) and client (`mcp-mount`) are independent processes. Start the **server first**; the client retries its connection (~30 s) if the server is briefly down, so a client already running through a server restart heals itself. Secret values live in `~/.config/docmost-mcp/` (`api-key`, `mount-token`) and are only ever read via command substitution — never paste them into shells, logs, or transcripts.
+
+### 7.1 Server (docmost-mcp)
+
+The server reads **exactly three** env vars (`config/runtime.exs`): `DOCMOST_API_KEY`, `DOCMOST_MCP_MOUNT_TOKEN`, `DOCMOST_MCP_VFS_RMDIR`. Launch through the `tail -f /dev/null |` feeder — the stdio transport shuts the whole app down when stdin closes, so a bare `nohup` start dies seconds after boot:
+
+```bash
+T=~/.config/docmost-mcp
+tail -f /dev/null | nohup sh -c 'cd /path/to/Projects/docmost-mcp && direnv exec . env DOCMOST_API_KEY="$(cat '"$T"'/api-key)" DOCMOST_MCP_MOUNT_TOKEN="$(cat '"$T"'/mount-token)" DOCMOST_MCP_VFS_RMDIR=1 mix run --no-halt' >> /tmp/docmost-mcp-server.log 2>&1 &
+disown
+```
+
+Traps (each cost a failed start on 2026-10-13):
+
+- **`direnv exec .` is load-bearing** — a bare asdf `mix` resolves whatever Erlang/OTP is globally selected (it picked OTP 29 and began recompiling the whole tree); the repo runs on the `.tool-versions` pin (elixir 1.18.4-otp-28).
+- **Missing `DOCMOST_API_KEY`** ⇒ boot "succeeds" but every VFS snapshot/list GenServer crashes with `** (RuntimeError) DOCMOST_API_KEY is required`.
+- Healthy boot line: `Running Noizu.MCP.Transport.VFSWS with Bandit ... at 127.0.0.1:4700 (http)`.
+- A server restart bumps the boot epoch ⇒ the mount does **one full re-pull** (expected; §6).
+- Stop: `ps -axo pid,ppid,command | grep "[m]ix run --no-halt"`, then `kill <beam-pid>` (the feeder shell can linger harmlessly; kill it too for tidiness).
+
+### 7.2 Client (mcp-mount)
+
+```bash
+T=~/.config/docmost-mcp
+cd /path/to/Projects/elixir-mcp/daemon/mcp_mount   # the checkout the escript was built from (§3)
+FILESYSTEM_FSMAC_EXECUTABLE_FILE="$PWD/deps/file_system/priv/mac_listener" \
+  nohup ./mcp-mount --url ws://127.0.0.1:4700/vfs \
+    --token "$(cat "$T/mount-token")" --mount ~/wiki --deletes \
+    >> /tmp/mcp-mount.log 2>&1 &
+disown; echo $! > "$T/mount.pid"
+```
+
+Verify: the log shows `live (N files, ro=false)`; `ps ax | grep '[p]riv/mac_listener'` finds the watcher (absent ⇒ pull-only degrade, §6); `ls ~/wiki` lists the spaces.
+
+- Build the escript from a **fresh `MIX_BUILD_ROOT`** (§3): a stale-beam escript boots normally, then dies on the first watcher event.
+- Until the client learns to read the token from its file (tracked: token currently rides in argv), `ps` output of `mcp-mount` contains the token — treat it as secret-bearing.
+
+## 8. Pointers
 
 | Doc | Covers |
 |---|---|
