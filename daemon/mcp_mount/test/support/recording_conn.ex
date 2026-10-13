@@ -33,6 +33,9 @@ defmodule McpMount.Test.RecordingConn do
   @impl McpMount.Conn
   def close(%__MODULE__{inner: inner}), do: McpMount.FakeConn.close(inner)
 
+  @impl McpMount.Conn
+  def caps(%__MODULE__{inner: inner}), do: McpMount.FakeConn.caps(inner)
+
   @doc "Recorded budgets for `method`, most recent first."
   def recorded(recorder, method), do: Agent.get(recorder, &Map.get(&1, method, []))
 
