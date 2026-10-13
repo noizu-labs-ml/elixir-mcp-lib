@@ -111,7 +111,7 @@ export FILESYSTEM_FSMAC_EXECUTABLE_FILE="$PWD/deps/file_system/priv/mac_listener
 
 ./mcp-mount \
   --url ws://127.0.0.1:4700/vfs \
-  --token "$(cat ~/.config/docmost-mcp/mount-token)" \
+  --token-file ~/.config/docmost-mcp/mount-token \
   --mount ~/wiki > /tmp/mcp-mount.log 2>&1 &
 ```
 
@@ -121,8 +121,12 @@ export FILESYSTEM_FSMAC_EXECUTABLE_FILE="$PWD/deps/file_system/priv/mac_listener
 - `--deletes` is optional — opt in to pushing local deletions (§5.3). Without it, a local
   `rm` is a local-only no-op.
 - `--ro` instead gives a read-only mount (no watcher, never pushes; `--deletes` + `--ro`
-  logs a warning and has no effect). Flags are strict: `--url`, `--token`, `--mount`,
+  logs a warning and has no effect). Flags are strict: `--url`, `--token-file`, `--mount`,
   `--ro`, `--deletes` — anything else prints usage and exits 64.
+- Token resolution: `--token-file PATH` first, then the legacy `--token TOKEN` (works, but
+  logs a warning — the value is visible to `ps`), then `$MCP_MOUNT_TOKEN`, then the default
+  file `~/.config/docmost-mcp/mount-token` (trimmed; missing/empty ⇒ exit 78 with a plain
+  error). Passing both `--token` and `--token-file` is a usage error (exit 64).
 
 **First-mount expectations:** no macOS permission dialogs — no kernel extension is
 involved, and `~/wiki` is not a TCC-protected location. If you see an approval prompt, it
@@ -245,7 +249,8 @@ re-pulls the full tree once — expected, not a bug.
 | HTTP 401 before any socket traffic | Wrong/missing mount token — the WS upgrade bearer check failed. Compare `~/.config/docmost-mcp/mount-token` with the server's `DOCMOST_MCP_MOUNT_TOKEN`. |
 | Error `-32001` right after connect | The first frame must be `vfs/auth` with the same token; a mismatch closes the connection. Same check as above. |
 | Optional demo server (`demo/vfs_demo_server`) won't compile — `yamerl` errors | `yamerl` is a **demo-server** dependency only; `mcp-mount` does not use it. After an OTP switch its cached build can go stale — wipe and recompile fresh: `rm -rf demo/vfs_demo_server/deps demo/vfs_demo_server/_build`, then `mix deps.get && mix compile` in that dir. |
-| `mcp-mount` exits immediately, usage + exit 64 | Strict flags only: `--url --token --mount --ro --deletes` — no `--transport`, no `--write`, no positional target. |
+| `mcp-mount` exits immediately, usage + exit 64 | Strict flags only: `--url --token-file --mount --ro --deletes` (legacy `--token` still accepted) — no `--transport`, no `--write`, no positional target. |
+| `mcp-mount` exits with 78 and a "token file" message | The token file (`--token-file` or the default `~/.config/docmost-mcp/mount-token`) is missing or trims to empty — mint one (`openssl rand -hex 32 > ~/.config/docmost-mcp/mount-token`) and remount. |
 | Docmost web edits don't show up in the mount | Live mounts see VFS events only; web-side changes surface at the next reconnect/resync. Restart `mcp-mount` to force a diff resync (and reconcile before writing — mount writes replace page content wholesale). |
 | Full re-pull after a server restart | Expected: versions are boot-epoch-stamped; one full re-pull per server restart. |
 
@@ -278,7 +283,7 @@ T=~/.config/docmost-mcp
 cd /path/to/Projects/elixir-mcp/daemon/mcp_mount   # the checkout the escript was built from (§3)
 FILESYSTEM_FSMAC_EXECUTABLE_FILE="$PWD/deps/file_system/priv/mac_listener" \
   nohup ./mcp-mount --url ws://127.0.0.1:4700/vfs \
-    --token "$(cat "$T/mount-token")" --mount ~/wiki --deletes \
+    --token-file "$T/mount-token" --mount ~/wiki --deletes \
     >> /tmp/mcp-mount.log 2>&1 &
 disown; echo $! > "$T/mount.pid"
 ```
@@ -286,7 +291,7 @@ disown; echo $! > "$T/mount.pid"
 Verify: the log shows `live (N files, ro=false)`; `ps ax | grep '[p]riv/mac_listener'` finds the watcher (absent ⇒ pull-only degrade, §6); `ls ~/wiki` lists the spaces.
 
 - Build the escript from a **fresh `MIX_BUILD_ROOT`** (§3): a stale-beam escript boots normally, then dies on the first watcher event.
-- Until the client learns to read the token from its file (tracked: token currently rides in argv), `ps` output of `mcp-mount` contains the token — treat it as secret-bearing.
+- The client reads the token from `~/.config/docmost-mcp/mount-token` (`--token-file`): the token **does not appear in `ps` output** — `mcp-mount` argv is no longer secret-bearing. The legacy `--token TOKEN` form still works for back-compat but logs a warning (`token passed via argv is visible to ps — use --token-file`).
 
 ## 8. Pointers
 

@@ -4,35 +4,146 @@ defmodule McpMount.CLI do
   @moduledoc """
   `mcp-mount` escript entry point.
 
-      mcp-mount --url ws://host:port/vfs [--token TOKEN] --mount DIR [--ro] [--deletes]
+      mcp-mount --url ws://host:port/vfs [--token-file PATH | --token TOKEN] --mount DIR [--ro] [--deletes]
 
   Mounts the remote VFS at DIR as real local files and keeps them live.
-  `--token` is optional (empty token allowed). The connection still sends
-  `vfs/auth`; an empty token is accepted when the server has `auth: nil`
-  or optional auth. Token may also come from the `MCP_MOUNT_TOKEN` env var.
+
+  Token resolution (first match wins):
+
+    1. `--token-file PATH` — read the token from PATH (trimmed) — recommended:
+       keeps the token out of `ps` output
+    2. `--token TOKEN` — legacy argv form; still accepted, but the token is
+       visible to `ps` (one warning is logged, never the value)
+    3. the `MCP_MOUNT_TOKEN` env var
+    4. the default token file `~/.config/docmost-mcp/mount-token` (trimmed)
+
+  Passing both `--token` and `--token-file` is a usage error (exit 64).
+  A token file that is missing or trims to empty is a config error (exit 78).
+  `--token`/env forms allow an empty token (accepted when the server has
+  `auth: nil` or optional auth) — the connection still sends `vfs/auth`.
   `--deletes` opts in to pushing local deletions to the server (default
   off: a local `rm` is local-only). Runs in the foreground until killed.
   """
 
+  @default_token_file "~/.config/docmost-mcp/mount-token"
+
   def main(argv) do
     Application.ensure_all_started(:logger)
 
-    {opts, _rest, invalid} =
-      OptionParser.parse(argv,
-        strict: [url: :string, token: :string, mount: :string, ro: :boolean, deletes: :boolean]
-      )
+    case parse_args(argv) do
+      {:ok, config} ->
+        run(config)
 
-    case {invalid, opts[:url], opts[:mount]} do
-      {[], url, mount} when is_binary(url) and is_binary(mount) ->
-        run(url, mount, token(opts), !!opts[:ro], !!opts[:deletes])
-
-      _ ->
+      {:usage, _} ->
         usage()
         System.halt(64)
+
+      {:config_error, message} ->
+        IO.puts(:stderr, "mcp-mount: " <> message)
+        System.halt(78)
     end
   end
 
-  defp run(url, mount, token, ro, deletes) do
+  @doc false
+  @spec parse_args([String.t()]) ::
+          {:ok, map()} | {:usage, nil} | {:config_error, String.t()}
+  def parse_args(argv) do
+    {opts, _rest, invalid} =
+      OptionParser.parse(argv,
+        strict: [
+          url: :string,
+          token: :string,
+          token_file: :string,
+          mount: :string,
+          ro: :boolean,
+          deletes: :boolean
+        ]
+      )
+
+    cond do
+      invalid != [] ->
+        {:usage, nil}
+
+      is_binary(opts[:token]) and is_binary(opts[:token_file]) ->
+        {:usage, nil}
+
+      not is_binary(opts[:url]) or not is_binary(opts[:mount]) ->
+        {:usage, nil}
+
+      true ->
+        resolve_token(opts)
+    end
+  end
+
+  defp resolve_token(opts) do
+    cond do
+      t = opts[:token] ->
+        Logger.warning("mcp-mount: token passed via argv is visible to ps — use --token-file")
+        {:ok, config(opts, t, :argv)}
+
+      p = opts[:token_file] ->
+        case read_token_file(p, "--token-file") do
+          {:ok, token} -> {:ok, config(opts, token, :token_file)}
+          {:error, message} -> {:config_error, message}
+        end
+
+      t = System.get_env("MCP_MOUNT_TOKEN") ->
+        {:ok, config(opts, t, :env)}
+
+      true ->
+        case read_token_file(default_token_file(), "default token file") do
+          {:ok, token} -> {:ok, config(opts, token, :default_file)}
+          {:error, message} -> {:config_error, message}
+        end
+    end
+  end
+
+  defp config(opts, token, source) do
+    %{
+      url: opts[:url],
+      mount: opts[:mount],
+      token: token,
+      ro: !!opts[:ro],
+      deletes: !!opts[:deletes],
+      token_source: source
+    }
+  end
+
+  # Overridable via application env so tests never touch the real
+  # ~/.config/docmost-mcp/mount-token.
+  defp default_token_file do
+    (Application.get_env(:mcp_mount, :default_token_file) || @default_token_file)
+    |> Path.expand()
+  end
+
+  # Returns the trimmed token or an {:error, message}. The message may name
+  # the PATH (not secret) but never the file CONTENT.
+  defp read_token_file(path, label) do
+    expanded = Path.expand(path)
+
+    case File.read(expanded) do
+      {:ok, content} ->
+        case String.trim(content) do
+          "" ->
+            {:error,
+             "#{label} #{path} is empty — write the mount token into it (leading/trailing " <>
+               "whitespace is trimmed on read) or pass --token"}
+
+          token ->
+            {:ok, token}
+        end
+
+      {:error, :enoent} ->
+        {:error,
+         "#{label} #{path} not found — create it with the mount token " <>
+           "(e.g. `openssl rand -hex 32 > #{path}`) or pass --token"}
+
+      {:error, reason} ->
+        {:error, "#{label} #{path} is unreadable: #{inspect(reason)}"}
+    end
+  end
+
+  defp run(%{url: url, mount: mount, token: token, ro: ro, deletes: deletes}) do
     Logger.configure(level: :info)
     runtime_sanity!()
 
@@ -105,17 +216,12 @@ defmodule McpMount.CLI do
     :ok
   end
 
-  defp token(opts) do
-    cond do
-      is_binary(opts[:token]) -> opts[:token]
-      t = System.get_env("MCP_MOUNT_TOKEN") -> t
-      true -> ""
-    end
-  end
-
   defp usage do
     IO.puts(:stderr, """
-    usage: mcp-mount --url ws://host:port/vfs [--token TOKEN] --mount DIR [--ro] [--deletes]
+    usage: mcp-mount --url ws://host:port/vfs [--token-file PATH | --token TOKEN] --mount DIR [--ro] [--deletes]
+
+    token: --token-file PATH (recommended — kept out of ps) | --token TOKEN (legacy — visible to ps)
+           falls back to $MCP_MOUNT_TOKEN, then the default file ~/.config/docmost-mcp/mount-token
     """)
   end
 end

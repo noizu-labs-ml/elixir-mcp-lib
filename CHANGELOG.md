@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- mcp-mount token no longer rides in argv (F20): every `ps` printed the
+  mount token when launched with the documented recipe. New `--token-file
+  PATH` flag (trimmed on read; missing/empty ⇒ exit 78 with a plain error)
+  and a default of `~/.config/docmost-mcp/mount-token` when no token source
+  is given; precedence `--token-file` > `--token` (legacy, now warns `token
+  passed via argv is visible to ps — use --token-file`, value never logged)
+  > `$MCP_MOUNT_TOKEN` > default file; passing both flags is a usage error
+  (exit 64). Guide/runbook recipes switched to `--token-file`.
+
 - mcp-mount crash-report redaction: the Mounter's GenServer state holds the
   mount token, and proc_lib crash reports render that state on termination
   (live leak 2026-10-13 via a dead-watcher logging crash). New
