@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- mcp-mount crash-report redaction: the Mounter's GenServer state holds the
+  mount token, and proc_lib crash reports render that state on termination
+  (live leak 2026-10-13 via a dead-watcher logging crash). New
+  `format_status/1` replaces the token with `<redacted>` in any crash
+  report or `:sys.get_status` output.
+
 - mcp-mount escript stability: an escript built from a stale/mixed
   `MIX_BUILD_ROOT` booted fine and died on the first watcher event with
   stdlib/protocol undefs (live 2026-10-13 against the docmost server). Fix:
