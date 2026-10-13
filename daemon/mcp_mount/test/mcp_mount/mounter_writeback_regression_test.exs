@@ -484,6 +484,81 @@ defmodule McpMount.MounterWritebackRegressionTest do
     File.rm_rf!(dir)
   end
 
+  # F1: a write whose ACK is lost to a transport timeout but which LANDED
+  # server-side makes the retry's stat see a version ahead of the manifest —
+  # the old code fell straight into conflict/3 and saved a spurious
+  # `.conflict-<ts>` for content the server already holds. The re-read must
+  # adopt the landed write as a confirmed sync instead.
+  test "retry of a timed-out-but-landed write syncs instead of conflict-saving" do
+    dir = Path.join(System.tmp_dir!(), "mcp-mount-f1-#{System.unique_integer()}")
+    name = String.to_atom("mounter_f1_#{System.unique_integer()}")
+    counter_name = String.to_atom("f1_counter_#{System.unique_integer()}")
+    {:ok, counter} = Agent.start_link(fn -> 0 end, name: counter_name)
+
+    base = McpMount.Test.FakeVfs.handler()
+
+    handler = fn
+      "vfs/write", %{"path" => "/docs/hello.txt", "data" => data} ->
+        n = Agent.get_and_update(counter, fn c -> {c, c + 1} end)
+
+        if n == 0 do
+          # the write lands, but the ack is lost to a transport timeout
+          McpMount.Test.FakeVfs.write("/docs/hello.txt", data)
+          {:error, :timeout}
+        else
+          base.("vfs/write", %{"path" => "/docs/hello.txt", "data" => data})
+        end
+
+      m, p ->
+        base.(m, p)
+    end
+
+    mounter =
+      start_supervised!(
+        Supervisor.child_spec(
+          {
+            Mounter,
+            url: "ws://fake/vfs",
+            token: "t",
+            mount: dir,
+            conn_mod: FakeConn,
+            conn_opts: [handler: handler],
+            flush_retry_ms: 100,
+            name: name
+          },
+          id: name
+        )
+      )
+
+    wait_until(fn -> if live?(mounter), do: :ok end)
+
+    write_and_wait_push(dir, "docs/hello.txt", "timed-out edit\n", fn ->
+      case McpMount.Test.FakeVfs.handler().("vfs/read", %{"path" => "/docs/hello.txt"}) do
+        {:ok, %{"content" => "timed-out edit\n", "version" => 2}} ->
+          entry = Manifest.read(dir)["docs/hello.txt"]
+          entry != nil and entry.version == 2
+
+        _ ->
+          false
+      end
+    end)
+
+    # past the flush-retry cadence: the adoption stuck, no further churn
+    Process.sleep(400)
+    assert Manifest.read(dir)["docs/hello.txt"].version == 2
+    assert :sys.get_state(mounter).parked == %{}
+    assert Process.alive?(mounter)
+
+    # exactly ONE write attempt: the retry recognized the landed write via
+    # the read-back and never re-pushed
+    assert Agent.get(counter, & &1) == 1
+
+    # and no spurious conflict copy exists
+    refute conflict_under?(Path.join(dir, "docs"))
+
+    File.rm_rf!(dir)
+  end
+
   # Server that canonicalizes new pages: /docs/hello.txt round-trips normally,
   # but creates for /docs/ghost.txt are acked while the resource materializes
   # somewhere else (the requested path stays enoent forever).
