@@ -6,7 +6,19 @@ defmodule McpMount.Test.FakeVfs do
   """
 
   def start_link(tree) do
-    Agent.start_link(fn -> %{nodes: build(tree), next_id: 1} end, name: __MODULE__)
+    Agent.start_link(
+      fn ->
+        %{
+          nodes: build(tree),
+          next_id: 1,
+          calls: [],
+          fail_move: nil,
+          sticky_move_failure: nil,
+          fail_write: nil
+        }
+      end,
+      name: __MODULE__
+    )
   end
 
   defp build(tree), do: Map.new(tree, fn {path, node} -> {normalize(path), node} end)
@@ -23,6 +35,41 @@ defmodule McpMount.Test.FakeVfs do
   @doc "Remote mutation without any event delivery (test drives that itself)."
   def write(path, content), do: mutation(:write, path, content)
 
+  # ── test observability / fault injection ──────────────────────────────────
+
+  @doc "Every wire op this fake served, oldest first: [{method, params}]."
+  def calls, do: Agent.get(__MODULE__, & &1.calls)
+
+  @doc "Calls filtered to one method (params only), oldest first."
+  def calls(method),
+    do:
+      Agent.get(
+        __MODULE__,
+        &(&1.calls
+          |> Enum.reverse()
+          |> Enum.flat_map(fn {m, p} -> if m == method, do: [p], else: [] end))
+      )
+
+  @doc "Make the next vfs/move fail with `reason` (an errno atom like :enosys, or {:code, -32601}). One-shot: cleared after the call."
+  def fail_next_move(reason), do: Agent.update(__MODULE__, &%{&1 | fail_move: reason})
+
+  @doc """
+  Sticky failure for EVERY vfs/move until cleared with `set_move_failure(nil)`
+  — drives the retry-until-parked cadence without one-shot races.
+  """
+  def set_move_failure(reason), do: Agent.update(__MODULE__, &%{&1 | sticky_move_failure: reason})
+
+  @doc """
+  Sticky failure for EVERY vfs/write until cleared with `set_write_failure(nil)`
+  — keeps a local edit unpushed so remove-event save-aside tests stay
+  deterministic (the ack would otherwise land before the injected remove).
+  """
+  def set_write_failure(reason), do: Agent.update(__MODULE__, &%{&1 | fail_write: reason})
+
+  defp log_call(state, method, params) do
+    Map.update!(state, :calls, &(&1 ++ [{method, params}]))
+  end
+
   defp mutation(:write, path, content) do
     Agent.update(__MODULE__, fn state ->
       node = state.nodes[path]
@@ -38,7 +85,7 @@ defmodule McpMount.Test.FakeVfs do
 
   @doc "Build a FakeConn handler fun over this tree (wire-shaped results)."
   def handler do
-    fn
+    inner = fn
       "vfs/ping", _params ->
         {:ok, %{"pong" => true}}
 
@@ -78,9 +125,15 @@ defmodule McpMount.Test.FakeVfs do
         end
 
       "vfs/write", %{"path" => path, "data" => data} ->
-        node = Agent.get(__MODULE__, & &1.nodes[normalize(path)])
+        path = normalize(path)
+        fail_write = Agent.get(__MODULE__, & &1.fail_write)
+
+        node = Agent.get(__MODULE__, & &1.nodes[path])
 
         cond do
+          fail_write != nil ->
+            {:error, fail_write}
+
           node == nil ->
             {:error, :enoent}
 
@@ -90,9 +143,9 @@ defmodule McpMount.Test.FakeVfs do
           true ->
             version =
               Agent.get_and_update(__MODULE__, fn state ->
-                state = update_in(state.nodes[normalize(path)].content, fn _ -> data end)
-                state = update_in(state.nodes[normalize(path)].version, &(&1 + 1))
-                {state.nodes[normalize(path)].version, state}
+                state = update_in(state.nodes[path].content, fn _ -> data end)
+                state = update_in(state.nodes[path].version, &(&1 + 1))
+                {state.nodes[path].version, state}
               end)
 
             {:ok, %{"version" => version, "executable" => false}}
@@ -124,10 +177,79 @@ defmodule McpMount.Test.FakeVfs do
             {:error, :eexist}
         end
 
+      "vfs/move", %{"from" => from, "to" => to} ->
+        fail =
+          Agent.get_and_update(__MODULE__, fn state ->
+            # one-shot (fail_next_move) is consumed; sticky (set_move_failure)
+            # survives every call until explicitly cleared with nil
+            one_shot = state.fail_move
+
+            state =
+              if one_shot, do: %{state | fail_move: nil}, else: state
+
+            {one_shot || state.sticky_move_failure, state}
+          end)
+
+        cond do
+          match?({:code, _}, fail) ->
+            {:error, %{code: elem(fail, 1), errno: nil, message: "fake refused"}}
+
+          fail != nil ->
+            {:error, fail}
+
+          true ->
+            move_tree(normalize(from), normalize(to))
+        end
+
       _method, _params ->
         {:error, :enosys}
     end
+
+    # log every served op so tests can assert "no vfs/move was ever sent"
+    fn method, params ->
+      Agent.update(__MODULE__, &log_call(&1, method, params))
+      inner.(method, params)
+    end
   end
+
+  defp move_tree(from, to) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      cond do
+        state.nodes[from] == nil ->
+          {{:error, :enoent}, state}
+
+        Map.has_key?(state.nodes, to) ->
+          {{:error, :eexist}, state}
+
+        # rename a dir into itself: corrupting shape, refuse like the
+        # elixir-mcp fixture does (:eio, the EINVAL stand-in)
+        String.starts_with?(to, from <> "/") ->
+          {{:error, :eio}, state}
+
+        true ->
+          prefix = from <> "/"
+
+          moved =
+            for {p, _node} <- state.nodes,
+                p == from or String.starts_with?(p, prefix),
+                do: p
+
+          version = state.nodes[from].version
+
+          nodes =
+            Enum.reduce(moved, state.nodes, fn p, acc ->
+              acc
+              |> Map.delete(p)
+              |> Map.put(renamed(p, from, to), Map.fetch!(state.nodes, p))
+            end)
+
+          {{:ok, %{"version" => version, "executable" => false}}, %{state | nodes: nodes}}
+      end
+    end)
+  end
+
+  defp renamed(p, from, to),
+    do: to <> binary_part(p, byte_size(from), byte_size(p) - byte_size(from))
 
   defp normalize("/"), do: "/"
 

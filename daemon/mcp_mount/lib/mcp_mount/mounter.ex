@@ -22,6 +22,13 @@ defmodule McpMount.Mounter do
     except `etc/dev/config/**` (the runtime writes toggle), which pushes
     through the ordinary `vfs/write`. `--ro` mounts have no watcher and
     never push.
+  * **Move pairing** — a tracked path that vanished locally while an
+    untracked regular file with the SAME content hash appeared in the same
+    flush is an editor rename: the daemon double-confirms the pair one tick
+    later and pushes a single `vfs/move` (server keeps identity/history)
+    instead of letting the rename decay into a duplicated `vfs/create`.
+    Pairing is always on. A refused or unsupported move parks the new path
+    — it never falls back to create.
   """
 
   use GenServer
@@ -41,7 +48,8 @@ defmodule McpMount.Mounter do
     "vfs/list" => 10_000,
     "vfs/read" => 15_000,
     "vfs/create" => 15_000,
-    "vfs/write" => 30_000
+    "vfs/write" => 30_000,
+    "vfs/move" => 15_000
   }
 
   @call_timeout 5_000
@@ -57,6 +65,10 @@ defmodule McpMount.Mounter do
   # a shorter test-seam list can never run Enum.at past its end and hand a
   # nil delay to Process.send_after/3 (robot review follow-up, PR #57).
   @pull_backoff_ms [1_000, 4_000, 16_000]
+  # delay before the double-confirm tick of an inferred move (design §1/D1):
+  # long enough for an editor atomic-save dance (temp file, remove, rename)
+  # to settle, so a phantom rename is detected and aborted at the tick
+  @move_confirm_ms 500
 
   defstruct [
     :conn_mod,
@@ -91,7 +103,15 @@ defmodule McpMount.Mounter do
     # to a full reconnect
     resync_nudge: false,
     flush_retry_ms: @flush_retry_ms,
-    pull_backoff_ms: @pull_backoff_ms
+    pull_backoff_ms: @pull_backoff_ms,
+    # from_rel => %{to: to_rel, hash: content_hash, attempts: n}; a pairing
+    # lives from detection until the double-confirm tick resolves it
+    move_pairing: %{},
+    # bumped on every go_live: {:pull_retry, rel, path, epoch} timers from an
+    # older epoch are stale (their path was already re-pulled by that
+    # reconnect's resync) and are dropped instead of re-pulled (robot
+    # follow-up F12)
+    pull_epoch: 0
   ]
 
   # ── API ───────────────────────────────────────────────────────────────────
@@ -110,7 +130,12 @@ defmodule McpMount.Mounter do
 
   defp budget(method), do: Map.get(@timeouts, method, @call_timeout)
 
-  defp max_budget, do: @timeouts |> Map.values() |> Enum.max()
+  # The sync Task.async_stream deadline must cover a whole materialize pass,
+  # not one op: a task can issue several sequential budgeted calls (stat +
+  # read, plus an event_mode stat on the pull path), so sum every per-op
+  # budget (plus WSConn's +1s call margin) instead of scaling the largest
+  # single one (robot follow-up F11).
+  defp sync_task_timeout, do: Enum.sum(Map.values(@timeouts)) + @call_timeout
 
   defp subscribe(conn, paths, depth), do: impl(conn).subscribe(conn, paths, depth)
 
@@ -230,6 +255,11 @@ defmodule McpMount.Mounter do
   # the path retries on the @flush_retry_ms cadence and each retry counts as
   # a push attempt (park after @max_push_attempts).
   def handle_info(:flush, %__MODULE__{state: :live, conn: conn} = s) when conn != nil do
+    # mv-pairing runs BEFORE the write-back reduction: a rename that would
+    # otherwise decay into "create the new path, silently drop the old one"
+    # is promoted to a single vfs/move
+    s = pair_moves(s)
+
     {s, deferred} =
       s.pending
       |> Enum.sort()
@@ -264,14 +294,66 @@ defmodule McpMount.Mounter do
   def handle_info(:flush, s), do: {:noreply, s}
 
   # A scheduled pull retry. Pulls are the healing direction — re-read the
-  # path; pull/3 owns the backoff bookkeeping. Retries that arrive while not
-  # live are dropped: the reconnect resync covers them.
-  def handle_info({:pull_retry, rel, path}, %__MODULE__{state: :live, conn: conn} = s)
-      when conn != nil do
+  # path; pull/3 owns the backoff bookkeeping. The epoch must match the live
+  # connection: a timer fired from a previous connection's schedule is stale
+  # (the reconnect resync already re-pulled every path against fresh state)
+  # and is dropped (robot follow-up F12). Retries that arrive while not live
+  # are dropped for the same reason.
+  def handle_info({:pull_retry, rel, path, epoch}, %__MODULE__{state: :live, conn: conn} = s)
+      when conn != nil and epoch == s.pull_epoch do
     {:noreply, maybe_resync(pull(s, rel, path))}
   end
 
-  def handle_info({:pull_retry, _rel, _path}, s), do: {:noreply, s}
+  def handle_info({:pull_retry, _rel, _path, _epoch}, s), do: {:noreply, s}
+
+  # Double-confirm tick for an inferred move (design §1/D1 step 4). At tick
+  # time the source must STILL be absent and the target must still hold the
+  # paired content — an editor atomic-save (remove + recreate via rename)
+  # mimics a rename for one debounce window and is defeated here; the legs
+  # re-enter the ordinary flush instead. Only a confirmed pair reaches for
+  # the wire, gated on the server's advertised `move` cap.
+  def handle_info({:move_confirm, from_rel}, %__MODULE__{state: :live, conn: conn} = s)
+      when conn != nil do
+    case Map.get(s.move_pairing, from_rel) do
+      nil ->
+        {:noreply, s}
+
+      pair ->
+        abs_from = Path.join(s.mount, from_rel)
+        abs_to = Path.join(s.mount, pair.to)
+
+        cond do
+          File.exists?(abs_from) or not File.regular?(abs_to) or
+              file_hash(abs_to) != pair.hash ->
+            Logger.info(
+              "mcp-mount[#{s.name}]: move #{from_rel} -> #{pair.to} no longer holds; " <>
+                "falling back to ordinary write-back"
+            )
+
+            s = %{s | move_pairing: Map.delete(s.move_pairing, from_rel)}
+            pending = s.pending |> MapSet.put(from_rel) |> MapSet.put(pair.to)
+            {:noreply, %{s | pending: pending, timer: start_debounce(s.timer)}}
+
+          true ->
+            case move_gate(conn) do
+              :supported ->
+                {:noreply, do_move(s, from_rel, pair)}
+
+              {:unsupported, why} ->
+                Logger.warning(
+                  "mcp-mount[#{s.name}]: rename unsupported (#{why}); parking #{pair.to} — " <>
+                    "edit the note's frontmatter (title:/parent:) to move it instead"
+                )
+
+                s = %{s | move_pairing: Map.delete(s.move_pairing, from_rel)}
+                {:noreply, park(s, pair.to, abs_to, "move refused by server (#{why})")}
+            end
+        end
+    end
+  end
+
+  # A confirm tick while not live is a no-op: go_live re-arms live pairings.
+  def handle_info({:move_confirm, _from_rel}, s), do: {:noreply, s}
 
   # ── sync ──────────────────────────────────────────────────────────────────
 
@@ -288,12 +370,12 @@ defmodule McpMount.Mounter do
       |> then(&MapSet.difference(MapSet.new(Map.keys(s.manifest)), &1))
       |> Enum.each(fn rel -> remove_local(s, rel) end)
 
-      # per-task safety net: twice the largest per-op budget
+      # per-task safety net: sum of every per-op budget (see sync_task_timeout)
       files
       |> Task.async_stream(
         fn {path, stat} -> materialize(s, path, stat) end,
         max_concurrency: 8,
-        timeout: max_budget() * 2
+        timeout: sync_task_timeout()
       )
       |> Enum.reduce_while({:ok, s.manifest}, fn
         {:ok, {:ok, rel, entry}}, {:ok, manifest} -> {:cont, {:ok, Map.put(manifest, rel, entry)}}
@@ -402,8 +484,17 @@ defmodule McpMount.Mounter do
       # write-backs deferred while disconnected flush now, after the resync
       if MapSet.size(s.pending) > 0, do: Process.send_after(self(), :flush, @debounce_ms)
 
+      # moves paired before the drop re-arm their confirm ticks (the previous
+      # tick either fired while disconnected — a no-op — or never fired)
+      Enum.each(Map.keys(s.move_pairing), fn from_rel ->
+        Process.send_after(self(), {:move_confirm, from_rel}, @move_confirm_ms)
+      end)
+
       # the fresh resync healed the tree: pull backoff counters and any
-      # resync nudge that survived into the reconnect are cleared
+      # resync nudge that survived into the reconnect are cleared — and the
+      # pull epoch bumps, so any {:pull_retry, ...} timer still in flight
+      # from the previous connection is recognized as stale and dropped
+      # instead of re-pulling against the freshly resynced state (F12)
       %{
         s
         | state: :live,
@@ -411,7 +502,8 @@ defmodule McpMount.Mounter do
           watcher: watcher,
           watcher_mon: watcher_mon,
           pull_attempts: %{},
-          resync_nudge: false
+          resync_nudge: false,
+          pull_epoch: s.pull_epoch + 1
       }
     else
       error ->
@@ -425,11 +517,24 @@ defmodule McpMount.Mounter do
   defp apply_event(%{op: op, path: path, version: version}, s) when op in ["write", "create"] do
     rel = String.trim_leading(path, "/")
 
-    if !Manifest.ignored?(rel) and s.manifest[rel] != nil and s.manifest[rel].version == version do
-      # self-echo: our own write-back came back to us
-      s
-    else
-      pull(s, rel, path)
+    cond do
+      Manifest.ignored?(rel) ->
+        s
+
+      # Control tree paths skip the self-echo version check and ALWAYS
+      # re-pull (F5): etc/** is server-owned configuration — an inbound
+      # event means the server changed something we must not second-guess,
+      # even when the version matches what the manifest recorded. The cost
+      # is one extra read on our own etc/dev/config write-back echo.
+      control_path?(rel) ->
+        pull(s, rel, path)
+
+      s.manifest[rel] != nil and s.manifest[rel].version == version ->
+        # self-echo: our own write-back came back to us
+        s
+
+      true ->
+        pull(s, rel, path)
     end
   end
 
@@ -437,6 +542,12 @@ defmodule McpMount.Mounter do
     rel = String.trim_leading(path, "/")
 
     if !Manifest.ignored?(rel) do
+      # a server-side remove must not silently destroy unpushed local work:
+      # if the local file's content differs from the manifest hash (an edit
+      # that never reached the server), a `.conflict-<ts>` copy is saved
+      # aside before the delete (design §1/D1); matching content just deletes
+      save_aside_unpushed_edit(s, rel)
+
       remove_local(s, rel)
       save_manifest(s, Map.delete(s.manifest, rel))
     else
@@ -445,6 +556,200 @@ defmodule McpMount.Mounter do
   end
 
   defp apply_event(_ev, s), do: s
+
+  # Copy an unpushed local edit out of harm's way before a server-remove
+  # applies. No-op when there is no local file, no manifest entry, or the
+  # content still matches what was synced.
+  defp save_aside_unpushed_edit(s, rel) do
+    abs = Path.join(s.mount, rel)
+    cached = s.manifest[rel]
+
+    if cached != nil and File.regular?(abs) do
+      hash = file_hash(abs)
+
+      if hash != nil and hash != cached.hash do
+        backup = abs <> ".conflict-" <> ts()
+
+        case File.copy(abs, backup) do
+          {:ok, _} ->
+            Logger.warning(
+              "mcp-mount[#{s.name}]: server removed #{rel} with unpushed local edits; " <>
+                "copy saved to #{backup}"
+            )
+
+          _ ->
+            :ok
+        end
+      end
+    end
+
+    s
+  end
+
+  # ── move pairing (VFS-FEATURES-DESIGN §1 + D1) ────────────────────────────
+
+  # Detection pass, run at the top of every live flush. A tracked path whose
+  # file is GONE from disk, paired 1:1 with an untracked regular file whose
+  # content hash matches the vanished entry's manifest hash, is an editor
+  # rename. Both legs leave `pending`: the confirm tick either completes the
+  # move or re-queues the legs for the ordinary write-back.
+  defp pair_moves(s) do
+    sources =
+      for rel <- s.pending,
+          s.manifest[rel] != nil,
+          not control_path?(rel),
+          not File.exists?(Path.join(s.mount, rel)),
+          do: rel,
+          into: MapSet.new()
+
+    targets =
+      for rel <- s.pending,
+          s.manifest[rel] == nil,
+          not control_path?(rel),
+          File.regular?(Path.join(s.mount, rel)),
+          do: rel,
+          into: MapSet.new()
+
+    if MapSet.size(sources) == 0 or MapSet.size(targets) == 0 do
+      s
+    else
+      open = Enum.sort(MapSet.to_list(targets))
+
+      {pairs, _leftover} =
+        Enum.reduce(Enum.sort(MapSet.to_list(sources)), {[], open}, fn from_rel, {pairs, pool} ->
+          want = s.manifest[from_rel].hash
+
+          case want &&
+                 Enum.find(pool, fn to_rel ->
+                   file_hash(Path.join(s.mount, to_rel)) == want
+                 end) do
+            nil -> {pairs, pool}
+            to_rel -> {pairs ++ [{from_rel, to_rel}], List.delete(pool, to_rel)}
+          end
+        end)
+
+      Enum.reduce(pairs, s, fn {from_rel, to_rel}, st ->
+        Logger.info("mcp-mount[#{st.name}]: inferred move #{from_rel} -> #{to_rel}")
+
+        Process.send_after(self(), {:move_confirm, from_rel}, @move_confirm_ms)
+
+        %{
+          st
+          | pending: st.pending |> MapSet.delete(from_rel) |> MapSet.delete(to_rel),
+            move_pairing:
+              Map.put(st.move_pairing, from_rel, %{
+                to: to_rel,
+                hash: st.manifest[from_rel].hash,
+                attempts: 1
+              })
+        }
+      end)
+    end
+  end
+
+  # Ask the conn whether the server advertises `move`. Unknown caps (an
+  # older server without the proto/caps handshake) are treated as
+  # unsupported — the daemon never gambles a create on an unadvertised op.
+  # The function_exported? probe keeps custom Conn implementations that
+  # predate caps/1 degrading to "unsupported" instead of crashing.
+  defp move_gate(conn) do
+    mod = impl(conn)
+
+    if function_exported?(mod, :caps, 1) do
+      case mod.caps(conn) do
+        caps when is_list(caps) ->
+          if "move" in caps, do: :supported, else: {:unsupported, "no move cap advertised"}
+
+        _ ->
+          {:unsupported, "server caps unknown"}
+      end
+    else
+      {:unsupported, "conn cannot report caps"}
+    end
+  end
+
+  defp do_move(s, from_rel, pair) do
+    case call(s.conn, "vfs/move", %{"from" => "/" <> from_rel, "to" => "/" <> pair.to}) do
+      {:ok, node} ->
+        Logger.info("mcp-mount[#{s.name}]: moved #{from_rel} -> #{pair.to} on server")
+
+        mode = mode_from_node(node)
+        abs_to = Path.join(s.mount, pair.to)
+        File.chmod(abs_to, mode)
+        content = File.read!(abs_to)
+
+        s = %{
+          s
+          | move_pairing: Map.delete(s.move_pairing, from_rel),
+            pull_attempts: Map.delete(s.pull_attempts, from_rel),
+            parked: Map.delete(s.parked, from_rel),
+            pushed_ack: s.pushed_ack |> MapSet.delete(from_rel) |> MapSet.put(pair.to)
+        }
+
+        # the from entry leaves the manifest, the to leg takes its place with
+        # the server's acked version; the remove/create event pair this
+        # triggers server-side self-echoes harmlessly (content matches what
+        # we just recorded)
+        save_manifest(
+          s,
+          s.manifest
+          |> Map.delete(from_rel)
+          |> Map.put(pair.to, entry(content, node["version"], mode))
+        )
+
+      # server already holds something at the target: the inference raced a
+      # real server-side create. Ordinary conflict semantics on the target.
+      {:error, %{errno: :eexist}} ->
+        Logger.warning(
+          "mcp-mount[#{s.name}]: move target #{pair.to} already exists on server; conflict"
+        )
+
+        s = %{s | move_pairing: Map.delete(s.move_pairing, from_rel)}
+        conflict(s, pair.to, Path.join(s.mount, pair.to))
+
+      # The server refuses the op itself. Park the target — NEVER fall back
+      # to create: a refused move must not duplicate the server-side
+      # resource under a second identity (design D1).
+      {:error, %{code: -32601}} ->
+        move_refused(s, from_rel, pair, "server answered method_not_found")
+
+      {:error, %{errno: :enosys}} ->
+        move_refused(s, from_rel, pair, "server backend lacks move")
+
+      {:error, reason} ->
+        retry_or_give_up_move(s, from_rel, pair, reason)
+    end
+  end
+
+  defp move_refused(s, from_rel, pair, why) do
+    Logger.warning(
+      "mcp-mount[#{s.name}]: vfs/move #{from_rel} -> #{pair.to} refused (#{why}); " <>
+        "parking #{pair.to} — edit the note's frontmatter (title:/parent:) to move it instead"
+    )
+
+    s = %{s | move_pairing: Map.delete(s.move_pairing, from_rel)}
+    park(s, pair.to, Path.join(s.mount, pair.to), why)
+  end
+
+  # Transport failure (or an unclassified error) on the move call: retry on
+  # the flush cadence, park after @max_push_attempts like any push.
+  defp retry_or_give_up_move(s, from_rel, pair, reason) do
+    Logger.warning(
+      "mcp-mount[#{s.name}]: vfs/move #{from_rel} -> #{pair.to} failed (#{inspect(reason)})"
+    )
+
+    n = pair.attempts + 1
+
+    # attempts counts calls made (first call records 1); park once the count
+    # would exceed the cap, matching capped_push's 4-actual-attempts cadence
+    if n > @max_push_attempts do
+      s = %{s | move_pairing: Map.delete(s.move_pairing, from_rel)}
+      park(s, pair.to, Path.join(s.mount, pair.to), "move failed #{n}x (#{inspect(reason)})")
+    else
+      Process.send_after(self(), {:move_confirm, from_rel}, s.flush_retry_ms)
+      %{s | move_pairing: Map.put(s.move_pairing, from_rel, Map.put(pair, :attempts, n))}
+    end
+  end
 
   # Event-driven pull of one path (server truth), with bounded backoff.
   # Pulls are never parked — they are the system's healing direction. A pull
@@ -502,7 +807,10 @@ defmodule McpMount.Mounter do
       %{s | pull_attempts: Map.delete(s.pull_attempts, rel), resync_nudge: true}
     else
       delay = Enum.at(s.pull_backoff_ms, n)
-      Process.send_after(self(), {:pull_retry, rel, path}, delay)
+      # the epoch rides along: a retry scheduled now is only valid for THIS
+      # connection — a reconnect that goes live before it fires voids it
+      Process.send_after(self(), {:pull_retry, rel, path, s.pull_epoch}, delay)
+
       %{s | pull_attempts: Map.put(s.pull_attempts, rel, n + 1)}
     end
   end
@@ -591,6 +899,13 @@ defmodule McpMount.Mounter do
     end
   end
 
+  # Every push failure defers and retries on the flush cadence — transport
+  # timeouts AND server-side application errors alike (robot follow-up F9).
+  # Previously only {:error, :timeout}/:closed retried, so e.g.
+  # {:error, %{errno: :eio}} sat unhandled until the next watcher event;
+  # now it gets the same bounded cadence. The @max_push_attempts cap bounds
+  # it: persistent failures of either kind park after the same number of
+  # attempts, so an app error cannot churn forever.
   defp push_local(s, rel, abs) do
     path = "/" <> rel
     local = s.manifest[rel]
@@ -618,7 +933,7 @@ defmodule McpMount.Mounter do
                     "mcp-mount[#{s.name}]: write failed for #{path}: #{inspect(reason)}"
                   )
 
-                  {s, transport_error?(reason)}
+                  {s, true}
               end
             else
               _ -> {s, false}
@@ -654,22 +969,15 @@ defmodule McpMount.Mounter do
                   "mcp-mount[#{s.name}]: create failed for #{path}: #{inspect(reason)}"
                 )
 
-                {s, transport_error?(reason)}
+                {s, true}
             end
         end
 
       {:error, reason} ->
         Logger.warning("mcp-mount[#{s.name}]: stat failed for #{path}: #{inspect(reason)}")
-        {s, transport_error?(reason)}
+        {s, true}
     end
   end
-
-  # Transport-level failures retry (deferred flush); server-side application
-  # errors do not — they wait for the next watcher event like today.
-  defp transport_error?(:timeout), do: true
-  defp transport_error?(:closed), do: true
-  defp transport_error?(%{errno: errno}) when errno in [:timeout, :closed], do: true
-  defp transport_error?(_), do: false
 
   # A successful create/write ack marks the path synced immediately — the
   # daemon never leaves an acked path in "pending re-push". The content hash

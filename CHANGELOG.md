@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 2026-10-13
 
 `vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
-the docmost-mcp backend callback and mcp-mount mv-pairing land separately).
+the docmost-mcp backend callback lands separately).
 
 - **`vfs/move {from, to}` on both VFS transports** (WS + unix socket) and
   the MCP-native feature surface: validates both paths, gates on write caps
@@ -32,6 +32,32 @@ the docmost-mcp backend callback and mcp-mount mv-pairing land separately).
   `move/3` (subtree re-pathing, `:eacces`/`:enoent`/`:eexist` errno matrix,
   and a guard refusing `to` inside `from`'s own subtree — `:eio`, the
   rename(2)-EINVAL analogue, robot review #61).
+
+mcp-mount move pairing, per VFS-FEATURES-DESIGN §1 + D1 (client half;
+consumes the server's `vfs/move` + proto/caps handshake from above).
+
+- **Editor renames promote to ONE `vfs/move`.** A tracked file vanishing
+  from disk while an untracked file with identical content appears is
+  paired at flush (`pair_moves/1`), held behind a 500ms double-confirm
+  window (defeats atomic-save remove+rename mimicry — legs re-enter the
+  ordinary flush if the origin path reappears), then issued as a single
+  `vfs/move` instead of create+silent-drop.
+- **Caps-gated, never gambling.** The daemon only moves when the server's
+  handshake advertises `move`; unknown caps (older servers) park the
+  target with a frontmatter note instead of attempting. Protocol refusal
+  (`-32601`) and `:enosys` park the target — never a create-fallback.
+  `:eexist` (target already on server) conflicts the target: local saved
+  to `.conflict-<ts>`, server truth re-pulled.
+- Transport failures retry on the flush cadence and park after the push
+  cap, same as writes. Pairings recorded before a drop re-arm their
+  confirm after reconnect; pull retries are epoch-tagged and dropped as
+  stale (F12); non-transport push failures get the defer/retry/park
+  cadence (F9); control paths always re-pull on events (F5); `Conn`
+  gains a probe-friendly `caps/1` callback (F8 documents `:exit` as
+  closed-transport semantics).
+
+Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
+(client-only; no server changes) — #57.
 
 Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
 (client-only; no server changes) — #57. → stage (#59) → main (#60) → stage (#62) → main (#63)
