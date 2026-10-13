@@ -18,8 +18,10 @@ defmodule McpMount.Mounter do
   * **Write-back** — a `file_system` watcher on the mount dir debounces 250ms
     then pushes each dirty path: server version unchanged -> `vfs/write`;
     otherwise the local edit is moved aside to `<path>.conflict-<ISO-ts>` and
-    the server version re-pulled. `--ro` mounts have no watcher and never
-    push.
+    the server version re-pulled. Control paths (`etc/**`) are read-only
+    except `etc/dev/config/**` (the runtime writes toggle), which pushes
+    through the ordinary `vfs/write`. `--ro` mounts have no watcher and
+    never push.
   """
 
   use GenServer
@@ -31,11 +33,30 @@ defmodule McpMount.Mounter do
   @backoff_start 1_000
   @backoff_max 30_000
   @debounce_ms 250
+  # Per-op-class deadline budgets (ms). WSConn adds its own +1s GenServer.call
+  # margin on top. Ops not listed fall back to @call_timeout.
+  @timeouts %{
+    "vfs/ping" => 5_000,
+    "vfs/stat" => 5_000,
+    "vfs/list" => 10_000,
+    "vfs/read" => 15_000,
+    "vfs/create" => 15_000,
+    "vfs/write" => 30_000
+  }
+
   @call_timeout 5_000
   # initial push + this many retries, then the path is parked (see park/4)
   @max_push_attempts 4
-  # retry cadence for write-backs that raised mid-flush
+  # retry cadence for write-backs that raised mid-flush (or hit a transport
+  # timeout — deferred retries use this cadence too)
   @flush_retry_ms 2_000
+  # pulls: event-driven read/stat retries at 1s -> 4s -> 16s (3 backoff
+  # attempts); exhausted pulls are dropped and a resync nudge is queued.
+  # Pulls are the system's healing direction — they are never parked. The
+  # retry cap derives from this list's length (not a separate constant), so
+  # a shorter test-seam list can never run Enum.at past its end and hand a
+  # nil delay to Process.send_after/3 (robot review follow-up, PR #57).
+  @pull_backoff_ms [1_000, 4_000, 16_000]
 
   defstruct [
     :conn_mod,
@@ -62,7 +83,15 @@ defmodule McpMount.Mounter do
     parked: %{},
     # rels whose last create/write was acked by the server but not yet
     # confirmed by a read-back (self-echo tolerance)
-    pushed_ack: MapSet.new()
+    pushed_ack: MapSet.new(),
+    # rel => scheduled pull retries (bounded by length(pull_backoff_ms))
+    pull_attempts: %{},
+    # set when an event pull exhausted its backoff: quiescence (live, nothing
+    # pending) triggers an in-place diff resync; persistent failure escalates
+    # to a full reconnect
+    resync_nudge: false,
+    flush_retry_ms: @flush_retry_ms,
+    pull_backoff_ms: @pull_backoff_ms
   ]
 
   # ── API ───────────────────────────────────────────────────────────────────
@@ -75,7 +104,14 @@ defmodule McpMount.Mounter do
   def state(name \\ __MODULE__), do: GenServer.call(name, :state)
 
   # Conn dispatch: pid -> WSConn, struct -> its module (FakeConn in tests).
-  defp call(conn, method, params, timeout), do: impl(conn).call(conn, method, params, timeout)
+  # The deadline budget comes from the per-op table; WSConn adds its +1s
+  # GenServer.call margin and returns `{:error, :timeout}` as a value.
+  defp call(conn, method, params), do: impl(conn).call(conn, method, params, budget(method))
+
+  defp budget(method), do: Map.get(@timeouts, method, @call_timeout)
+
+  defp max_budget, do: @timeouts |> Map.values() |> Enum.max()
+
   defp subscribe(conn, paths, depth), do: impl(conn).subscribe(conn, paths, depth)
 
   defp impl(conn) when is_pid(conn), do: McpMount.WSConn
@@ -99,7 +135,10 @@ defmodule McpMount.Mounter do
       ro: !!opts[:ro],
       name: opts[:name],
       conn_opts: Keyword.get(opts, :conn_opts, []),
-      manifest: Manifest.read(mount)
+      manifest: Manifest.read(mount),
+      # test seams: production defaults are the module constants
+      flush_retry_ms: Keyword.get(opts, :flush_retry_ms, @flush_retry_ms),
+      pull_backoff_ms: Keyword.get(opts, :pull_backoff_ms, @pull_backoff_ms)
     }
 
     {:ok, state, {:continue, :connect}}
@@ -129,7 +168,7 @@ defmodule McpMount.Mounter do
 
   @impl GenServer
   def handle_info({:mcp_mount_event, ev}, %__MODULE__{state: :live} = s) do
-    {:noreply, apply_event(ev, s)}
+    {:noreply, maybe_resync(apply_event(ev, s))}
   end
 
   # Events during sync/reconnect are redundant — the diff-resync covers them.
@@ -174,7 +213,8 @@ defmodule McpMount.Mounter do
   def handle_info({:file_event, _watcher, {path, _events}}, s) do
     rel = relative(s, path)
 
-    if rel != nil and !Manifest.ignored?(rel) and !control_path?(rel) and s.state == :live do
+    if rel != nil and !Manifest.ignored?(rel) and
+         (!control_path?(rel) or control_config_path?(rel)) and s.state == :live do
       timer = start_debounce(s.timer)
       {:noreply, %{s | pending: MapSet.put(s.pending, rel), timer: timer}}
     else
@@ -185,14 +225,20 @@ defmodule McpMount.Mounter do
   # Write-backs only run against a live connection; a flush that arrives while
   # disconnected is deferred — pending is preserved and flushed after the
   # reconnect resync (see go_live/1). Write-back itself is failure-isolated:
-  # a raising push must never take the daemon down out of handle_info.
+  # a raising push must never take the daemon down out of handle_info. A push
+  # that hit a transport error (timeout/closed) is deferred the same way —
+  # the path retries on the @flush_retry_ms cadence and each retry counts as
+  # a push attempt (park after @max_push_attempts).
   def handle_info(:flush, %__MODULE__{state: :live, conn: conn} = s) when conn != nil do
     {s, deferred} =
       s.pending
       |> Enum.sort()
       |> Enum.reduce({s, MapSet.new()}, fn rel, {st, acc} ->
         try do
-          {writeback(st, rel), acc}
+          case writeback(st, rel) do
+            {st, true} -> {st, MapSet.put(acc, rel)}
+            {st, false} -> {st, acc}
+          end
         rescue
           e ->
             Logger.error(
@@ -207,15 +253,25 @@ defmodule McpMount.Mounter do
     s = %{s | pending: deferred, timer: nil}
 
     if MapSet.size(deferred) > 0 do
-      Process.send_after(self(), :flush, @flush_retry_ms)
-      {:noreply, s}
+      Process.send_after(self(), :flush, s.flush_retry_ms)
+      {:noreply, maybe_resync(s)}
     else
-      {:noreply, s}
+      {:noreply, maybe_resync(s)}
     end
   end
 
   # Disconnected (or mid-resync): defer, pending flushes after reconnect resync.
   def handle_info(:flush, s), do: {:noreply, s}
+
+  # A scheduled pull retry. Pulls are the healing direction — re-read the
+  # path; pull/3 owns the backoff bookkeeping. Retries that arrive while not
+  # live are dropped: the reconnect resync covers them.
+  def handle_info({:pull_retry, rel, path}, %__MODULE__{state: :live, conn: conn} = s)
+      when conn != nil do
+    {:noreply, maybe_resync(pull(s, rel, path))}
+  end
+
+  def handle_info({:pull_retry, _rel, _path}, s), do: {:noreply, s}
 
   # ── sync ──────────────────────────────────────────────────────────────────
 
@@ -223,7 +279,7 @@ defmodule McpMount.Mounter do
   # mismatches re-read; server-side deletions remove local files. Also used
   # verbatim as the reconnect resync.
   defp sync(s) do
-    with {:ok, _} <- call(s.conn, "vfs/ping", nil, @call_timeout),
+    with {:ok, _} <- call(s.conn, "vfs/ping", nil),
          {:ok, files} <- walk(s.conn) do
       # server-side deletions since last sync
       files
@@ -232,11 +288,12 @@ defmodule McpMount.Mounter do
       |> then(&MapSet.difference(MapSet.new(Map.keys(s.manifest)), &1))
       |> Enum.each(fn rel -> remove_local(s, rel) end)
 
+      # per-task safety net: twice the largest per-op budget
       files
       |> Task.async_stream(
         fn {path, stat} -> materialize(s, path, stat) end,
         max_concurrency: 8,
-        timeout: @call_timeout * 4
+        timeout: max_budget() * 2
       )
       |> Enum.reduce_while({:ok, s.manifest}, fn
         {:ok, {:ok, rel, entry}}, {:ok, manifest} -> {:cont, {:ok, Map.put(manifest, rel, entry)}}
@@ -280,7 +337,7 @@ defmodule McpMount.Mounter do
       # Re-stat and keep walking it as a file instead of failing the whole
       # sync — a mismatch must never turn into a reconnect loop.
       {:error, {:list_failed, ^dir, %{errno: :enotdir}}} ->
-        case call(conn, "vfs/stat", %{"path" => dir}, @call_timeout) do
+        case call(conn, "vfs/stat", %{"path" => dir}) do
           {:ok, %{"type" => type} = stat} when type != "dir" ->
             stat = Map.take(stat, ["type", "version"])
             do_walk(conn, rest, Map.put(acc, String.trim_leading(dir, "/"), stat))
@@ -299,7 +356,7 @@ defmodule McpMount.Mounter do
     params = %{"path" => dir}
     params = if cursor, do: Map.put(params, "cursor", cursor), else: params
 
-    case call(conn, "vfs/list", params, @call_timeout) do
+    case call(conn, "vfs/list", params) do
       {:ok, %{"entries" => entries} = result} ->
         acc =
           Enum.reduce(entries, acc, fn entry, acc ->
@@ -329,7 +386,7 @@ defmodule McpMount.Mounter do
 
       true ->
         with {:ok, %{"content" => content, "version" => version}} <-
-               call(s.conn, "vfs/read", %{"path" => path}, @call_timeout) do
+               call(s.conn, "vfs/read", %{"path" => path}) do
           mode = if listed_stat["executable"], do: 0o755, else: 0o644
           write_local(s, rel, content, mode)
           {:ok, rel, entry(content, version, mode)}
@@ -345,7 +402,17 @@ defmodule McpMount.Mounter do
       # write-backs deferred while disconnected flush now, after the resync
       if MapSet.size(s.pending) > 0, do: Process.send_after(self(), :flush, @debounce_ms)
 
-      %{s | state: :live, backoff_ms: @backoff_start, watcher: watcher, watcher_mon: watcher_mon}
+      # the fresh resync healed the tree: pull backoff counters and any
+      # resync nudge that survived into the reconnect are cleared
+      %{
+        s
+        | state: :live,
+          backoff_ms: @backoff_start,
+          watcher: watcher,
+          watcher_mon: watcher_mon,
+          pull_attempts: %{},
+          resync_nudge: false
+      }
     else
       error ->
         Logger.error("mcp-mount[#{s.name}]: subscribe failed: #{inspect(error)}")
@@ -362,39 +429,7 @@ defmodule McpMount.Mounter do
       # self-echo: our own write-back came back to us
       s
     else
-      case call(s.conn, "vfs/read", %{"path" => path}, @call_timeout) do
-        {:ok, %{"content" => content, "version" => v}} ->
-          mode = event_mode(s.conn, path, s.manifest[rel])
-          write_local(s, rel, content, mode)
-
-          # a successful read-back confirms any earlier unconfirmed push
-          s = %{s | pushed_ack: MapSet.delete(s.pushed_ack, rel)}
-
-          save_manifest(
-            s,
-            Map.put(s.manifest, rel, entry(content, v, mode))
-          )
-
-        {:error, %{errno: :eisdir}} ->
-          File.mkdir_p!(Path.join(s.mount, rel))
-          s
-
-        {:error, %{errno: :enoent}} ->
-          if MapSet.member?(s.pushed_ack, rel) do
-            # self-echo for a path we just pushed acked, but the server no
-            # longer has it at the requested path (canonicalized elsewhere?):
-            # stranded — park instead of re-pushing (an unconditional re-push
-            # here duplicated server-side resources unboundedly; seen live).
-            park(s, rel, Path.join(s.mount, rel), "echo for acked push, path missing on server")
-          else
-            Logger.warning("mcp-mount[#{s.name}]: pull failed for #{path}: enoent")
-            s
-          end
-
-        {:error, reason} ->
-          Logger.warning("mcp-mount[#{s.name}]: pull failed for #{path}: #{inspect(reason)}")
-          s
-      end
+      pull(s, rel, path)
     end
   end
 
@@ -411,8 +446,69 @@ defmodule McpMount.Mounter do
 
   defp apply_event(_ev, s), do: s
 
+  # Event-driven pull of one path (server truth), with bounded backoff.
+  # Pulls are never parked — they are the system's healing direction. A pull
+  # that exhausts its backoff schedule is dropped, the per-path counter
+  # is cleared, a resync nudge is queued (the quiescence check runs the diff
+  # resync in place) and the drop is logged once.
+  defp pull(s, rel, path) do
+    case call(s.conn, "vfs/read", %{"path" => path}) do
+      {:ok, %{"content" => content, "version" => v}} ->
+        mode = event_mode(s.conn, path, s.manifest[rel])
+        write_local(s, rel, content, mode)
+
+        # a successful read-back confirms any earlier unconfirmed push
+        s = %{s | pushed_ack: MapSet.delete(s.pushed_ack, rel)}
+
+        save_manifest(
+          pull_done(s, rel),
+          Map.put(s.manifest, rel, entry(content, v, mode))
+        )
+
+      {:error, %{errno: :eisdir}} ->
+        File.mkdir_p!(Path.join(s.mount, rel))
+        pull_done(s, rel)
+
+      {:error, %{errno: :enoent}} ->
+        if MapSet.member?(s.pushed_ack, rel) do
+          # self-echo for a path we just pushed acked, but the server no
+          # longer has it at the requested path (canonicalized elsewhere?):
+          # stranded — park instead of re-pushing (an unconditional re-push
+          # here duplicated server-side resources unboundedly; seen live).
+          pull_done(
+            park(s, rel, Path.join(s.mount, rel), "echo for acked push, path missing on server"),
+            rel
+          )
+        else
+          pull_failed(s, rel, path, :enoent)
+        end
+
+      {:error, reason} ->
+        pull_failed(s, rel, path, reason)
+    end
+  end
+
+  defp pull_done(s, rel), do: %{s | pull_attempts: Map.delete(s.pull_attempts, rel)}
+
+  defp pull_failed(s, rel, path, reason) do
+    n = Map.get(s.pull_attempts, rel, 0)
+
+    if n >= length(s.pull_backoff_ms) do
+      Logger.warning(
+        "mcp-mount[#{s.name}]: pull for #{path} failed #{n + 1}x " <>
+          "(last: #{inspect(reason)}); dropping event — resync queued"
+      )
+
+      %{s | pull_attempts: Map.delete(s.pull_attempts, rel), resync_nudge: true}
+    else
+      delay = Enum.at(s.pull_backoff_ms, n)
+      Process.send_after(self(), {:pull_retry, rel, path}, delay)
+      %{s | pull_attempts: Map.put(s.pull_attempts, rel, n + 1)}
+    end
+  end
+
   defp event_mode(conn, path, cached) do
-    case call(conn, "vfs/stat", %{"path" => path}, @call_timeout) do
+    case call(conn, "vfs/stat", %{"path" => path}) do
       {:ok, %{"executable" => true}} -> 0o755
       {:ok, _} -> if(cached, do: cached.mode, else: 0o644)
       _ -> if(cached, do: cached.mode, else: 0o644)
@@ -446,42 +542,50 @@ defmodule McpMount.Mounter do
     Process.send_after(self(), :flush, @debounce_ms)
   end
 
-  # Returns the (possibly updated) state. The flush loop threads it through,
-  # so ack-as-synced manifest updates stick in memory — dropping them here is
-  # what made every later writeback see a stale version and churn.
+  # Returns {state, retry?}. retry? puts the path back into the deferred set
+  # (flush retry timer): a push that hit a transport error (timeout/closed)
+  # retries on the @flush_retry_ms cadence, each retry counted as an attempt.
+  # The flush loop threads the state through, so ack-as-synced manifest
+  # updates stick in memory — dropping them here is what made every later
+  # writeback see a stale version and churn.
   defp writeback(s, rel) do
     abs = Path.join(s.mount, rel)
 
     cond do
-      # control tree (/etc/**) is a server-side configuration surface: never
-      # pushed, local edits are a documented no-op (still materialized/readable)
-      control_path?(rel) ->
-        s
+      # control tree (/etc/**) is a server-side configuration surface. One
+      # corner is writable: etc/dev/config/** (the runtime writes toggle)
+      # pushes through the ordinary vfs/write below — the server validates
+      # the data, so a malformed edit fails like any write error (retries,
+      # then park; the gate is untouched). Every other etc/** path stays a
+      # documented no-op: never queued, never pushed, never conflict-saved.
+      control_path?(rel) and !control_config_path?(rel) ->
+        {s, false}
 
       s.ro ->
         Logger.warning("mcp-mount[#{s.name}]: ro mount, refusing write-back for #{rel}")
-        s
+        {s, false}
 
       true ->
         s = unpark_if_changed(s, rel, abs)
 
         cond do
-          parked?(s, rel, abs) -> s
-          File.dir?(abs) -> s
+          parked?(s, rel, abs) -> {s, false}
+          File.dir?(abs) -> {s, false}
           File.regular?(abs) -> capped_push(s, rel, abs)
-          true -> s
+          true -> {s, false}
         end
     end
   end
 
   # Per-path retry cap: a push that keeps failing or going unconfirmed is
   # attempted at most @max_push_attempts times, then parked — it is never
-  # re-pushed until the local file changes (user modification).
+  # re-pushed until the local file changes (user modification). Transport
+  # timeouts count as attempts (the retry cadence is the flush retry timer).
   defp capped_push(s, rel, abs) do
     n = Map.get(s.push_attempts, rel, 0)
 
     if n >= @max_push_attempts do
-      park(s, rel, abs, "no confirmed push after #{n} attempts")
+      {park(s, rel, abs, "no confirmed push after #{n} attempts"), false}
     else
       push_local(%{s | push_attempts: Map.put(s.push_attempts, rel, n + 1)}, rel, abs)
     end
@@ -492,7 +596,7 @@ defmodule McpMount.Mounter do
     local = s.manifest[rel]
     local_hash = file_hash(abs)
 
-    case call(s.conn, "vfs/stat", %{"path" => path}, @call_timeout) do
+    case call(s.conn, "vfs/stat", %{"path" => path}) do
       {:ok, %{"version" => v}} ->
         cond do
           # already synced: the server holds the version we recorded and the
@@ -501,27 +605,27 @@ defmodule McpMount.Mounter do
           # no change.
           local != nil and v == local.version and Map.get(local, :unconfirmed) == nil and
             local_hash != nil and local_hash == local.hash ->
-            s
+            {s, false}
 
           local != nil and local.version == v ->
             with {:ok, content} <- File.read(abs) do
-              case call(s.conn, "vfs/write", %{"path" => path, "data" => content}, @call_timeout) do
+              case call(s.conn, "vfs/write", %{"path" => path, "data" => content}) do
                 {:ok, node} ->
-                  acked_sync(s, rel, content, local.mode, node["version"], local.version)
+                  {acked_sync(s, rel, content, local.mode, node["version"], local.version), false}
 
                 {:error, reason} ->
                   Logger.warning(
                     "mcp-mount[#{s.name}]: write failed for #{path}: #{inspect(reason)}"
                   )
 
-                  s
+                  {s, transport_error?(reason)}
               end
             else
-              _ -> s
+              _ -> {s, false}
             end
 
           true ->
-            conflict(s, rel, abs)
+            {conflict(s, rel, abs), false}
         end
 
       {:error, %{errno: :enoent}} ->
@@ -531,35 +635,41 @@ defmodule McpMount.Mounter do
           # re-create — that duplicates server-side resources.
           local != nil and MapSet.member?(s.pushed_ack, rel) and
             local_hash != nil and local_hash == local.hash ->
-            park(s, rel, abs, "push acked but path missing on server")
+            {park(s, rel, abs, "push acked but path missing on server"), false}
 
           true ->
             # locally created file — create it on the server
             with {:ok, content} <- File.read(abs),
-                 {:ok, node} <-
-                   call(s.conn, "vfs/create", %{"path" => path, "data" => content}, @call_timeout) do
+                 {:ok, node} <- call(s.conn, "vfs/create", %{"path" => path, "data" => content}) do
               mode = mode_from_node(node)
               File.chmod(abs, mode)
 
               # ack-as-synced: a successful ack always marks the path synced.
               # An ack without a version records the pre-push version flagged
               # unconfirmed until a read-back confirms it.
-              acked_sync(s, rel, content, mode, node["version"], local && local.version)
+              {acked_sync(s, rel, content, mode, node["version"], local && local.version), false}
             else
               {:error, reason} ->
                 Logger.warning(
                   "mcp-mount[#{s.name}]: create failed for #{path}: #{inspect(reason)}"
                 )
 
-                s
+                {s, transport_error?(reason)}
             end
         end
 
       {:error, reason} ->
         Logger.warning("mcp-mount[#{s.name}]: stat failed for #{path}: #{inspect(reason)}")
-        s
+        {s, transport_error?(reason)}
     end
   end
+
+  # Transport-level failures retry (deferred flush); server-side application
+  # errors do not — they wait for the next watcher event like today.
+  defp transport_error?(:timeout), do: true
+  defp transport_error?(:closed), do: true
+  defp transport_error?(%{errno: errno}) when errno in [:timeout, :closed], do: true
+  defp transport_error?(_), do: false
 
   # A successful create/write ack marks the path synced immediately — the
   # daemon never leaves an acked path in "pending re-push". The content hash
@@ -580,6 +690,9 @@ defmodule McpMount.Mounter do
     e = if unconfirmed, do: Map.put(e, :unconfirmed, true), else: e
 
     s = %{s | pushed_ack: MapSet.put(s.pushed_ack, rel)}
+    # a confirmed push resets the retry counter — attempts count *unconfirmed*
+    # pushes, and a healthy path must never drift into park on watcher noise
+    s = %{s | push_attempts: Map.delete(s.push_attempts, rel)}
     save_manifest(s, Map.put(s.manifest, rel, e))
   end
 
@@ -636,7 +749,7 @@ defmodule McpMount.Mounter do
 
     with :ok <- File.rename(abs, backup),
          {:ok, %{"content" => content, "version" => version}} <-
-           call(s.conn, "vfs/read", %{"path" => "/" <> rel}, @call_timeout) do
+           call(s.conn, "vfs/read", %{"path" => "/" <> rel}) do
       Logger.warning(
         "mcp-mount[#{s.name}]: conflict on #{rel}; local edit saved to #{Path.basename(backup)}"
       )
@@ -667,7 +780,38 @@ defmodule McpMount.Mounter do
 
   # ── lifecycle helpers ─────────────────────────────────────────────────────
 
-  defp reconnect(s, reason) do
+  # Resync nudge: a dropped pull queued a heal. When the mount is live and
+  # quiescent (nothing pending), run the existing sync/1 IN PLACE — it is the
+  # same diff resync the reconnect uses, so drift heals without dropping the
+  # watcher or the manifest. Only if the resync itself fails do we escalate
+  # to a full reconnect (its own backoff cycle).
+  defp maybe_resync(%__MODULE__{resync_nudge: true, state: :live, conn: conn} = s)
+       when conn != nil do
+    if MapSet.size(s.pending) > 0, do: s, else: do_resync(s)
+  end
+
+  defp maybe_resync(s), do: s
+
+  defp do_resync(s) do
+    Logger.info("mcp-mount[#{s.name}]: resync nudge — diff resync in place")
+
+    case sync(s) do
+      {:ok, s} ->
+        Logger.info("mcp-mount[#{s.name}]: nudge resync ok (#{map_size(s.manifest)} files)")
+        %{s | resync_nudge: false, pull_attempts: %{}}
+
+      {:error, reason} ->
+        Logger.warning(
+          "mcp-mount[#{s.name}]: nudge resync failed (#{inspect(reason)}); escalating to reconnect"
+        )
+
+        reconnect_state(s, reason)
+    end
+  end
+
+  defp reconnect(s, reason), do: {:noreply, reconnect_state(s, reason)}
+
+  defp reconnect_state(s, reason) do
     if s.mon_ref, do: Process.demonitor(s.mon_ref, [:flush])
 
     if s.watcher != nil and is_pid(s.watcher) do
@@ -677,14 +821,13 @@ defmodule McpMount.Mounter do
     Logger.warning("mcp-mount[#{s.name}]: reconnecting in #{s.backoff_ms}ms (#{inspect(reason)})")
     Process.send_after(self(), {:reconnect_tick, nil}, s.backoff_ms)
 
-    {:noreply,
-     %{
-       s
-       | state: :reconnecting,
-         conn: nil,
-         mon_ref: nil,
-         backoff_ms: min(s.backoff_ms * 2, @backoff_max)
-     }}
+    %{
+      s
+      | state: :reconnecting,
+        conn: nil,
+        mon_ref: nil,
+        backoff_ms: min(s.backoff_ms * 2, @backoff_max)
+    }
   end
 
   defp monitor(conn) when is_pid(conn), do: Process.monitor(conn)
@@ -755,10 +898,14 @@ defmodule McpMount.Mounter do
     end
   end
 
-  # Control tree: server-side configuration surfaces. Local edits via the
-  # mount are a documented no-op — never watched, never pushed.
+  # Control tree: server-side configuration surfaces. etc/dev/config/** is
+  # the one writable corner (runtime toggle writes reach the ordinary
+  # vfs/write — VFS-FEATURES-DESIGN §3/D3, zero protocol change); every
+  # other control path is read-only: never queued, never pushed.
   defp control_path?("etc"), do: true
   defp control_path?(rel), do: String.starts_with?(rel, "etc/")
+
+  defp control_config_path?(rel), do: String.starts_with?(rel, "etc/dev/config/")
 
   defp ts, do: DateTime.utc_now() |> DateTime.to_iso8601() |> String.replace(":", "-")
 

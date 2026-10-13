@@ -33,7 +33,19 @@ defmodule McpMount.WSConn do
 
   @impl McpMount.Conn
   def call(pid, method, params, timeout \\ @default_timeout) when is_pid(pid) do
-    GenServer.call(pid, {:call, method, params}, timeout + 1_000)
+    # The Conn contract promises `{:error, :timeout}` as a *value*, but a
+    # GenServer.call deadline fires as an exit. Catch it here so a slow
+    # server degrades to an ordinary error branch in the Mounter instead of
+    # killing the unsupervised daemon. A conn that dies mid-call (crash,
+    # kill, normal stop) surfaces as `{:error, :closed}`; the owner still
+    # receives the separate `{:mcp_mount_down, _}`/DOWN notification and
+    # drives reconnection — no exit escapes this function.
+    try do
+      GenServer.call(pid, {:call, method, params}, timeout + 1_000)
+    catch
+      :exit, {:timeout, {GenServer, :call, _}} -> {:error, :timeout}
+      :exit, _reason -> {:error, :closed}
+    end
   end
 
   @impl McpMount.Conn
