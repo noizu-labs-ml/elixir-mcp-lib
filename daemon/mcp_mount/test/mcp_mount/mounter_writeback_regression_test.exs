@@ -9,6 +9,7 @@ defmodule McpMount.MounterWritebackRegressionTest do
   import McpMount.Support
 
   alias McpMount.{FakeConn, Manifest, Mounter}
+  alias McpMount.Test.FakeVfs
 
   setup do
     dir = Path.join(System.tmp_dir!(), "mcp-mount-wb-#{System.unique_integer()}")
@@ -317,6 +318,169 @@ defmodule McpMount.MounterWritebackRegressionTest do
     assert Agent.get(counter, & &1) <= 4
     assert Process.alive?(mounter)
 
+    File.rm_rf!(dir)
+  end
+
+  # F5: the version-match self-echo skip must NEVER apply to the control
+  # tree — the daemon cannot trust its own manifest versions there (another
+  # writer may have moved the server on with the same version number visible
+  # to us, and control truth is server-side by definition). One extra read
+  # on our own echo is the cost of never desyncing the control surface.
+  test "control paths re-pull even on a version match (self-echo bypass)", %{
+    dir: dir,
+    mounter: mounter
+  } do
+    writes = Path.join(dir, "etc/dev/config/writes")
+    assert File.read!(writes) == "true\n"
+    assert Manifest.read(dir)["etc/dev/config/writes"].version == 1
+
+    # the server moves on WITHOUT an event reaching us (another writer);
+    # the version in our manifest is now stale but we don't know that
+    McpMount.Test.FakeVfs.write("/etc/dev/config/writes", "off\n")
+
+    # our own write-back echo replays with the STALE version — still pulled
+    FakeConn.inject_event(fake_conn(mounter), %{
+      op: "write",
+      path: "/etc/dev/config/writes",
+      version: 1,
+      seq: 2,
+      by: "self",
+      at: 0
+    })
+
+    wait_until(fn -> if File.read!(writes) == "off\n", do: :ok end, 8_000)
+    assert Manifest.read(dir)["etc/dev/config/writes"].version == 2
+  end
+
+  # F6: a NEW regular file under etc/dev/config/** pushes through the
+  # ordinary create path — the control whitelist admits it like any other
+  # file; only non-regular nodes are refused.
+  test "new regular files under etc/dev/config/** push through vfs/create", %{dir: dir} do
+    refute Manifest.read(dir)["etc/dev/config/new-flag"]
+
+    write_and_wait_push(dir, "etc/dev/config/new-flag", "on\n", fn ->
+      case McpMount.Test.FakeVfs.handler().("vfs/read", %{"path" => "/etc/dev/config/new-flag"}) do
+        {:ok, %{"content" => "on\n"}} -> Manifest.read(dir)["etc/dev/config/new-flag"] != nil
+        _ -> false
+      end
+    end)
+
+    refute conflict_under?(Path.join(dir, "etc"))
+  end
+
+  # F9: a push that fails with a SERVER-side error (not a transport timeout)
+  # gets the same defer/retry cadence and the same park cap as transport
+  # failures — previously {:error, %{errno: :eio}} sat unhandled until the
+  # next watcher event chanced to re-queue the path.
+  test "non-transport push failures retry, park, and recover after the fault clears" do
+    dir = Path.join(System.tmp_dir!(), "mcp-mount-wb-#{System.unique_integer()}")
+    name = String.to_atom("mounter_wb_#{System.unique_integer()}")
+
+    mounter =
+      start_supervised!(
+        Supervisor.child_spec(
+          {
+            Mounter,
+            url: "ws://fake/vfs",
+            token: "t",
+            mount: dir,
+            conn_mod: FakeConn,
+            conn_opts: [handler: McpMount.Test.FakeVfs.handler()],
+            flush_retry_ms: 100,
+            name: name
+          },
+          id: name
+        )
+      )
+
+    wait_until(fn -> if live?(mounter), do: :ok end)
+
+    FakeVfs.set_write_failure(:eio)
+
+    # re-driven write: the first fsevents batch after a watcher starts can be
+    # dropped, and the fault keeps the manifest hash stale so every retry
+    # attempts the push again
+    write_and_wait_push(dir, "docs/hello.txt", "edit under fault\n", fn ->
+      FakeVfs.calls("vfs/write") != []
+    end)
+
+    wait_until(
+      fn -> if Map.has_key?(:sys.get_state(mounter).parked, "docs/hello.txt"), do: :ok end,
+      8_000
+    )
+
+    # 4 attempts (initial + 3 retries), then the loop is over and stays over
+    assert length(FakeVfs.calls("vfs/write")) == 4
+    Process.sleep(300)
+    assert length(FakeVfs.calls("vfs/write")) == 4
+    assert Process.alive?(mounter)
+
+    # clearing the fault + editing the file re-enables write-back
+    FakeVfs.set_write_failure(nil)
+
+    write_and_wait_push(dir, "docs/hello.txt", "edit after fault\n", fn ->
+      case FakeVfs.handler().("vfs/read", %{"path" => "/docs/hello.txt"}) do
+        {:ok, %{"content" => "edit after fault\n"}} -> :ok
+        _ -> nil
+      end
+    end)
+
+    File.rm_rf!(dir)
+  end
+
+  # F12: pull retries scheduled on the old connection are epoch-tagged and
+  # dropped after a reconnect — the resync already re-pulled everything
+  # against fresh state; a stale timer firing later must not re-pull.
+  test "stale pull_retry after a reconnect is dropped, not re-pulled" do
+    dir = Path.join(System.tmp_dir!(), "mcp-mount-wb-#{System.unique_integer()}")
+    name = String.to_atom("mounter_wb_#{System.unique_integer()}")
+
+    mounter =
+      start_supervised!(
+        Supervisor.child_spec(
+          {
+            Mounter,
+            url: "ws://fake/vfs",
+            token: "t",
+            mount: dir,
+            conn_mod: FakeConn,
+            conn_opts: [handler: McpMount.Test.FakeVfs.handler()],
+            pull_backoff_ms: [3_000, 6_000, 12_000],
+            name: name
+          },
+          id: name
+        )
+      )
+
+    wait_until(fn -> if live?(mounter), do: :ok end)
+
+    ghost_reads = fn ->
+      FakeVfs.calls("vfs/read")
+      |> Enum.count(&(&1["path"] == "/docs/ghost.txt"))
+    end
+
+    # an event for a path the server does not have: the pull fails and
+    # schedules a retry 3s out (the stretched backoff above)
+    FakeConn.inject_event(fake_conn(mounter), %{
+      op: "write",
+      path: "/docs/ghost.txt",
+      version: 2,
+      seq: 2,
+      by: "test",
+      at: 0
+    })
+
+    wait_until(fn -> if ghost_reads.() == 1, do: :ok end, 8_000)
+
+    # the drop lands BEFORE the retry fires; the reconnect resync does not
+    # read ghost.txt (it is not on the server), so the only remaining source
+    # of a second read would be the stale timer
+    FakeConn.drop(fake_conn(mounter), :test_drop)
+    wait_until(fn -> if live?(mounter), do: :ok end, 10_000)
+
+    Process.sleep(4_000)
+    assert ghost_reads.() == 1
+    assert Process.alive?(mounter)
     File.rm_rf!(dir)
   end
 

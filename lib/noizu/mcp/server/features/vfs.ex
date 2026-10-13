@@ -5,10 +5,10 @@ defmodule Noizu.MCP.Server.Features.VFS do
   Two layers, mirroring `Noizu.MCP.Server.Features.Resources`:
 
     * Backend-level (`stat/3`, `list/4`, `read/3`, `write/4`, `create/4`,
-      `remove/3`, `search/4`, `xattr/3`) — cache-aware wrappers over a backend
-      module. Read results go through `Noizu.MCP.VFS.Cache` and get the
-      backend's generation stamped into node versions; successful writes bump
-      the generation first. Cache entries are namespaced by the mount's
+      `remove/3`, `move/4`, `search/4`, `xattr/3`) — cache-aware wrappers over
+      a backend module. Read results go through `Noizu.MCP.VFS.Cache` and get
+      the backend's generation stamped into node versions; successful writes
+      and moves bump the generation first. Cache entries are namespaced by the mount's
       `vfs_opts` (see `ns/1`) so two mounts sharing a backend module —
       per-user roots — never serve each other's entries. This is the layer
       the conformance battery (`Noizu.MCP.VFS.Conformance`) exercises.
@@ -213,6 +213,35 @@ defmodule Noizu.MCP.Server.Features.VFS do
     end
   end
 
+  @doc "Move `from` to `to` via `backend`; bumps the generation on success."
+  # <REMOVED UUID HERE> move
+  @spec move(module(), String.t(), String.t(), Ctx.t()) :: {:ok, VFS.t()} | {:error, term()}
+  def move(backend, from, to, ctx) when is_binary(from) and is_binary(to) do
+    case backend.move(from, to, ctx) do
+      {:ok, node} ->
+        gen = Cache.bump_generation(backend)
+
+        # The move rides the existing remove/create event pair — no new event
+        # shape on the wire, so today's subscribers re-pull both paths without
+        # a resync (VFS-FEATURES-DESIGN §1.2 step 3a). Contract, pinned by the
+        # vfs_ws event-pair tests: the substrate publishes exactly the
+        # top-level pair, delivered to watchers of `from`/`to` and their
+        # ANCESTORS. A watcher registered strictly inside a moved subtree
+        # (/parent/child when /parent moves) is NOT notified here — descendant
+        # fan-out is the backend's job (it can publish further pairs for its
+        # re-pathed subtree; docmost-mcp caps the expansion and clients heal
+        # at the next resync).
+        VFSPubSub.publish(backend, :remove, from, gen, ctx)
+
+        node = stamp(backend, node)
+        VFSPubSub.publish(backend, :create, to, node.version, ctx)
+        {:ok, node}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   @doc "Search under `root` via `backend` (uncached)."
   # <REMOVED UUID HERE> search
   @spec search(module(), String.t(), String.t(), Ctx.t()) ::
@@ -351,6 +380,38 @@ defmodule Noizu.MCP.Server.Features.VFS do
           {:error, errno} when is_atom(errno) -> {:error, errno_error(errno)}
         end
       end)
+    end)
+  end
+
+  @doc """
+  vfs_move operation: `{"from" => path, "to" => path}`. `-32601
+  method_not_found` when the resolved backend does not implement `move/3`
+  (the op is advertised, the backend isn't) — never fall through to another
+  mutating op. The writes gate applies to both paths; the result is the node
+  now living at `to`.
+  """
+  # <REMOVED UUID HERE> vfs_move
+  def vfs_move(server, params, ctx) do
+    with_backend(server, params, fn backend, opts ->
+      if Noizu.MCP.Server.VFS.move_capable?(backend) do
+        params = params || %{}
+
+        with {:ok, from} <- validate_binary(params["from"], "from"),
+             {:ok, to} <- validate_binary(params["to"], "to"),
+             :ok <- DynamicContent.write_gate(server, from, ctx),
+             :ok <- DynamicContent.write_gate(server, to, ctx),
+             {:ok, node} <- move(backend, from, to, opts_ctx(ctx, opts)) do
+          DynamicContent.after_mutation(server, from)
+          DynamicContent.after_mutation(server, to)
+          {:ok, node_to_map(node)}
+        else
+          {:error, %Error{}} = error -> error
+          {:error, errno} when is_atom(errno) -> {:error, errno_error(errno)}
+          {:error, other} -> {:error, Error.internal("vfs error: #{inspect(other)}")}
+        end
+      else
+        {:error, Error.method_not_found("vfs/move")}
+      end
     end)
   end
 

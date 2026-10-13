@@ -8,14 +8,17 @@ defmodule McpMount.FakeConn do
 
   @behaviour McpMount.Conn
 
-  defstruct [:owner, :handler]
+  defstruct [:owner, :handler, :caps]
 
   @impl McpMount.Conn
   def connect(opts) do
     {:ok,
      %__MODULE__{
        owner: Keyword.fetch!(opts, :owner),
-       handler: Keyword.fetch!(opts, :handler)
+       handler: Keyword.fetch!(opts, :handler),
+       # caps the fake server advertises in the vfs/auth result; nil means
+       # the fake server predates the proto/caps handshake (:unknown gate)
+       caps: Keyword.get(opts, :caps)
      }}
   end
 
@@ -44,6 +47,16 @@ defmodule McpMount.FakeConn do
 
   @impl McpMount.Conn
   def close(%__MODULE__{}), do: :ok
+
+  @doc """
+  Caps the fake server advertised at connect (`:caps` connect opt). `nil`
+  (no opt) reads as `:unknown` — the pre-handshake-extras server shape —
+  so tests exercise both gate sides by injecting `caps: ["move"]`,
+  `caps: []`, or nothing.
+  """
+  @impl McpMount.Conn
+  def caps(%__MODULE__{caps: nil}), do: :unknown
+  def caps(%__MODULE__{caps: caps}) when is_list(caps), do: caps
 
   @doc "Deliver a server event to the mounter as if the server had sent it."
   def inject_event(%__MODULE__{owner: owner}, event) do

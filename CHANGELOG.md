@@ -9,8 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 2026-10-13
 
+`vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
+the docmost-mcp backend callback lands separately).
+
+- **`vfs/move {from, to}` on both VFS transports** (WS + unix socket) and
+  the MCP-native feature surface: validates both paths, gates on write caps
+  for `from` and `to`, moves through the backend's new optional
+  `move/3` callback (behaviour default `{:error, :enosys}`), then publishes
+  the debounced `remove(from)` + `create(to)` event pair.
+- **Backends without `move/3` answer `-32601`** method-not-found —
+  capability is derived from the backend (the `__mcp_vfs__(:implemented)`
+  list, since `__before_compile__` fills defaults for every `use Noizu.MCP.VFS`
+  module), never from config.
+- **Auth handshake gains `proto` and `caps`.** Both transports now return
+  `{"authenticated": true, "session_id": ..., "proto": 3, "caps": ["move"]}`
+  — `proto` bumps to 3 because the auth result shape changed; `caps` lists
+  `move` when ANY registered backend implements it (empty otherwise;
+  derivation hoisted into `Noizu.MCP.Server.VFS.session_info/1` so the
+  transports cannot drift — robot review #61). Old clients that ignore the
+  new fields keep working.
+- `VFSClient.move/4` added; fixture `Memory` backend implements
+  `move/3` (subtree re-pathing, `:eacces`/`:enoent`/`:eexist` errno matrix,
+  and a guard refusing `to` inside `from`'s own subtree — `:eio`, the
+  rename(2)-EINVAL analogue, robot review #61).
+
+mcp-mount move pairing, per VFS-FEATURES-DESIGN §1 + D1 (client half;
+consumes the server's `vfs/move` + proto/caps handshake from above).
+
+- **Editor renames promote to ONE `vfs/move`.** A tracked file vanishing
+  from disk while an untracked file with identical content appears is
+  paired at flush (`pair_moves/1`), held behind a 500ms double-confirm
+  window (defeats atomic-save remove+rename mimicry — legs re-enter the
+  ordinary flush if the origin path reappears), then issued as a single
+  `vfs/move` instead of create+silent-drop.
+- **Caps-gated, never gambling.** The daemon only moves when the server's
+  handshake advertises `move`; unknown caps (older servers) park the
+  target with a frontmatter note instead of attempting. Protocol refusal
+  (`-32601`) and `:enosys` park the target — never a create-fallback.
+  `:eexist` (target already on server) conflicts the target: local saved
+  to `.conflict-<ts>`, server truth re-pulled.
+- Transport failures retry on the flush cadence and park after the push
+  cap, same as writes. Pairings recorded before a drop re-arm their
+  confirm after reconnect; pull retries are epoch-tagged and dropped as
+  stale (F12); non-transport push failures get the defer/retry/park
+  cadence (F9); control paths always re-pull on events (F5); `Conn`
+  gains a probe-friendly `caps/1` callback (F8 documents `:exit` as
+  closed-transport semantics).
+- **Robot-review follow-ups (head d7dea15):** a move ack whose local read
+  races the target vanishing degrades to the server's create self-echo
+  instead of raising out of the daemon; reconnect re-arms pairings with a
+  fresh attempt budget (connection-scoped cadence, matching writes).
+
 Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
-(client-only; no server changes) — #57. → stage (#59) → main (#60)
+(client-only; no server changes) — #57. → stage (#59) → main (#60) → stage (#62) → main (#63)
 
 - **Timeouts are values, not crashes.** `WSConn.call/4` rescues GenServer
   exits: a deadline surfaces as `{:error, :timeout}`, a dead conn as
@@ -30,7 +81,7 @@ Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
   only the escalation path when the in-place resync fails.
 
 Control-write whitelist for the mcp-mount daemon, per VFS-FEATURES-DESIGN
-§3/D3 (client half; no server or auth changes) — #58. → stage (#59) → main (#60)
+§3/D3 (client half; no server or auth changes) — #58. → stage (#59) → main (#60) → stage (#62) → main (#63)
 
 - **`etc/dev/config/**` is writable from a mount edit.** The watcher queues
   config paths and write-back pushes them through the ordinary `vfs/write`

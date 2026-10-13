@@ -25,12 +25,20 @@ defmodule Noizu.MCP.Transport.VFSSocket do
       (`Noizu.MCP.Auth.*Verifier`); on success the resulting claims are bound
       to the connection's `Noizu.MCP.Ctx` (as `assigns.auth_claims`, plus any
       `context/1` assigns) and every subsequent operation on the connection
-      runs under that identity. On failure the connection receives an error
+      runs under that identity. The auth *result* also carries `"proto"`
+      (this wire's protocol version; `2` was the pre-handshake implicit
+      protocol, this transport reports `3`) and `"caps"` (additive ops the
+      loaded backend implements, e.g. `["move"]`) — clients feature-gate on
+      `caps`, old clients ignore both fields. On failure the connection
+      receives an error
       response and is closed. Any other method before `vfs/auth` is refused
       the same way; a second `vfs/auth` after success is an `invalid_request`.
     * **Operations** — `vfs/stat`, `vfs/list`, `vfs/read`, `vfs/write`,
-      `vfs/create`, `vfs/remove`, `vfs/search`, `vfs/xattr`, with params
-      `{path, cursor?, query?, root?, data?, version?}` (string-keyed). They
+      `vfs/create`, `vfs/remove`, `vfs/move`, `vfs/search`, `vfs/xattr`, with
+      params
+      `{path, cursor?, query?, root?, data?, from?, to?, version?}` (string-keyed).
+      `vfs/move` takes `{from, to}` and answers `-32601` when the loaded
+      backend does not implement `move/3`. They
       route through `Noizu.MCP.Server.Features.VFS`, so caching, pagination,
       and authorization behave exactly as they do on the MCP-native surface.
     * **Responses** — results are string-keyed maps (`type` values render as
@@ -182,7 +190,16 @@ defmodule Noizu.MCP.Transport.VFSSocket do
     case verify(Keyword.get(opts, :auth), api_key, conn_info) do
       {:ok, claims} ->
         ctx = build_ctx(server, claims, opts)
-        send_result(sock, id, %{"authenticated" => true, "session_id" => ctx.session_id})
+
+        send_result(
+          sock,
+          id,
+          Map.merge(session_info(server), %{
+            "authenticated" => true,
+            "session_id" => ctx.session_id
+          })
+        )
+
         serve(sock, server, opts, ctx)
 
       {:error, reason} ->
@@ -265,9 +282,16 @@ defmodule Noizu.MCP.Transport.VFSSocket do
   defp op("vfs/write"), do: &VFS.vfs_write/3
   defp op("vfs/create"), do: &VFS.vfs_create/3
   defp op("vfs/remove"), do: &VFS.vfs_remove/3
+  defp op("vfs/move"), do: &VFS.vfs_move/3
   defp op("vfs/search"), do: &VFS.vfs_search/3
   defp op("vfs/xattr"), do: &VFS.vfs_xattr/3
   defp op(_), do: nil
+
+  # Handshake surface (VFS-FEATURES-DESIGN §5.1), same contract as the WS
+  # transport: `proto` is this wire's protocol version, `caps` the additive
+  # ops. Derived in one place — Noizu.MCP.Server.VFS.session_info/1 (union
+  # across registered backends) — so the transports cannot drift.
+  defp session_info(server), do: Noizu.MCP.Server.VFS.session_info(server)
 
   # ── ctx ───────────────────────────────────────────────────────────────────
 

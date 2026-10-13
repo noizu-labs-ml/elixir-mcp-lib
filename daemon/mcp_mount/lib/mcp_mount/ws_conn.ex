@@ -16,7 +16,17 @@ defmodule McpMount.WSConn do
   @keepalive_ms 20_000
   @stale_ms 60_000
 
-  defstruct [:conn, :ref, :websocket, :owner, :awaiting, :next_id, :last_recv, :ping_timer]
+  defstruct [
+    :conn,
+    :ref,
+    :websocket,
+    :owner,
+    :awaiting,
+    :next_id,
+    :last_recv,
+    :ping_timer,
+    :caps
+  ]
 
   # ── Conn API ──────────────────────────────────────────────────────────────
 
@@ -44,6 +54,13 @@ defmodule McpMount.WSConn do
       GenServer.call(pid, {:call, method, params}, timeout + 1_000)
     catch
       :exit, {:timeout, {GenServer, :call, _}} -> {:error, :timeout}
+      # Blanket clause. It collapses two shapes that deserve different
+      # handling: (a) the conn CRASHED mid-call (a bug; :closed is the right
+      # degradation and the owner's DOWN drives reconnect) and (b) the conn
+      # STOPPED normally while we waited (shutdown). Both surface as :closed
+      # today and the owner cannot tell a crash from a clean stop; telemetry
+      # on the caught reason is the follow-up (robot follow-up F8) - do not
+      # narrow this clause until that lands.
       :exit, _reason -> {:error, :closed}
     end
   end
@@ -72,6 +89,21 @@ defmodule McpMount.WSConn do
     GenServer.stop(pid, :normal)
   end
 
+  @doc """
+  Caps advertised by the server's `vfs/auth` result (the `proto`/`caps`
+  handshake extras): a list of strings, or `:unknown` when the server
+  predates the extras. The Mounter gates its mv-pairing flow on
+  `"move" in caps`.
+  """
+  @impl McpMount.Conn
+  def caps(pid) when is_pid(pid) do
+    try do
+      GenServer.call(pid, :caps, 1_000)
+    catch
+      :exit, _reason -> :unknown
+    end
+  end
+
   # ── GenServer ─────────────────────────────────────────────────────────────
 
   @impl GenServer
@@ -87,7 +119,7 @@ defmodule McpMount.WSConn do
 
     with {:ok, parts} <- parse_url(url, token),
          {:ok, conn, ref, websocket} <- handshake(parts, timeout),
-         {:ok, conn, websocket} <- auth(conn, ref, websocket, token, owner, timeout) do
+         {:ok, conn, websocket, caps} <- auth(conn, ref, websocket, token, owner, timeout) do
       {:ok, ping_timer} = :timer.send_after(@keepalive_ms, :keepalive)
 
       {:ok,
@@ -99,7 +131,8 @@ defmodule McpMount.WSConn do
          awaiting: %{},
          next_id: 0,
          last_recv: now(),
-         ping_timer: ping_timer
+         ping_timer: ping_timer,
+         caps: caps
        }}
     else
       {:error, reason} -> {:stop, {:shutdown, reason}}
@@ -215,8 +248,11 @@ defmodule McpMount.WSConn do
             {conn, websocket, frames} = extract(conn, ref, websocket, responses)
 
             case find_response(frames, id) do
-              {:ok, _result} ->
-                {:ok, conn, websocket}
+              {:ok, result} ->
+                # proto/caps handshake extras (VFS-FEATURES-DESIGN SS5.1):
+                # caps gate optional ops (vfs/move); absent on older
+                # servers, where the gate reads :unknown.
+                {:ok, conn, websocket, result && result["caps"]}
 
               {:error, error} ->
                 Mint.HTTP.close(conn)
@@ -234,6 +270,9 @@ defmodule McpMount.WSConn do
       timeout -> {:error, {:auth_failed, :timeout}}
     end
   end
+
+  @impl GenServer
+  def handle_call(:caps, _from, state), do: {:reply, state.caps || :unknown, state}
 
   @impl GenServer
   def handle_call({:call, method, params}, from, state) do

@@ -19,6 +19,11 @@ defmodule McpMount.Conn do
       `{:error, :closed | :timeout}`. `errno` is the wire `errno_atom`.
     * `subscribe(conn, paths, depth)` / `unsubscribe(conn, paths)`.
     * `close(conn)`.
+    * `caps(conn)` — the server's advertised capability list from the
+      `vfs/auth` result (`proto`/`caps` handshake extras, §5.1), or
+      `:unknown` when the server predates the extras. Callers MUST treat
+      `:unknown` as "no optional op advertised"; optional ops (`vfs/move`)
+      gate on membership.
 
   ## Async messages to `owner`
 
@@ -47,4 +52,11 @@ defmodule McpMount.Conn do
   @callback unsubscribe(conn(), paths :: [String.t()]) :: :ok
 
   @callback close(conn()) :: :ok
+
+  # Optional-op gate for the mv-pairing flow: the advertised cap list from
+  # the vfs/auth result, or :unknown when the server predates the extras.
+  # NOT dispatched polymorphically — callers probe function_exported?/3 and
+  # treat a miss as :unknown, so a Conn implementation written before this
+  # callback keeps working.
+  @callback caps(conn()) :: [String.t()] | :unknown
 end
