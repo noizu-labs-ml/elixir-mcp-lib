@@ -14,7 +14,10 @@ defmodule McpMount.Test.FakeVfs do
           calls: [],
           fail_move: nil,
           sticky_move_failure: nil,
-          fail_write: nil
+          fail_write: nil,
+          fail_remove: nil,
+          sticky_remove_failure: nil,
+          markers: MapSet.new()
         }
       end,
       name: __MODULE__
@@ -65,6 +68,19 @@ defmodule McpMount.Test.FakeVfs do
   deterministic (the ack would otherwise land before the injected remove).
   """
   def set_write_failure(reason), do: Agent.update(__MODULE__, &%{&1 | fail_write: reason})
+
+  @doc "Make the next vfs/remove fail with `reason` (an errno atom or {:code, -32601}). One-shot: cleared after the call."
+  def fail_next_remove(reason), do: Agent.update(__MODULE__, &%{&1 | fail_remove: reason})
+
+  @doc """
+  Sticky failure for EVERY vfs/remove until cleared with `set_remove_failure(nil)`
+  — drives the delete retry-until-parked cadence without one-shot races.
+  """
+  def set_remove_failure(reason),
+    do: Agent.update(__MODULE__, &%{&1 | sticky_remove_failure: reason})
+
+  @doc ".confirm-delete command files currently recorded server-side (D2 marker intake)."
+  def markers, do: Agent.get(__MODULE__, &MapSet.to_list(&1.markers))
 
   defp log_call(state, method, params) do
     Map.update!(state, :calls, &(&1 ++ [{method, params}]))
@@ -124,33 +140,6 @@ defmodule McpMount.Test.FakeVfs do
           {:error, :enoent}
         end
 
-      "vfs/write", %{"path" => path, "data" => data} ->
-        path = normalize(path)
-        fail_write = Agent.get(__MODULE__, & &1.fail_write)
-
-        node = Agent.get(__MODULE__, & &1.nodes[path])
-
-        cond do
-          fail_write != nil ->
-            {:error, fail_write}
-
-          node == nil ->
-            {:error, :enoent}
-
-          node.type == :dir ->
-            {:error, :eisdir}
-
-          true ->
-            version =
-              Agent.get_and_update(__MODULE__, fn state ->
-                state = update_in(state.nodes[path].content, fn _ -> data end)
-                state = update_in(state.nodes[path].version, &(&1 + 1))
-                {state.nodes[path].version, state}
-              end)
-
-            {:ok, %{"version" => version, "executable" => false}}
-        end
-
       "vfs/create", %{"path" => path, "data" => data} ->
         path = normalize(path)
 
@@ -201,6 +190,53 @@ defmodule McpMount.Test.FakeVfs do
             move_tree(normalize(from), normalize(to))
         end
 
+      # .confirm-delete command-file intake (VFS-FEATURES-DESIGN §2/D2):
+      # records delete intent server-side, NEVER creates a page node
+      "vfs/write", %{"path" => path, "data" => data} when is_binary(data) ->
+        path = normalize(path)
+
+        if String.ends_with?(path, "/.confirm-delete") do
+          fail_write = Agent.get(__MODULE__, & &1.fail_write)
+
+          if fail_write != nil do
+            {:error, fail_write}
+          else
+            Agent.update(__MODULE__, &%{&1 | markers: MapSet.put(&1.markers, path)})
+            {:ok, %{"version" => 1, "executable" => false}}
+          end
+        else
+          write_file(path, data)
+        end
+
+      "vfs/write", %{"path" => path, "data" => data} ->
+        write_file(normalize(path), data)
+
+      "vfs/remove", %{"path" => path} ->
+        path = normalize(path)
+
+        fail =
+          Agent.get_and_update(__MODULE__, fn state ->
+            # one-shot (fail_next_remove) is consumed; sticky
+            # (set_remove_failure) survives every call until cleared
+            one_shot = state.fail_remove
+
+            state =
+              if one_shot, do: %{state | fail_remove: nil}, else: state
+
+            {one_shot || state.sticky_remove_failure, state}
+          end)
+
+        cond do
+          match?({:code, _}, fail) ->
+            {:error, %{code: elem(fail, 1), errno: nil, message: "fake refused"}}
+
+          fail != nil ->
+            {:error, fail}
+
+          true ->
+            remove_tree(path)
+        end
+
       _method, _params ->
         {:error, :enosys}
     end
@@ -210,6 +246,63 @@ defmodule McpMount.Test.FakeVfs do
       Agent.update(__MODULE__, &log_call(&1, method, params))
       inner.(method, params)
     end
+  end
+
+  defp write_file(path, data) do
+    fail_write = Agent.get(__MODULE__, & &1.fail_write)
+    node = Agent.get(__MODULE__, & &1.nodes[path])
+
+    cond do
+      fail_write != nil ->
+        {:error, fail_write}
+
+      node == nil ->
+        {:error, :enoent}
+
+      node.type == :dir ->
+        {:error, :eisdir}
+
+      true ->
+        version =
+          Agent.get_and_update(__MODULE__, fn state ->
+            state = update_in(state.nodes[path].content, fn _ -> data end)
+            state = update_in(state.nodes[path].version, &(&1 + 1))
+            {state.nodes[path].version, state}
+          end)
+
+        {:ok, %{"version" => version, "executable" => false}}
+    end
+  end
+
+  # Delete semantics per the server half of design §2 + D2: a file removes
+  # freely; a page-dir removes only when a .confirm-delete command file was
+  # recorded for it (consumed by the successful delete) and it is childless.
+  defp remove_tree(path) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      node = state.nodes[path]
+      marker = MapSet.member?(state.markers, path <> "/.confirm-delete")
+
+      cond do
+        node == nil ->
+          {{:error, :enoent}, state}
+
+        node.type == :dir and not marker ->
+          {{:error, :eperm}, state}
+
+        node.type == :dir ->
+          if Enum.any?(state.nodes, fn {p, _} -> String.starts_with?(p, path <> "/") end) do
+            {{:error, :enotempty}, state}
+          else
+            {_, st} = pop_in(state.nodes[path])
+            st = %{st | markers: MapSet.delete(st.markers, path <> "/.confirm-delete")}
+            {{:ok, %{"removed" => path}}, st}
+          end
+
+        true ->
+          {_, st} = pop_in(state.nodes[path])
+          {{:ok, %{"removed" => path}}, st}
+      end
+    end)
   end
 
   defp move_tree(from, to) do
