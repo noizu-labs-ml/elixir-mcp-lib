@@ -62,6 +62,11 @@ separately) — #67. → stage (#68) → main (#69)
   defensively instead of `Map.fetch!`-crashing the mounter; a parent dir
   giving up on children names its parked child deletes in the park log.
 
+errno registry gains `:eperm` (→ `-32047`) so `{:error, :eperm}` refusal
+frames — docmost-mcp's marker-gate delete refusals (#21) — render
+`errno_atom` on the wire instead of falling back to a generic internal
+error; `VFS.errno` type and docs updated to match.
+
 ## 2026-10-13
 
 `vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
