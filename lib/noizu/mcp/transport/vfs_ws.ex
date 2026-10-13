@@ -340,21 +340,10 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
 
       # Handshake surface (VFS-FEATURES-DESIGN §5.1): `proto` is this wire's
       # protocol version (2 was the pre-handshake implicit protocol; the field
-      # arrives at 3), `caps` the additive ops the loaded backend implements.
-      # Additive ops gate on caps; proto only moves when an existing op's
-      # result shape changes. Substrate-derived from the backend — no config.
-      defp session_info(server) do
-        caps =
-          case server.__mcp__(:vfs) do
-            [{backend, _opts} | _] ->
-              if Noizu.MCP.Server.VFS.move_capable?(backend), do: ["move"], else: []
-
-            _ ->
-              []
-          end
-
-        %{"proto" => 3, "caps" => caps}
-      end
+      # arrives at 3), `caps` the additive ops. Derived in one place —
+      # Noizu.MCP.Server.VFS.session_info/1 (union across registered
+      # backends) — so the transports cannot drift.
+      defp session_info(server), do: Noizu.MCP.Server.VFS.session_info(server)
 
       # ── server pushes ─────────────────────────────────────────────────────
 

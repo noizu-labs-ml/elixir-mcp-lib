@@ -579,6 +579,57 @@ defmodule Noizu.MCP.Transport.VFSWSTest do
     assert Enum.any?(entries, &(&1["name"] == "renamed.txt"))
   end
 
+  test "vfs_move into its own subtree is refused (fixture guards the corrupting shape)",
+       %{port: port} do
+    client = authed!(port)
+
+    assert {:ok, _, %{"error" => %{"code" => -32048, "data" => %{"errno_atom" => "eio"}}}} =
+             WSClient.request(
+               client,
+               "vfs/move",
+               %{"from" => "/docs", "to" => "/docs/sub2"},
+               1
+             )
+
+    # the tree is untouched: /docs still lists both children
+    assert {:ok, _, %{"result" => %{"entries" => entries}}} =
+             WSClient.request(client, "vfs/list", %{"path" => "/docs"}, 2)
+
+    assert Enum.any?(entries, &(&1["name"] == "a.md"))
+  end
+
+  test "a watcher strictly inside a moved subtree is NOT notified (fan-out is the backend's job)",
+       %{port: port} do
+    # two clients: one watches /docs/a.md precisely, one watches /
+    inside = authed!(port)
+
+    assert {:ok, inside, %{"result" => %{"subscribed" => true}}} =
+             WSClient.request(inside, "vfs/subscribe", %{"paths" => ["/docs/a.md"]}, 1)
+
+    root = authed!(port)
+
+    assert {:ok, root, %{"result" => %{"subscribed" => true}}} =
+             WSClient.request(root, "vfs/subscribe", %{"paths" => ["/"]}, 1)
+
+    assert {:ok, _, %{"result" => %{}}} =
+             WSClient.request(
+               root,
+               "vfs/move",
+               %{"from" => "/docs", "to" => "/docs-moved"},
+               2
+             )
+
+    # the root watcher sees the top-level remove/create pair… (thread the
+    # client: coalesced events ride its queue)
+    assert {:ok, root, %{"op" => "remove", "path" => "/docs"}} = event(root)
+    assert {:ok, _, %{"op" => "create", "path" => "/docs-moved"}} = event(root)
+
+    # …while the strictly-inside watcher hears nothing: the substrate
+    # publishes only the top-level pair (ancestors-of-event delivery), so a
+    # moved parent's descendants must be fan-out by the backend itself.
+    assert {:error, _, :timeout} = event(inside, 300)
+  end
+
   # ── framing / lifecycle ───────────────────────────────────────────────────
 
   test "malformed json draws a parse error without closing the connection", %{port: port} do

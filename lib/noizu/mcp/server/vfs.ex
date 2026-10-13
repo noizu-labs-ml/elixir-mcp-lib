@@ -52,6 +52,33 @@ defmodule Noizu.MCP.Server.VFS do
     %{"vfs" => true, "vfs_write" => write_capable?(backend)}
   end
 
+  @doc """
+  Handshake extras for the VFS transports' `vfs/auth` result:
+  `%{"proto" => 3, "caps" => caps}` (VFS-FEATURES-DESIGN §5.1).
+
+  `caps` is the **union** over every registered backend — the wire advertises
+  that `vfs/move` exists somewhere on this server; a call routed to a backend
+  without `move/3` still answers `-32601` per call. Clients feature-gate on
+  `caps` and treat `-32601` as the per-path authority. Old clients ignore
+  both fields.
+  """
+  # <REMOVED UUID HERE> session_info
+  @spec session_info(module()) :: %{String.t() => term()}
+  def session_info(server) do
+    caps =
+      case server.__mcp__(:vfs) do
+        backends when is_list(backends) ->
+          if Enum.any?(backends, fn {backend, _opts} -> move_capable?(backend) end),
+            do: ["move"],
+            else: []
+
+        _ ->
+          []
+      end
+
+    %{"proto" => 3, "caps" => caps}
+  end
+
   defp implemented(backend) do
     backend.__mcp_vfs__(:implemented)
   rescue

@@ -187,6 +187,13 @@ defmodule Noizu.MCP.VFS.Fixture.Memory do
         from == "/" or to == "/" ->
           {:error, :eacces}
 
+        # `to` inside `from`'s own subtree (rename a dir into itself).
+        # rename(2) answers EINVAL here; :eio stands in because the wire's
+        # errno→code table has no :einval. The naive re-path below would
+        # silently corrupt the tree on this shape (robot review, PR #61).
+        String.starts_with?(to, from <> "/") ->
+          {:error, :eio}
+
         not Map.has_key?(tree, from) ->
           {:error, :enoent}
 

@@ -223,9 +223,14 @@ defmodule Noizu.MCP.Server.Features.VFS do
 
         # The move rides the existing remove/create event pair — no new event
         # shape on the wire, so today's subscribers re-pull both paths without
-        # a resync (VFS-FEATURES-DESIGN §1.2 step 3a). Descendant fan-out for
-        # a moved parent is the backend's job: it can publish further pairs
-        # for its re-pathed subtree.
+        # a resync (VFS-FEATURES-DESIGN §1.2 step 3a). Contract, pinned by the
+        # vfs_ws event-pair tests: the substrate publishes exactly the
+        # top-level pair, delivered to watchers of `from`/`to` and their
+        # ANCESTORS. A watcher registered strictly inside a moved subtree
+        # (/parent/child when /parent moves) is NOT notified here — descendant
+        # fan-out is the backend's job (it can publish further pairs for its
+        # re-pathed subtree; docmost-mcp caps the expansion and clients heal
+        # at the next resync).
         VFSPubSub.publish(backend, :remove, from, gen, ctx)
 
         node = stamp(backend, node)

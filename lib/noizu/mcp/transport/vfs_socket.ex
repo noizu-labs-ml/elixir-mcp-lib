@@ -289,20 +289,9 @@ defmodule Noizu.MCP.Transport.VFSSocket do
 
   # Handshake surface (VFS-FEATURES-DESIGN §5.1), same contract as the WS
   # transport: `proto` is this wire's protocol version, `caps` the additive
-  # ops the loaded backend implements. Substrate-derived from the backend —
-  # no config.
-  defp session_info(server) do
-    caps =
-      case server.__mcp__(:vfs) do
-        [{backend, _opts} | _] ->
-          if Noizu.MCP.Server.VFS.move_capable?(backend), do: ["move"], else: []
-
-        _ ->
-          []
-      end
-
-    %{"proto" => 3, "caps" => caps}
-  end
+  # ops. Derived in one place — Noizu.MCP.Server.VFS.session_info/1 (union
+  # across registered backends) — so the transports cannot drift.
+  defp session_info(server), do: Noizu.MCP.Server.VFS.session_info(server)
 
   # ── ctx ───────────────────────────────────────────────────────────────────
 
