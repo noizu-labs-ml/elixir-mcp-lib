@@ -29,6 +29,16 @@ defmodule McpMount.Mounter do
     instead of letting the rename decay into a duplicated `vfs/create`.
     Pairing is always on. A refused or unsupported move parks the new path
     — it never falls back to create.
+  * **Deletes (opt-in `--deletes`)** — a tracked file removed locally pushes
+    `vfs/remove`; a page dir removed locally pushes its `<dir>/.confirm-delete`
+    marker via `vfs/write` FIRST and only then `vfs/remove` (design §2/D2 —
+    the marker must exist server-side before the remove arrives). Both ride
+    behind the server's advertised `rmdir` cap, a double-confirm tick that
+    defeats editor atomic-save races, and childless-only decomposition
+    (deepest dir first — `rm -r` composes, a dir never bulk-removes with
+    children). A refused delete parks: a re-authored marker or a reconnect
+    re-arms it. Without the flag local `rm`s behave exactly as before
+    (local-only, silent no-op at flush).
   """
 
   use GenServer
@@ -49,7 +59,8 @@ defmodule McpMount.Mounter do
     "vfs/read" => 15_000,
     "vfs/create" => 15_000,
     "vfs/write" => 30_000,
-    "vfs/move" => 15_000
+    "vfs/move" => 15_000,
+    "vfs/remove" => 15_000
   }
 
   @call_timeout 5_000
@@ -69,6 +80,11 @@ defmodule McpMount.Mounter do
   # long enough for an editor atomic-save dance (temp file, remove, rename)
   # to settle, so a phantom rename is detected and aborted at the tick
   @move_confirm_ms 500
+  # delay before the double-confirm tick of an armed delete (design §2/D2,
+  # same class as @move_confirm_ms): a path only delete-pushes if it is STILL
+  # absent at the tick — an editor atomic-save that briefly removes a path
+  # must never turn into a server-side delete
+  @delete_confirm_ms 500
 
   defstruct [
     :conn_mod,
@@ -107,6 +123,18 @@ defmodule McpMount.Mounter do
     # from_rel => %{to: to_rel, hash: content_hash, attempts: n}; a pairing
     # lives from detection until the double-confirm tick resolves it
     move_pairing: %{},
+    # --deletes opt-in (default off): every piece of delete machinery —
+    # marker capture, detection, pushes — is gated on this
+    deletes_enabled: false,
+    # rel => %{kind: :file | :dir, attempts: n}; a deletion detected at a
+    # flush, awaiting its double-confirm tick (design §2/D2)
+    delete_pending: %{},
+    # dir rels whose `<dir>/.confirm-delete` was authored locally (captured
+    # at watcher time): the per-delete authorization for a page-dir remove
+    delete_auths: MapSet.new(),
+    # rels whose delete was refused by the server: parked (no retry-spam),
+    # re-armed by a re-authored marker or by a reconnect
+    parked_deletes: MapSet.new(),
     # bumped on every go_live: {:pull_retry, rel, path, epoch} timers from an
     # older epoch are stale (their path was already re-pulled by that
     # reconnect's resync) and are dropped instead of re-pulled (robot
@@ -158,6 +186,7 @@ defmodule McpMount.Mounter do
       mount: mount,
       mount_raw: mount_raw,
       ro: !!opts[:ro],
+      deletes_enabled: !!opts[:deletes],
       name: opts[:name],
       conn_opts: Keyword.get(opts, :conn_opts, []),
       manifest: Manifest.read(mount),
@@ -238,12 +267,29 @@ defmodule McpMount.Mounter do
   def handle_info({:file_event, _watcher, {path, _events}}, s) do
     rel = relative(s, path)
 
-    if rel != nil and !Manifest.ignored?(rel) and
-         (!control_path?(rel) or control_config_path?(rel)) and s.state == :live do
-      timer = start_debounce(s.timer)
-      {:noreply, %{s | pending: MapSet.put(s.pending, rel), timer: timer}}
-    else
-      {:noreply, s}
+    cond do
+      # .confirm-delete command files (design §2/D2) never queue: they are
+      # the per-delete authorization, not content. Their creation records
+      # the authorization for the containing dir (the file exists at event
+      # time); their removal (the `rm -r` that took the dir) leaves the
+      # authorization intact for the delete push. Queuing them would push
+      # them as pages and pull their echo back as a zombie dir.
+      s.deletes_enabled and rel != nil and delete_marker_path?(rel) ->
+        {:noreply, capture_marker_event(s, rel)}
+
+      # .confirm-delete never queues as content, flag or no flag: it is a
+      # command file (design §2/D2), never a page — pushing it would create
+      # a page server-side and its echo would come back as content
+      rel != nil and delete_marker_path?(rel) ->
+        {:noreply, s}
+
+      rel != nil and !Manifest.ignored?(rel) and
+        (!control_path?(rel) or control_config_path?(rel)) and s.state == :live ->
+        timer = start_debounce(s.timer)
+        {:noreply, %{s | pending: MapSet.put(s.pending, rel), timer: timer}}
+
+      true ->
+        {:noreply, s}
     end
   end
 
@@ -354,6 +400,39 @@ defmodule McpMount.Mounter do
 
   # A confirm tick while not live is a no-op: go_live re-arms live pairings.
   def handle_info({:move_confirm, _from_rel}, s), do: {:noreply, s}
+
+  # Double-confirm tick for an armed delete (design §2/D2, §2.3 atomic-save
+  # row): the path must STILL be absent at the tick — an editor atomic-save
+  # (brief remove + recreate) mimics an rm for one debounce window and is
+  # defeated here; the path re-enters the ordinary write-back. Only a
+  # confirmed delete reaches the wire, gated on the server's advertised
+  # `rmdir` cap (unknown caps park, exactly like the move gate — the daemon
+  # never gambles a destructive op on an unadvertised capability).
+  def handle_info({:delete_confirm, rel}, %__MODULE__{state: :live, conn: conn} = s)
+      when conn != nil do
+    case Map.get(s.delete_pending, rel) do
+      nil ->
+        {:noreply, s}
+
+      entry ->
+        abs = Path.join(s.mount, rel)
+
+        if File.exists?(abs) do
+          Logger.info("mcp-mount[#{s.name}]: delete #{rel} aborted — path is back (atomic save?)")
+
+          s = %{s | delete_pending: Map.delete(s.delete_pending, rel)}
+          {:noreply, %{s | pending: MapSet.put(s.pending, rel), timer: start_debounce(s.timer)}}
+        else
+          case delete_gate(conn) do
+            :supported -> {:noreply, do_delete(s, rel, entry)}
+            {:unsupported, why} -> {:noreply, delete_refused(s, rel, why)}
+          end
+        end
+    end
+  end
+
+  # A delete tick while not live is a no-op: go_live re-arms pending deletes.
+  def handle_info({:delete_confirm, _rel}, s), do: {:noreply, s}
 
   # ── sync ──────────────────────────────────────────────────────────────────
 
@@ -481,9 +560,6 @@ defmodule McpMount.Mounter do
       {watcher, watcher_mon} = if s.ro, do: {nil, nil}, else: watcher_pair(s.mount)
       Logger.info("mcp-mount[#{s.name}]: live (#{map_size(s.manifest)} files, ro=#{s.ro})")
 
-      # write-backs deferred while disconnected flush now, after the resync
-      if MapSet.size(s.pending) > 0, do: Process.send_after(self(), :flush, @debounce_ms)
-
       # moves paired before the drop re-arm their confirm ticks (the previous
       # tick either fired while disconnected — a no-op — or never fired). The
       # attempt budget resets to the formation value (attempts: 1), so the
@@ -496,6 +572,28 @@ defmodule McpMount.Mounter do
           Process.send_after(self(), {:move_confirm, from_rel}, @move_confirm_ms)
           {from_rel, Map.put(pair, :attempts, 1)}
         end)
+
+      # deletes armed before the drop re-arm their confirm ticks the same
+      # way (the previous tick fired while disconnected — a no-op — or never
+      # fired), with the attempt budget reset to the formation value
+      delete_pending =
+        Map.new(s.delete_pending, fn {rel, entry} ->
+          Process.send_after(self(), {:delete_confirm, rel}, @delete_confirm_ms)
+          {rel, Map.put(entry, :attempts, 1)}
+        end)
+
+      # parked deletes re-arm on reconnect (design §2.3): the fresh resync
+      # has settled disk state — a still-absent path re-enters detection
+      # through pending; one push attempt per connection, re-parked on the
+      # same refusal
+      pending =
+        Enum.reduce(MapSet.to_list(s.parked_deletes), s.pending, &MapSet.put(&2, &1))
+
+      # write-backs deferred while disconnected flush now, after the resync —
+      # the parked-delete re-queue above must be counted, or a reconnect that
+      # only carries parked deletes never flushes (the parked rel sits in
+      # pending forever)
+      if MapSet.size(pending) > 0, do: Process.send_after(self(), :flush, @debounce_ms)
 
       # the fresh resync healed the tree: pull backoff counters and any
       # resync nudge that survived into the reconnect are cleared — and the
@@ -510,6 +608,9 @@ defmodule McpMount.Mounter do
           watcher_mon: watcher_mon,
           pull_attempts: %{},
           move_pairing: move_pairing,
+          delete_pending: delete_pending,
+          parked_deletes: MapSet.new(),
+          pending: pending,
           resync_nudge: false,
           pull_epoch: s.pull_epoch + 1
       }
@@ -526,6 +627,11 @@ defmodule McpMount.Mounter do
     rel = String.trim_leading(path, "/")
 
     cond do
+      # .confirm-delete command-file events never pull: a pull would
+      # materialize the marker (and mkdir its deleted dir back) as content
+      delete_marker_path?(rel) ->
+        s
+
       Manifest.ignored?(rel) ->
         s
 
@@ -549,7 +655,9 @@ defmodule McpMount.Mounter do
   defp apply_event(%{op: "remove", path: path}, s) do
     rel = String.trim_leading(path, "/")
 
-    if !Manifest.ignored?(rel) do
+    if delete_marker_path?(rel) or Manifest.ignored?(rel) do
+      s
+    else
       # a server-side remove must not silently destroy unpushed local work:
       # if the local file's content differs from the manifest hash (an edit
       # that never reached the server), a `.conflict-<ts>` copy is saved
@@ -558,8 +666,6 @@ defmodule McpMount.Mounter do
 
       remove_local(s, rel)
       save_manifest(s, Map.delete(s.manifest, rel))
-    else
-      s
     end
   end
 
@@ -776,6 +882,284 @@ defmodule McpMount.Mounter do
     end
   end
 
+  # ── deletes (VFS-FEATURES-DESIGN §2 + D2, opt-in --deletes) ───────────────
+
+  # Record (or re-arm) a `<dir>/.confirm-delete` authorization. A creation
+  # while the dir's delete is parked lifts the park and re-queues the dir —
+  # re-authoring the marker is the design's retry gesture (§2.3: "creating
+  # the marker and re-flushing retries").
+  defp capture_marker_event(s, rel) do
+    dir = Path.dirname(rel)
+    abs = Path.join(s.mount, rel)
+
+    if File.regular?(abs) do
+      Logger.info("mcp-mount[#{s.name}]: delete authorized for #{dir} (.confirm-delete)")
+
+      s = %{s | delete_auths: MapSet.put(s.delete_auths, dir)}
+
+      if MapSet.member?(s.parked_deletes, dir) do
+        Logger.info("mcp-mount[#{s.name}]: marker re-authored for #{dir}; delete re-armed")
+
+        %{
+          s
+          | parked_deletes: MapSet.delete(s.parked_deletes, dir),
+            pending: MapSet.put(s.pending, dir),
+            timer: start_debounce(s.timer)
+        }
+      else
+        s
+      end
+    else
+      s
+    end
+  end
+
+  # Detection pass over the flush's missing-path partition. A queued path
+  # that no longer exists on disk is a locally performed deletion:
+  #   * a tracked file (manifest entry) → a file delete;
+  #   * a directory carrying a .confirm-delete authorization → a page-dir
+  #     delete (marker → remove). Anything else — untracked paths, marker
+  #     paths themselves, control paths — stays a no-op, as do all paths
+  #     when the --deletes flag is off.
+  defp detect_delete(s, rel) do
+    cond do
+      !s.deletes_enabled ->
+        {s, false}
+
+      delete_marker_path?(rel) ->
+        {s, false}
+
+      control_path?(rel) ->
+        {s, false}
+
+      s.manifest[rel] != nil ->
+        if root_level_child?(rel),
+          do:
+            Logger.warning(
+              "mcp-mount[#{s.name}]: DELETING #{rel} — a child of a root-level directory " <>
+                "(soft delete; recoverable from the trash)"
+            )
+
+        arm_delete(s, rel, :file)
+
+      MapSet.member?(s.delete_auths, rel) and dir_deletable?(s, rel) ->
+        arm_delete(s, rel, :dir)
+
+      true ->
+        {s, false}
+    end
+  end
+
+  # Spaces are never deletable via the mount (design §2.2 item 3): only a
+  # nested path (depth >= 2) may arm as a dir delete.
+  defp dir_deletable?(s, rel) do
+    if String.contains?(rel, "/") do
+      true
+    else
+      Logger.warning(
+        "mcp-mount[#{s.name}]: refusing delete of #{rel} — spaces are never deleted via the mount"
+      )
+
+      false
+    end
+  end
+
+  defp root_level_child?(rel) do
+    case String.split(rel, "/", trim: true) do
+      [_space, _file] -> true
+      _ -> false
+    end
+  end
+
+  # A detection leaves pending (the flush drops non-retried rels) and arms
+  # the double-confirm tick. A rel parked by an earlier refusal re-arms on a
+  # fresh rm gesture — the park stops timer churn, not user intent.
+  defp arm_delete(s, rel, kind) do
+    Logger.info("mcp-mount[#{s.name}]: delete #{rel} (#{kind}) — confirming before push")
+    Process.send_after(self(), {:delete_confirm, rel}, @delete_confirm_ms)
+
+    s = %{
+      s
+      | delete_pending: Map.put(s.delete_pending, rel, %{kind: kind, attempts: 1}),
+        parked_deletes: MapSet.delete(s.parked_deletes, rel)
+    }
+
+    {s, false}
+  end
+
+  # The wire push. For a dir the marker protocol is binding (D2): the
+  # .confirm-delete command file must exist server-side BEFORE the remove
+  # arrives, so the marker write is pushed first and awaited. The marker
+  # content format is ours (design §2 leaves it open): the target path plus
+  # an ISO timestamp. A dir with manifest descendants never pushes — the
+  # children must land on the server first (childless-only, design §2.2).
+  defp do_delete(s, rel, %{kind: :dir} = entry) do
+    if manifest_descendants?(s, rel) or delete_children_pending?(s, rel) do
+      delete_wait_children(s, rel, entry)
+    else
+      marker_path = "/" <> rel <> "/.confirm-delete"
+
+      case call(s.conn, "vfs/write", %{"path" => marker_path, "data" => marker_content(rel)}) do
+        {:ok, _} ->
+          finish_delete(s, rel, call(s.conn, "vfs/remove", %{"path" => "/" <> rel}))
+
+        {:error, reason} ->
+          Logger.warning(
+            "mcp-mount[#{s.name}]: marker write for #{rel} failed (#{inspect(reason)})"
+          )
+
+          retry_or_give_up_delete(s, rel, entry, reason)
+      end
+    end
+  end
+
+  defp do_delete(s, rel, %{kind: :file}) do
+    finish_delete(s, rel, call(s.conn, "vfs/remove", %{"path" => "/" <> rel}))
+  end
+
+  defp marker_content(rel) do
+    Jason.encode!(%{
+      "confirm_delete" => "/" <> rel,
+      "ts" => DateTime.utc_now() |> DateTime.to_iso8601()
+    })
+  end
+
+  # vfs/remove result mapping (design §2.2 item 4, §2.3): :eperm = marker
+  # missing/stale server-side (a rename invalidates it), :eacces = a gate is
+  # off server-side, :enotempty = the server still sees children. All three
+  # PARK (no retry-spam; a re-authored marker or a reconnect re-arms).
+  # :enoent is success — already gone (mirrors req.ex's 404→:ok).
+  # method_not_found/:enosys are explicit refusals and park. Anything else
+  # retries on the flush cadence and parks after the attempt cap.
+  defp finish_delete(s, rel, {:ok, _}), do: delete_done(s, rel)
+  defp finish_delete(s, rel, {:error, %{errno: :enoent}}), do: delete_done(s, rel)
+
+  defp finish_delete(s, rel, {:error, %{errno: :eperm}}),
+    do:
+      delete_refused(
+        s,
+        rel,
+        "no/stale .confirm-delete on server (a rename invalidates it — re-author the marker)"
+      )
+
+  defp finish_delete(s, rel, {:error, %{errno: :eacces}}),
+    do:
+      delete_refused(s, rel, "deletes disabled server-side (writes gate / DOCMOST_MCP_VFS_RMDIR)")
+
+  defp finish_delete(s, rel, {:error, %{errno: :enotempty}}),
+    do: delete_refused(s, rel, "server still sees children under #{rel}")
+
+  defp finish_delete(s, rel, {:error, %{code: -32601}}),
+    do: delete_refused(s, rel, "server answered method_not_found")
+
+  defp finish_delete(s, rel, {:error, %{errno: :enosys}}),
+    do: delete_refused(s, rel, "server backend lacks page-dir remove")
+
+  defp finish_delete(s, rel, {:error, reason}) do
+    retry_or_give_up_delete(s, rel, Map.fetch!(s.delete_pending, rel), reason)
+  end
+
+  # Bottom-up interlock: children are still on the server (their manifest
+  # entries survive until their own remove-pushes ack) — wait for them at
+  # the flush cadence instead of ever bulk-removing a non-childless dir.
+  defp delete_wait_children(s, rel, entry) do
+    n = entry.attempts + 1
+
+    if n > @max_push_attempts do
+      delete_refused(s, rel, "children never cleared server-side after #{n} ticks")
+    else
+      Logger.info("mcp-mount[#{s.name}]: delete #{rel} waits for its children to land first")
+      Process.send_after(self(), {:delete_confirm, rel}, s.flush_retry_ms)
+      %{s | delete_pending: Map.put(s.delete_pending, rel, %{entry | attempts: n})}
+    end
+  end
+
+  # A successful (or already-gone) delete: consume the delete state, drop
+  # the local marker copy if one survived (the `rm -r` flow usually already
+  # removed it), and drop the manifest entry — the server event that follows
+  # is then a harmless no-op.
+  defp delete_done(s, rel) do
+    Logger.info("mcp-mount[#{s.name}]: deleted #{rel} on server")
+    File.rm(Path.join([s.mount, rel, ".confirm-delete"]))
+
+    s = %{
+      s
+      | delete_pending: Map.delete(s.delete_pending, rel),
+        delete_auths: MapSet.delete(s.delete_auths, rel),
+        parked_deletes: MapSet.delete(s.parked_deletes, rel),
+        push_attempts: Map.delete(s.push_attempts, rel)
+    }
+
+    if s.manifest[rel], do: save_manifest(s, Map.delete(s.manifest, rel)), else: s
+  end
+
+  defp delete_refused(s, rel, why) do
+    Logger.warning(
+      "mcp-mount[#{s.name}]: delete of #{rel} refused (#{why}); parking — " <>
+        "re-author <dir>/.confirm-delete or reconnect to re-arm"
+    )
+
+    %{
+      s
+      | delete_pending: Map.delete(s.delete_pending, rel),
+        parked_deletes: MapSet.put(s.parked_deletes, rel)
+    }
+  end
+
+  # Transport failure (or an unclassified error) on the remove/marker call:
+  # retry on the flush cadence, park after @max_push_attempts like any push.
+  defp retry_or_give_up_delete(s, rel, entry, reason) do
+    Logger.warning("mcp-mount[#{s.name}]: delete of #{rel} failed (#{inspect(reason)})")
+
+    n = entry.attempts + 1
+
+    if n > @max_push_attempts do
+      delete_refused(s, rel, "failed #{n}x (#{inspect(reason)})")
+    else
+      Process.send_after(self(), {:delete_confirm, rel}, s.flush_retry_ms)
+      %{s | delete_pending: Map.put(s.delete_pending, rel, %{entry | attempts: n})}
+    end
+  end
+
+  defp manifest_descendants?(s, dir_rel) do
+    prefix = dir_rel <> "/"
+    Enum.any?(s.manifest, fn {p, _entry} -> String.starts_with?(p, prefix) end)
+  end
+
+  # Dirs are not manifest rows, so manifest_descendants?/2 only sees files.
+  # A descendant page-dir still pending its own delete must gate the parent
+  # too — the server would refuse the parent with :enotempty anyway
+  # (childless-only), but the client decomposes bottom-up itself instead of
+  # leaning on the refusal.
+  defp delete_children_pending?(s, dir_rel) do
+    prefix = dir_rel <> "/"
+    Enum.any?(s.delete_pending, fn {p, _entry} -> String.starts_with?(p, prefix) end)
+  end
+
+  defp delete_marker_path?(rel), do: Path.basename(rel) == ".confirm-delete"
+
+  # Ask the conn whether the server advertises `rmdir`. Unknown caps (an
+  # older server without the proto/caps handshake) are treated as
+  # unsupported — a destructive op is never gambled on an unadvertised
+  # capability. The function_exported? probe keeps custom Conn
+  # implementations that predate caps/1 degrading to "unsupported" instead
+  # of crashing (same shape as the move gate).
+  defp delete_gate(conn) do
+    mod = impl(conn)
+
+    if function_exported?(mod, :caps, 1) do
+      case mod.caps(conn) do
+        caps when is_list(caps) ->
+          if "rmdir" in caps, do: :supported, else: {:unsupported, "no rmdir cap advertised"}
+
+        _ ->
+          {:unsupported, "server caps unknown"}
+      end
+    else
+      {:unsupported, "conn cannot report caps"}
+    end
+  end
+
   # Event-driven pull of one path (server truth), with bounded backoff.
   # Pulls are never parked — they are the system's healing direction. A pull
   # that exhausts its backoff schedule is dropped, the per-path counter
@@ -894,6 +1278,13 @@ defmodule McpMount.Mounter do
       control_path?(rel) and !control_config_path?(rel) ->
         {s, false}
 
+      # .confirm-delete command files are never content (design §2/D2:
+      # "never synced as a page") — never pushed, flag on or off, no matter
+      # how the rel reached the queue. The only wire writer of a marker is
+      # do_delete's marker-then-remove sequence.
+      delete_marker_path?(rel) ->
+        {s, false}
+
       s.ro ->
         Logger.warning("mcp-mount[#{s.name}]: ro mount, refusing write-back for #{rel}")
         {s, false}
@@ -905,7 +1296,9 @@ defmodule McpMount.Mounter do
           parked?(s, rel, abs) -> {s, false}
           File.dir?(abs) -> {s, false}
           File.regular?(abs) -> capped_push(s, rel, abs)
-          true -> {s, false}
+          # missing-path partition: queued but gone from disk. Without
+          # --deletes this stays today's silent no-op (byte for byte).
+          true -> detect_delete(s, rel)
         end
     end
   end
