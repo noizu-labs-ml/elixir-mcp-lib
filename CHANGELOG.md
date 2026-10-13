@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 2026-10-13
 
 `vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
-the docmost-mcp backend callback lands separately).
+the docmost-mcp backend callback lands separately) — #61. → stage (#65) → main (#66)
 
 - **`vfs/move {from, to}` on both VFS transports** (WS + unix socket) and
   the MCP-native feature surface: validates both paths, gates on write caps
@@ -34,7 +34,7 @@ the docmost-mcp backend callback lands separately).
   rename(2)-EINVAL analogue, robot review #61).
 
 mcp-mount move pairing, per VFS-FEATURES-DESIGN §1 + D1 (client half;
-consumes the server's `vfs/move` + proto/caps handshake from above).
+consumes the server's `vfs/move` + proto/caps handshake from above) — #64. → stage (#65) → main (#66)
 
 - **Editor renames promote to ONE `vfs/move`.** A tracked file vanishing
   from disk while an untracked file with identical content appears is
