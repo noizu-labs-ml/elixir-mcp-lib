@@ -37,10 +37,10 @@ defmodule Noizu.MCP.VFS do
   ## Errors
 
   Callbacks return `{:error, errno}` with standard errno atoms: `:enoent`,
-  `:eacces`, `:eexist`, `:erofs`, `:eisdir`, `:enotdir`, `:enosys`, and
-  `:enotempty`. The M2 transport maps these to JSON-RPC codes. Pagination and
-  cursor plumbing may surface `Noizu.MCP.Error.t()` structs instead — both are
-  accepted everywhere.
+  `:eacces`, `:eexist`, `:erofs`, `:eisdir`, `:enotdir`, `:enosys`,
+  `:enotempty`, and `:eperm`. The M2 transport maps these to JSON-RPC codes.
+  Pagination and cursor plumbing may surface `Noizu.MCP.Error.t()` structs
+  instead — both are accepted everywhere.
 
   ## Defaults
 
@@ -79,7 +79,15 @@ defmodule Noizu.MCP.VFS do
 
   @type type :: :dir | :file | :control
   @type errno ::
-          :enoent | :eacces | :eexist | :erofs | :eisdir | :enotdir | :enosys | :enotempty
+          :enoent
+          | :eacces
+          | :eexist
+          | :erofs
+          | :eisdir
+          | :enotdir
+          | :enosys
+          | :enotempty
+          | :eperm
   @type t :: %__MODULE__{
           type: type(),
           size: non_neg_integer(),
