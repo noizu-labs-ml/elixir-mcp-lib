@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-10-14
+
+- Security dependency bumps (hex audit flagged advisories against the
+  develop pins): bandit 1.12.0 → 1.12.5 (3 advisories), mint 1.9.0 →
+  1.11.0 (8), plug 1.19.2 → 1.20.3 (3), hpax 1.0.3 → 1.1.0, decimal
+  3.1.1 → 3.2.0, postgrex 0.22.3 → 0.22.4 (1 each); plug_crypto
+  2.1.1 → 2.2.0 rides along. No mix.exs constraint changes needed —
+  every fixed release satisfies the existing requirements; the
+  mcp_mount daemon's lock was already at fixed releases and is
+  unchanged.
+
 - mcp-mount token no longer rides in argv (F20): every `ps` printed the
   mount token when launched with the documented recipe. New `--token-file
   PATH` flag (trimmed on read; missing/empty ⇒ exit 78 with a plain error)
@@ -44,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lost to a transport timeout but which landed server-side is adopted as a
   confirmed sync on retry (hash-compare read-back) instead of saving a
   spurious `.conflict-<ts>` copy.
+
+- docs: `docs/VFS-MOUNT-GUIDE.md` §7 — local stack restart recipe (server
+  env trio + stdin-feeder + client verify).
+
+- docs: `docs/VFS-MOUNT-GUIDE.md` — new zero-to-mounted guide (prerequisite
+  downloads → build → mount → verify), linked from the README and
+  `docs/MCP-VFS-MOUNTING.md`.
 
 ## [0.6.0] — 2026-10-13
 
