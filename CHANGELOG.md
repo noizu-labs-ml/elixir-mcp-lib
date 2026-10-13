@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 2026-10-13
+
+Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
+(client-only; no server changes) — #57.
+
+- **Timeouts are values, not crashes.** `WSConn.call/4` rescues GenServer
+  exits: a deadline surfaces as `{:error, :timeout}`, a dead conn as
+  `{:error, :closed}` — previously a single slow server response (>6s)
+  raised out of the flush loop and killed the unsupervised escript.
+- **Per-op budgets:** ping/stat 5s, list 10s, read/create 15s, write 30s
+  (WSConn keeps a +1s GenServer margin); sync's task timeout scales to the
+  largest budget.
+- **Push timeouts defer and count.** Transport timeouts retry on the flush
+  cadence, count toward the existing 4-attempt cap, and park with the
+  content preserved in a `.conflict-<ts>` copy; a confirmed push clears the
+  path's attempt counter. Debounce and park machinery otherwise unchanged.
+- **Pulls back off, then heal by resync.** Failed pulls retry on a
+  1s/4s/16s backoff (3 attempts); after that the event is dropped and a
+  resync nudge runs the existing diff sync in place when the mount is live
+  and quiescent — the watcher and manifest survive; a full reconnect is
+  only the escalation path when the in-place resync fails.
+
+Control-write whitelist for the mcp-mount daemon, per VFS-FEATURES-DESIGN
+§3/D3 (client half; no server or auth changes) — #58.
+
+- **`etc/dev/config/**` is writable from a mount edit.** The watcher queues
+  config paths and write-back pushes them through the ordinary `vfs/write`
+  (e.g. flip the runtime writes toggle by writing `true`/`false` to
+  `/etc/dev/config/writes`); the server validates the data, so a malformed
+  edit fails like any write error (retries, then park; the gate untouched).
+  Every other `/etc/**` path stays a documented no-op: never queued, never
+  pushed, never conflict-saved.
+- **Pull retry cap follows the backoff list.** The cap derives from
+  `length(pull_backoff_ms)` instead of a hardcoded constant (#57 robot-review
+  follow-up), so a short test-seam list can no longer hand a nil delay to
+  `Process.send_after/3` and crash the daemon.
+- **Stall-test stabilization.** The #57 integration stall test's trivially
+  true survival check disabled the test helper's fsevents re-touch recovery;
+  one swallowed watcher event failed the test (~50% under load, proven on
+  unmodified develop). The check is now progress-based.
+
 ## [0.5.3] — 2026-10-08
 
 Patch release: `Client.close/1` process-leak fix.
