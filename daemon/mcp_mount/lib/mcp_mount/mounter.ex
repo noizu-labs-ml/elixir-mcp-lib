@@ -486,9 +486,11 @@ defmodule McpMount.Mounter do
 
       # moves paired before the drop re-arm their confirm ticks (the previous
       # tick either fired while disconnected — a no-op — or never fired). The
-      # attempt budget resets with the connection: retries burned against the
-      # dead transport do not shorten the fresh one's cadence, matching the
-      # write path's per-connection counting (robot review, head d7dea15).
+      # attempt budget resets to the formation value (attempts: 1), so the
+      # fresh connection gets the full 4-call cadence again — same precedent
+      # as pull_attempts above: the resync healed the tree, so budget burned
+      # against the dead transport does not carry into it (robot review,
+      # head d7dea15).
       move_pairing =
         Map.new(s.move_pairing, fn {from_rel, pair} ->
           Process.send_after(self(), {:move_confirm, from_rel}, @move_confirm_ms)
