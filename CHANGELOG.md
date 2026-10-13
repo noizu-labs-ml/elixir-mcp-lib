@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 mcp-mount delete push (`--deletes`), per VFS-FEATURES-DESIGN §2 + D2 (client
 half; the server's `vfs/remove`/`DOCMOST_MCP_VFS_RMDIR`/marker intake lands
-separately).
+separately) — #67. → stage (#68) → main (#69)
 
 - **`--deletes` opt-in flag** (default off: a local `rm` stays a silent
   local-only no-op, byte-for-byte the pre-deletes behavior). With the flag
