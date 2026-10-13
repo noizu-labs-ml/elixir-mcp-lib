@@ -30,12 +30,18 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
         `-32600`.
       * **Requests** — `{"v": 2, "id": ..., "method": "vfs/stat", "params": {...}}`
         over the same op set as the socket transport (`vfs/stat|list|read|
-        write|create|remove|search|xattr`), dispatched through
+        write|create|remove|move|search|xattr`), dispatched through
         `Noizu.MCP.Server.Features.VFS` so caching, pagination, and
-        authorization match. Responses are `{"v": 2, "id": ..., "result"|"error"}`;
+        authorization match. `vfs/move` takes `{"from": ..., "to": ...}` and
+        answers `-32601` when the loaded backend does not implement `move/3`. Responses are `{"v": 2, "id": ..., "result"|"error"}`;
         all wire maps are string-keyed and errors carry the errno→code map
         (`-32040..-32046`, `:eio` → `-32048`) with `error.data.errno_atom`, as on
         the socket.
+      * **Handshake extras** — the `vfs/auth` result also carries `"proto"`
+        (this wire's protocol version; `2` was the pre-handshake implicit
+        protocol, this transport reports `3`) and `"caps"` (additive ops the
+        loaded backend implements, e.g. `["move"]`). Clients feature-gate on
+        `caps`, never on `proto`; old clients ignore both fields.
       * **Events** — `vfs/subscribe {"paths": ["/docs"], "depth": n|"infinity"}`
         registers a subtree watch (`Noizu.MCP.Server.VFSPubSub`); mutating
         writes anywhere under a watched path push
@@ -226,10 +232,14 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
           {:ok, claims} ->
             ctx = build_ctx(state.opts[:server], claims, state.opts)
 
-            push_result(id, %{"authenticated" => true, "session_id" => ctx.session_id}, %{
-              state
-              | ctx: ctx
-            })
+            push_result(
+              id,
+              Map.merge(session_info(state.opts[:server]), %{
+                "authenticated" => true,
+                "session_id" => ctx.session_id
+              }),
+              %{state | ctx: ctx}
+            )
 
           {:error, reason} ->
             Logger.warning("MCP VFS websocket auth rejected: #{inspect(reason)}")
@@ -277,6 +287,7 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
       defp op_for("vfs/write", _), do: &VFS.vfs_write/3
       defp op_for("vfs/create", _), do: &VFS.vfs_create/3
       defp op_for("vfs/remove", _), do: &VFS.vfs_remove/3
+      defp op_for("vfs/move", _), do: &VFS.vfs_move/3
       defp op_for("vfs/search", _), do: &VFS.vfs_search/3
       defp op_for("vfs/xattr", _), do: &VFS.vfs_xattr/3
       defp op_for(_, _), do: nil
@@ -325,6 +336,24 @@ if Code.ensure_loaded?(Plug.Conn) and Code.ensure_loaded?(Bandit) and Code.ensur
           [{backend, _opts} | _] -> {:ok, backend}
           _ -> {:error, Error.capability_not_supported("vfs")}
         end
+      end
+
+      # Handshake surface (VFS-FEATURES-DESIGN §5.1): `proto` is this wire's
+      # protocol version (2 was the pre-handshake implicit protocol; the field
+      # arrives at 3), `caps` the additive ops the loaded backend implements.
+      # Additive ops gate on caps; proto only moves when an existing op's
+      # result shape changes. Substrate-derived from the backend — no config.
+      defp session_info(server) do
+        caps =
+          case server.__mcp__(:vfs) do
+            [{backend, _opts} | _] ->
+              if Noizu.MCP.Server.VFS.move_capable?(backend), do: ["move"], else: []
+
+            _ ->
+              []
+          end
+
+        %{"proto" => 3, "caps" => caps}
       end
 
       # ── server pushes ─────────────────────────────────────────────────────

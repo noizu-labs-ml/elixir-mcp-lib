@@ -20,7 +20,8 @@ defmodule Noizu.MCP.Transport.VFSClient do
     or an error (code `-32001`) followed by connection close. Any other first
     method is also refused with `-32001` and close.
   * **Operations** — requests `vfs/stat`, `vfs/list`, `vfs/read`,
-    `vfs/write`, `vfs/create`, `vfs/remove`, `vfs/search`, `vfs/xattr` with
+    `vfs/write`, `vfs/create`, `vfs/remove`, `vfs/move`, `vfs/search`,
+    `vfs/xattr` with
     string-keyed params (`path`, `cursor`, `query`, `root`, `data`,
     `version`). All results are string-keyed maps; `type` values are strings
     (`"file"`, `"dir"`). `vfs/list` and `vfs/search` return a `nextCursor`
@@ -129,6 +130,15 @@ defmodule Noizu.MCP.Transport.VFSClient do
   @spec remove(t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
   # <REMOVED UUID HERE> remove :: vfs/remove: delete `path`.
   def remove(client, path, _opts \\ []), do: request(client, "vfs/remove", %{"path" => path})
+
+  @doc """
+  vfs/move: rename/move `from` to `to`. `-32601` when the server's backend
+  does not implement `move/3`.
+  """
+  @spec move(t(), String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, map() | term()}
+  # <REMOVED UUID HERE> move :: vfs/move: rename/move `from` to `to`.
+  def move(client, from, to, _opts \\ []),
+    do: request(client, "vfs/move", %{"from" => from, "to" => to})
 
   @doc """
   vfs/search: line matches for `query` under `root` (default `"/"`). Option:

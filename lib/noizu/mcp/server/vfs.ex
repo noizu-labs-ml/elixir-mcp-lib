@@ -28,6 +28,23 @@ defmodule Noizu.MCP.Server.VFS do
     end
   end
 
+  @doc """
+  True when the backend itself implements `move/3` — the `vfs/move` op and
+  the `move` cap in the `vfs/auth` handshake are derived from this. The
+  implemented-list check (not `function_exported?/3`) is what distinguishes
+  a real implementation: `Noizu.MCP.VFS`'s `__before_compile__` fills
+  `{:error, :enosys}` defaults for every optional callback a backend omits,
+  so `move/3` is *always* exported on a `use Noizu.MCP.VFS` backend.
+  """
+  # <REMOVED UUID HERE> move_capable?
+  @spec move_capable?(module()) :: boolean()
+  def move_capable?(backend) do
+    case implemented(backend) do
+      implemented when is_list(implemented) -> :move in implemented
+      nil -> function_exported?(backend, :move, 3)
+    end
+  end
+
   @doc "Capability map contributed by a registered backend: `%{\"vfs\" => bool, \"vfs_write\" => bool}`."
   # <REMOVED UUID HERE> capabilities
   @spec capabilities(module()) :: %{String.t() => boolean()}
