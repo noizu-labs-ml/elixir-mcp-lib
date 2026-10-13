@@ -42,6 +42,14 @@ separately).
   post-resync flush AFTER re-queuing parked deletes — previously a
   reconnect that carried only parked deletes (empty pending) never
   flushed, stranding the parked delete until the next local edit.
+- **Robot review (head 80b7506):** delete authorization is now
+  single-gesture — a server (re)materialization at/under an authorized
+  dir (event pull, resync materialize, conflict rewrite) drops the stale
+  grant, so a later plain `rm -r` cannot spend an authorization whose
+  tree came back from the server; `--deletes` + `--ro` logs a startup
+  warning (and the README says so); a stale/duplicate confirm tick parks
+  defensively instead of `Map.fetch!`-crashing the mounter; a parent dir
+  giving up on children names its parked child deletes in the park log.
 
 ## 2026-10-13
 

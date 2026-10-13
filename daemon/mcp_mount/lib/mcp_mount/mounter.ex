@@ -456,16 +456,23 @@ defmodule McpMount.Mounter do
         max_concurrency: 8,
         timeout: sync_task_timeout()
       )
-      |> Enum.reduce_while({:ok, s.manifest}, fn
-        {:ok, {:ok, rel, entry}}, {:ok, manifest} -> {:cont, {:ok, Map.put(manifest, rel, entry)}}
-        {:ok, {:skip, _rel}}, acc -> {:cont, acc}
-        {:ok, {:error, reason}}, _ -> {:halt, {:error, reason}}
-        {:exit, reason}, _ -> {:halt, {:error, {:sync_exit, reason}}}
+      |> Enum.reduce_while({:ok, s.manifest, []}, fn
+        {:ok, {:ok, rel, entry}}, {:ok, manifest, touched} ->
+          {:cont, {:ok, Map.put(manifest, rel, entry), [rel | touched]}}
+
+        {:ok, {:skip, _rel}}, acc ->
+          {:cont, acc}
+
+        {:ok, {:error, reason}}, _ ->
+          {:halt, {:error, reason}}
+
+        {:exit, reason}, _ ->
+          {:halt, {:error, {:sync_exit, reason}}}
       end)
       |> case do
-        {:ok, manifest} ->
+        {:ok, manifest, touched} ->
           Manifest.write(s.mount, manifest)
-          {:ok, %{s | manifest: manifest}}
+          {:ok, drop_delete_auth_coverings(%{s | manifest: manifest}, touched)}
 
         error ->
           error
@@ -1056,7 +1063,16 @@ defmodule McpMount.Mounter do
     do: delete_refused(s, rel, "server backend lacks page-dir remove")
 
   defp finish_delete(s, rel, {:error, reason}) do
-    retry_or_give_up_delete(s, rel, Map.fetch!(s.delete_pending, rel), reason)
+    case Map.fetch(s.delete_pending, rel) do
+      {:ok, entry} ->
+        retry_or_give_up_delete(s, rel, entry, reason)
+
+      :error ->
+        # stale/duplicate confirm tick (the entry was already consumed):
+        # never crash the GenServer on a destructive-op path — park
+        # defensively instead (robot review, head 80b7506)
+        delete_refused(s, rel, "stale confirm tick (entry already consumed)")
+    end
   end
 
   # Bottom-up interlock: children are still on the server (their manifest
@@ -1066,11 +1082,28 @@ defmodule McpMount.Mounter do
     n = entry.attempts + 1
 
     if n > @max_push_attempts do
-      delete_refused(s, rel, "children never cleared server-side after #{n} ticks")
+      delete_refused(s, rel, children_park_reason(s, rel, n))
     else
       Logger.info("mcp-mount[#{s.name}]: delete #{rel} waits for its children to land first")
       Process.send_after(self(), {:delete_confirm, rel}, s.flush_retry_ms)
       %{s | delete_pending: Map.put(s.delete_pending, rel, %{entry | attempts: n})}
+    end
+  end
+
+  # When the parent gives up, name the descendants that are themselves
+  # parked — their own refusal logs carry the why, and a stuck `rm -r`
+  # should be diagnosable from the parent's single park line (robot review,
+  # head 80b7506).
+  defp children_park_reason(s, rel, n) do
+    prefix = rel <> "/"
+
+    case Enum.filter(s.parked_deletes, &String.starts_with?(&1, prefix)) do
+      [] ->
+        "children never cleared server-side after #{n} ticks"
+
+      parked_kids ->
+        "children never cleared server-side after #{n} ticks — parked child deletes: " <>
+          Enum.join(parked_kids, ", ")
     end
   end
 
@@ -1169,7 +1202,9 @@ defmodule McpMount.Mounter do
     case call(s.conn, "vfs/read", %{"path" => path}) do
       {:ok, %{"content" => content, "version" => v}} ->
         mode = event_mode(s.conn, path, s.manifest[rel])
-        write_local(s, rel, content, mode)
+
+        # bind: a server (re)materialization may drop stale delete auths
+        s = write_local(s, rel, content, mode)
 
         # a successful read-back confirms any earlier unconfirmed push
         s = %{s | pushed_ack: MapSet.delete(s.pushed_ack, rel)}
@@ -1481,7 +1516,9 @@ defmodule McpMount.Mounter do
       )
 
       mode = if(s.manifest[rel], do: s.manifest[rel].mode, else: 0o644)
-      write_local(s, rel, content, mode)
+
+      # bind: a server-truth rewrite may drop stale delete auths
+      s = write_local(s, rel, content, mode)
 
       save_manifest(
         s,
@@ -1598,7 +1635,28 @@ defmodule McpMount.Mounter do
     File.mkdir_p!(Path.dirname(abs))
     File.write!(abs, content)
     File.chmod!(abs, mode)
-    s
+    drop_delete_auth_covering(s, rel)
+  end
+
+  # A server (re)materialization under a delete-authorized dir negates the
+  # grant: the local rm gesture is dead once the tree comes back from the
+  # server, so a later plain `rm -r` must not spend the stale authorization
+  # (robot review, head 80b7506). Grants are keyed by dir rel; any write at
+  # or under the key drops it. Success already consumes the grant
+  # (delete_done); this closes the park/refuse-then-resurrect hole.
+  defp drop_delete_auth_covering(s, rel) do
+    still_valid =
+      MapSet.filter(s.delete_auths, fn dir ->
+        dir != rel and not String.starts_with?(rel, dir <> "/")
+      end)
+
+    if MapSet.size(still_valid) == MapSet.size(s.delete_auths),
+      do: s,
+      else: %{s | delete_auths: still_valid}
+  end
+
+  defp drop_delete_auth_coverings(s, rels) do
+    Enum.reduce(rels, s, fn rel, acc -> drop_delete_auth_covering(acc, rel) end)
   end
 
   defp save_manifest(s, manifest) do

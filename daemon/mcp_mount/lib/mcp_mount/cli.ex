@@ -1,4 +1,6 @@
 defmodule McpMount.CLI do
+  require Logger
+
   @moduledoc """
   `mcp-mount` escript entry point.
 
@@ -32,6 +34,14 @@ defmodule McpMount.CLI do
 
   defp run(url, mount, token, ro, deletes) do
     Logger.configure(level: :info)
+
+    # a read-only mount never pushes anything, deletes included — don't let
+    # the flag look broken silently (robot review, head 80b7506)
+    if ro and deletes do
+      Logger.warning(
+        "mcp-mount: --deletes has no effect on a --ro mount (read-only never pushes)"
+      )
+    end
 
     {:ok, _mounter} =
       McpMount.Mounter.start_link(

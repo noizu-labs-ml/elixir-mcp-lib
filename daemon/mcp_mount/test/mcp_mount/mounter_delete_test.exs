@@ -143,8 +143,8 @@ defmodule McpMount.MounterDeleteTest do
   # ── flag gate ─────────────────────────────────────────────────────────────
 
   test "flag off: a local rm is a silent no-op, byte for byte today", %{
-    dir: dir,
-    mounter: mounter
+    dir: _dir,
+    mounter: _mounter
   } do
     dir2 = Path.join(System.tmp_dir!(), "mcp-mount-del-#{System.unique_integer()}")
     name = String.to_atom("mounter_del_#{System.unique_integer()}")
@@ -639,5 +639,75 @@ defmodule McpMount.MounterDeleteTest do
 
     assert FakeVfs.calls("vfs/remove") == []
     assert FakeVfs.calls("vfs/write") == []
+  end
+
+  # ── robot review, head 80b7506 ────────────────────────────────────────────
+
+  test "server materialization under an authorized dir drops the stale grant",
+       %{dir: dir, mounter: mounter} do
+    # gesture 1: marker event authorizes docs/dir
+    deliver_marker_event(mounter, dir, "docs/dir/.confirm-delete")
+
+    wait_until(fn ->
+      if MapSet.member?(:sys.get_state(mounter).delete_auths, "docs/dir"), do: :ok
+    end)
+
+    # the dir comes back from the server (another client bumped a child):
+    # an inbound create/write event materializes it — the grant must die
+    send(mounter, {:mcp_mount_event, %{op: "write", path: "/docs/dir/a.md", version: 9}})
+
+    # the resurrected dir later rm -r'd WITHOUT a fresh gesture: no auth,
+    # no marker write, no remove — the dir simply does not delete. (700ms:
+    # a leaked grant's confirm tick fires at 500ms and would show up as a
+    # marker vfs/write here.)
+    File.rm_rf!(Path.join(dir, "docs/dir"))
+    inject_pending(mounter, ["docs/dir"])
+
+    Process.sleep(700)
+
+    assert FakeVfs.calls("vfs/remove") == []
+    assert FakeVfs.calls("vfs/write") == []
+  end
+
+  test "duplicate confirm ticks converge to a park without crashing",
+       %{dir: dir, mounter: mounter} do
+    FakeVfs.set_remove_failure(:eio)
+
+    File.rm!(Path.join(dir, "docs/hello.txt"))
+    inject_delete(mounter, "docs/hello.txt", :file)
+    confirm_delete(mounter, "docs/hello.txt")
+    confirm_delete(mounter, "docs/hello.txt")
+
+    wait_until(fn -> if parked_delete?(mounter, "docs/hello.txt"), do: :ok end, 8_000)
+    assert Process.alive?(mounter)
+
+    FakeVfs.set_remove_failure(nil)
+  end
+
+  test "parent park names the parked child deletes", %{dir: dir, mounter: mounter} do
+    import ExUnit.CaptureLog
+
+    # child b.md parks first: fs leg laid (a tick aborts on an existing
+    # path), one refusal errno — a single tick, no retry churn
+    FakeVfs.fail_next_remove(:eperm)
+    File.rm!(Path.join(dir, "docs/dir/sub/b.md"))
+    inject_delete(mounter, "docs/dir/sub/b.md", :file)
+    confirm_delete(mounter, "docs/dir/sub/b.md")
+
+    wait_until(fn -> if parked_delete?(mounter, "docs/dir/sub/b.md"), do: :ok end)
+
+    # parent dir (same white-box injection; the local dir must be gone or
+    # the tick aborts): b.md's manifest row survives its parked delete, so
+    # the parent waits out its budget, then parks naming the parked child
+    File.rm_rf!(Path.join(dir, "docs/dir"))
+    inject_delete(mounter, "docs/dir/sub", :dir)
+    confirm_delete(mounter, "docs/dir/sub")
+
+    log =
+      capture_log(fn ->
+        wait_until(fn -> if parked_delete?(mounter, "docs/dir/sub"), do: :ok end, 8_000)
+      end)
+
+    assert log =~ "parked child deletes: docs/dir/sub/b.md"
   end
 end

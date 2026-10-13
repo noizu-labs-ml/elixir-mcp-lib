@@ -81,6 +81,8 @@ With the flag off, deleting a mounted path is a silent local-only no-op
   errors retry on the flush cadence and park after the attempt cap.
 - `.confirm-delete` files are never synced as page content in either
   direction.
+- `--deletes` with `--ro` is accepted but has no effect (a read-only mount
+  never pushes); the daemon logs a warning at startup.
 
 ## State machine
 
