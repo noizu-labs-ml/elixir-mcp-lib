@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 2026-10-13
 
+`rmdir` cap advertisement (substrate, server half of the §2 delete story —
+unblocks the docmost-mcp backend): backends opt in by implementing the new
+optional `rmdir/2` callback, and a server with one opted-in backend
+advertises `"caps" => ["move", "rmdir"]` in the `vfs/auth` handshake —
+same implemented-list derivation as the `move` cap
+(`Noizu.MCP.Server.VFS.rmdir_capable?/1`, `proto` stays `3`). The
+substrate ships no `vfs/rmdir` op; mcp-mount's caps-gated delete push
+(#67) flips from parked to live against opted-in servers. Test doubles
+kept at parity: fixture `Memory` implements `rmdir/2` (rmdir(2) errno
+matrix), the mcp-mount fake server double advertises the cap — #70.
+
 mcp-mount delete push (`--deletes`), per VFS-FEATURES-DESIGN §2 + D2 (client
 half; the server's `vfs/remove`/`DOCMOST_MCP_VFS_RMDIR`/marker intake lands
 separately) — #67. → stage (#68) → main (#69)
