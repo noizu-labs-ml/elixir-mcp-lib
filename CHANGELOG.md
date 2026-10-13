@@ -18,7 +18,7 @@ same implemented-list derivation as the `move` cap
 substrate ships no `vfs/rmdir` op; mcp-mount's caps-gated delete push
 (#67) flips from parked to live against opted-in servers. Test doubles
 kept at parity: fixture `Memory` implements `rmdir/2` (rmdir(2) errno
-matrix), the mcp-mount fake server double advertises the cap.
+matrix), the mcp-mount fake server double advertises the cap — #70.
 
 mcp-mount delete push (`--deletes`), per VFS-FEATURES-DESIGN §2 + D2 (client
 half; the server's `vfs/remove`/`DOCMOST_MCP_VFS_RMDIR`/marker intake lands
