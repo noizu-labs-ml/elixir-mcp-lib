@@ -19,6 +19,7 @@ substrate ships no `vfs/rmdir` op; mcp-mount's caps-gated delete push
 (#67) flips from parked to live against opted-in servers. Test doubles
 kept at parity: fixture `Memory` implements `rmdir/2` (rmdir(2) errno
 matrix), the mcp-mount fake server double advertises the cap — #70.
+→ stage (#72) → main (#73)
 
 mcp-mount delete push (`--deletes`), per VFS-FEATURES-DESIGN §2 + D2 (client
 half; the server's `vfs/remove`/`DOCMOST_MCP_VFS_RMDIR`/marker intake lands
@@ -65,7 +66,8 @@ separately) — #67. → stage (#68) → main (#69)
 errno registry gains `:eperm` (→ `-32047`) so `{:error, :eperm}` refusal
 frames — docmost-mcp's marker-gate delete refusals (#21) — render
 `errno_atom` on the wire instead of falling back to a generic internal
-error; `VFS.errno` type and docs updated to match.
+error; `VFS.errno` type and docs updated to match — #71.
+→ stage (#72) → main (#73)
 
 ## 2026-10-13
 
