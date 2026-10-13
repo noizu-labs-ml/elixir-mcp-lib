@@ -72,6 +72,7 @@ cd elixir-mcp-lib
 git checkout develop
 
 cd daemon/mcp_mount
+rm -rf /tmp/mcp-mount-build            # NEVER build from a stale MIX_BUILD_ROOT (see below)
 MIX_BUILD_ROOT=/tmp/mcp-mount-build mix deps.get
 MIX_BUILD_ROOT=/tmp/mcp-mount-build mix escript.build
 ```
@@ -79,6 +80,15 @@ MIX_BUILD_ROOT=/tmp/mcp-mount-build mix escript.build
 `MIX_BUILD_ROOT` keeps `_build` out of the checkout (shared checkouts stay
 collision-free); `deps/` still lands in `daemon/mcp_mount/deps/` — which the run recipe
 in §4 needs anyway, because that is where `mac_listener` gets built.
+
+**Build-root hygiene (hard rule):** the escript embeds the Elixir stdlib beams it was
+built against, so a `MIX_BUILD_ROOT` left over from a different elixir/OTP or dependency
+set produces a daemon that boots, materializes the snapshot, then dies on the **first
+watcher event** with stdlib/protocol undefs (seen live 2026-10-13:
+`String.Chars.List`, `Inspect.Opts`, `Exception.blame`). `rm -rf` the build root before
+every rebuild, or unset `MIX_BUILD_ROOT` entirely. The escript sanity-probes the
+embedded runtime at boot and refuses to mount with a plain rebuild hint
+(exit 78) if the beams are inconsistent.
 
 Success looks like:
 
@@ -212,6 +222,7 @@ The client is **not on hex** — updates are always git + rebuild + restart:
 ```sh
 cd /path/to/elixir-mcp-lib && git pull origin develop
 cd daemon/mcp_mount
+rm -rf /tmp/mcp-mount-build      # never reuse a stale MIX_BUILD_ROOT (see build-root hygiene above)
 MIX_BUILD_ROOT=/tmp/mcp-mount-build mix deps.get && MIX_BUILD_ROOT=/tmp/mcp-mount-build mix escript.build
 pkill -f mcp-mount      # then re-run the §4 recipe (same manifest → fast diff resync)
 ```
