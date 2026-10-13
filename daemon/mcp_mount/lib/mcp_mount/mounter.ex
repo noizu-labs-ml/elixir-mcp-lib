@@ -485,10 +485,15 @@ defmodule McpMount.Mounter do
       if MapSet.size(s.pending) > 0, do: Process.send_after(self(), :flush, @debounce_ms)
 
       # moves paired before the drop re-arm their confirm ticks (the previous
-      # tick either fired while disconnected — a no-op — or never fired)
-      Enum.each(Map.keys(s.move_pairing), fn from_rel ->
-        Process.send_after(self(), {:move_confirm, from_rel}, @move_confirm_ms)
-      end)
+      # tick either fired while disconnected — a no-op — or never fired). The
+      # attempt budget resets with the connection: retries burned against the
+      # dead transport do not shorten the fresh one's cadence, matching the
+      # write path's per-connection counting (robot review, head d7dea15).
+      move_pairing =
+        Map.new(s.move_pairing, fn {from_rel, pair} ->
+          Process.send_after(self(), {:move_confirm, from_rel}, @move_confirm_ms)
+          {from_rel, Map.put(pair, :attempts, 1)}
+        end)
 
       # the fresh resync healed the tree: pull backoff counters and any
       # resync nudge that survived into the reconnect are cleared — and the
@@ -502,6 +507,7 @@ defmodule McpMount.Mounter do
           watcher: watcher,
           watcher_mon: watcher_mon,
           pull_attempts: %{},
+          move_pairing: move_pairing,
           resync_nudge: false,
           pull_epoch: s.pull_epoch + 1
       }
@@ -676,7 +682,6 @@ defmodule McpMount.Mounter do
         mode = mode_from_node(node)
         abs_to = Path.join(s.mount, pair.to)
         File.chmod(abs_to, mode)
-        content = File.read!(abs_to)
 
         s = %{
           s
@@ -690,12 +695,30 @@ defmodule McpMount.Mounter do
         # the server's acked version; the remove/create event pair this
         # triggers server-side self-echoes harmlessly (content matches what
         # we just recorded)
-        save_manifest(
-          s,
-          s.manifest
-          |> Map.delete(from_rel)
-          |> Map.put(pair.to, entry(content, node["version"], mode))
-        )
+        #
+        # the local read degrades instead of raising: the target can vanish
+        # or turn unreadable in the window between the wire ack and this
+        # update (user action, a racing server event). A failed read drops
+        # the from leg and lets the server's own create self-echo heal the
+        # target — never File.read!, whose raise would kill the daemon
+        # (robot review, head d7dea15).
+        case File.read(abs_to) do
+          {:ok, content} ->
+            save_manifest(
+              s,
+              s.manifest
+              |> Map.delete(from_rel)
+              |> Map.put(pair.to, entry(content, node["version"], mode))
+            )
+
+          {:error, reason} ->
+            Logger.warning(
+              "mcp-mount[#{s.name}]: move acked for #{pair.to} but local read failed " <>
+                "(#{inspect(reason)}); target heals via server self-echo"
+            )
+
+            save_manifest(s, Map.delete(s.manifest, from_rel))
+        end
 
       # server already holds something at the target: the inference raced a
       # real server-side create. Ordinary conflict semantics on the target.

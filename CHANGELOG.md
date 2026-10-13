@@ -55,9 +55,10 @@ consumes the server's `vfs/move` + proto/caps handshake from above).
   cadence (F9); control paths always re-pull on events (F5); `Conn`
   gains a probe-friendly `caps/1` callback (F8 documents `:exit` as
   closed-transport semantics).
-
-Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
-(client-only; no server changes) — #57.
+- **Robot-review follow-ups (head d7dea15):** a move ack whose local read
+  races the target vanishing degrades to the server's create self-echo
+  instead of raising out of the daemon; reconnect re-arms pairings with a
+  fresh attempt budget (connection-scoped cadence, matching writes).
 
 Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
 (client-only; no server changes) — #57. → stage (#59) → main (#60) → stage (#62) → main (#63)
