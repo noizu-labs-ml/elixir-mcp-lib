@@ -6,6 +6,8 @@
 `vfs/subscribe` (WS), pushes local edits back (250 ms debounce), syncs on reconnect by manifest
 version-diff. Runs in the **foreground** until killed; the mounted directory remains as plain
 files afterward (a later remount resyncs by version, deletions included).
+**New to mounting?** Start with [`VFS-MOUNT-GUIDE.md`](VFS-MOUNT-GUIDE.md) — the zero-to-mounted
+walkthrough (macOS prerequisites, build, first mount, everyday use, troubleshooting).
 
 ---
 
@@ -21,7 +23,8 @@ MIX_ENV=prod mix escript.build          # → ./mcp-mount (escript, -noshell)
 | Flag | Required | Meaning |
 |---|---|---|
 | `--url ws(s)://host/vfs` | ✔ | VFSWS endpoint of the target host (`GET /vfs` upgrade; `wss://` for TLS) |
-| `--token TOKEN` | — | Principal credential — an NPL **MCP JWT** (mint: `POST /api/mcp/token {"key": "<api-key>"}`) or an OAuth-delegated bearer. Optional; empty token is allowed. The first protocol frame is still `vfs/auth`. Empty token is accepted when the server has `auth: nil` or optional auth. *Or set `MCP_MOUNT_TOKEN` (env fallback; env wins only if the flag is absent) |
+| `--token-file PATH` | — | **Recommended** credential form: read the token from PATH (trimmed; keeps it out of `ps`/shell history). Missing/empty file ⇒ exit 78 with a plain error |
+| `--token TOKEN` | — | **Legacy** argv form (warns: `token passed via argv is visible to ps — use --token-file`). Principal credential — an NPL **MCP JWT** (mint: `POST /api/mcp/token {"key": "<api-key>"}`) or an OAuth-delegated bearer. Optional; empty token is allowed. The first protocol frame is still `vfs/auth`. Empty token is accepted when the server has `auth: nil` or optional auth. *Or set `MCP_MOUNT_TOKEN` (env fallback; env wins only if no flag is given), else the default file `~/.config/docmost-mcp/mount-token`* |
 | `--mount DIR` | ✔ | Local directory to materialize into (created/updated in place) |
 | `--ro` | — | Read-only mount: full snapshot + live sync, **never pushes** local edits (no watcher) |
 
@@ -45,7 +48,10 @@ mcp-mount --url wss://tobor.locker/vfs \
           --token "$PROD_MCP_JWT" \
           --mount ~/mnt/tobor --ro
 
-# token via env (keeps it out of shell history / ps)
+# token from a file (recommended — kept out of shell history AND ps)
+mcp-mount --url wss://tobor-stage.noizu.com/vfs --token-file ~/.config/docmost-mcp/mount-token --mount ~/mnt/tobor-stage
+
+# token via env (also keeps it out of shell history / ps)
 MCP_MOUNT_TOKEN="$JWT" mcp-mount --url wss://tobor-stage.noizu.com/vfs --mount ~/mnt/tobor-stage
 ```
 

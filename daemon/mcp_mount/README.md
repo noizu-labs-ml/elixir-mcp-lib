@@ -42,13 +42,14 @@ Result: `grep`, `cat`, `tail -f`, pipes and cron all work on your MCP data.
 
 ```bash
 mix escript.build
-./mcp-mount --url ws://127.0.0.1:4000/vfs [--token TOKEN] --mount ~/tmp/mcp [--ro]
+./mcp-mount --url ws://127.0.0.1:4000/vfs [--token-file PATH | --token TOKEN] --mount ~/tmp/mcp [--ro]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--url` | VFS WebSocket endpoint (`ws://` or `wss://`, path usually `/vfs`) |
-| `--token` | optional bearer token (falls back to `MCP_MOUNT_TOKEN`; empty is allowed). `vfs/auth` is always sent |
+| `--token-file` | bearer token read from a file (trimmed; recommended — keeps the token out of `ps`). Falls back to `$MCP_MOUNT_TOKEN`, then `~/.config/docmost-mcp/mount-token`. Missing/empty file ⇒ exit 78 |
+| `--token` | legacy inline bearer token — visible to `ps`, logs a warning; `vfs/auth` is always sent |
 | `--mount` | local directory to materialize the tree into (created if missing) |
 | `--ro` | read-only: no watcher, never pushes local edits |
 | `--deletes` | opt in to pushing local deletions (default off: a local `rm` is local-only) |

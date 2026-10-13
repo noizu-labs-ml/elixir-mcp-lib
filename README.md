@@ -583,6 +583,9 @@ the `vfs/auth` frame — the upgrade handshake is what gates the socket.
 
 ### Mount daemon
 
+**Zero to a mounted `~/wiki`?** Start with [`docs/VFS-MOUNT-GUIDE.md`](docs/VFS-MOUNT-GUIDE.md) —
+prerequisites, build, first mount, everyday use, and troubleshooting in one walkthrough.
+
 [`daemon/mcp_mount`](daemon/mcp_mount) is the client side of the same protocol:
 `mcp-mount` connects to a VFS WebSocket endpoint, materializes the tree as
 **real local files** (grep/cat/tail -f/pipes just work), then keeps both sides
