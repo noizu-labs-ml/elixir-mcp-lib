@@ -115,6 +115,7 @@ defmodule McpMount.MounterDeleteTest do
   # Simulate the watcher delivering a marker event (fsevents is not in the
   # loop — same reasoning as the move suite).
   defp deliver_marker_event(mounter, dir, rel) do
+    File.mkdir_p!(Path.dirname(Path.join(dir, rel)))
     File.write!(Path.join(dir, rel), "")
     send(mounter, {:file_event, nil, {Path.join(dir, rel), [:created]}})
     :ok
@@ -709,5 +710,27 @@ defmodule McpMount.MounterDeleteTest do
       end)
 
     assert log =~ "parked child deletes: docs/dir/sub/b.md"
+  end
+
+  # ── robot follow-ups (F-batch) ────────────────────────────────────────────
+
+  # F15: the ignored/control filters gate EVERYTHING the watcher handler
+  # does — marker capture included. A .confirm-delete under an ignored
+  # subtree (dot-dir, .mcp-mount metadata, .conflict-*) must never arm a
+  # delete authorization. Inert while dir deletion stays depth-gated; the
+  # test pins the layering so deepening delete semantics can't regress it.
+  test "marker under an ignored path never captures a delete authorization", %{
+    dir: dir,
+    mounter: mounter
+  } do
+    deliver_marker_event(mounter, dir, ".obsidian/notes/.confirm-delete")
+    deliver_marker_event(mounter, dir, ".mcp-mount/junk/.confirm-delete")
+
+    Process.sleep(300)
+
+    assert :sys.get_state(mounter).delete_auths == MapSet.new()
+    assert MapSet.size(:sys.get_state(mounter).pending) == 0
+    assert delete_pending(mounter) == %{}
+    assert Process.alive?(mounter)
   end
 end

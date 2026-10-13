@@ -85,6 +85,9 @@ defmodule McpMount.Mounter do
   # absent at the tick — an editor atomic-save that briefly removes a path
   # must never turn into a server-side delete
   @delete_confirm_ms 500
+  # sha256 of empty content, in the manifest's hash encoding — pairing's
+  # "never a key" sentinel (robot follow-up F14, see pair_moves/1)
+  @empty_content_hash Base.encode16(:crypto.hash(:sha256, <<>>), case: :lower)
 
   defstruct [
     :conn_mod,
@@ -198,6 +201,18 @@ defmodule McpMount.Mounter do
     {:ok, state, {:continue, :connect}}
   end
 
+  # proc_lib crash reports render the terminating GenServer's state, and the
+  # state holds the mount token — a live leak on 2026-10-13, when the mounter
+  # crashed while logging a dead-watcher reason and the report echoed the
+  # token. OTP 26+ lets a GenServer redact its status before reports are
+  # rendered (covers SASL reports and :sys.get_status).
+  @impl GenServer
+  def format_status(%{state: %__MODULE__{} = st} = status) do
+    %{status | state: %__MODULE__{st | token: "<redacted>"}}
+  end
+
+  def format_status(status), do: status
+
   @impl GenServer
   def handle_continue(:connect, %__MODULE__{state: st} = s) do
     case s.conn_mod.connect([url: s.url, token: s.token, owner: self()] ++ s.conn_opts) do
@@ -268,6 +283,15 @@ defmodule McpMount.Mounter do
     rel = relative(s, path)
 
     cond do
+      # Ignored / control paths never carry a delete authorization: the
+      # filters gate EVERYTHING this handler does (robot follow-up F15 —
+      # capture used to run before them, inert while dir deletion stays
+      # depth-gated but the wrong-way-round layering would arm ghosts the
+      # day delete semantics deepen).
+      rel != nil and
+          (Manifest.ignored?(rel) or (control_path?(rel) and !control_config_path?(rel))) ->
+        {:noreply, s}
+
       # .confirm-delete command files (design §2/D2) never queue: they are
       # the per-delete authorization, not content. Their creation records
       # the authorization for the containing dir (the file exists at event
@@ -714,10 +738,18 @@ defmodule McpMount.Mounter do
   # content hash matches the vanished entry's manifest hash, is an editor
   # rename. Both legs leave `pending`: the confirm tick either completes the
   # move or re-queues the legs for the ordinary write-back.
+  #
+  # Empty content never pairs (robot follow-up F14): "" is the one hash any
+  # new file can carry (editor scratch, touch, placeholder), so an
+  # empty-vs-empty match would retitle an arbitrary bystander. The mis-pair
+  # is byte-identical (design §1/D1 accepts identity-only damage) — excluding
+  # it removes the whole class; the legs just fall back to the ordinary
+  # create + delete flush.
   defp pair_moves(s) do
     sources =
       for rel <- s.pending,
           s.manifest[rel] != nil,
+          s.manifest[rel].hash != @empty_content_hash,
           not control_path?(rel),
           not File.exists?(Path.join(s.mount, rel)),
           do: rel,
@@ -1113,7 +1145,21 @@ defmodule McpMount.Mounter do
   # is then a harmless no-op.
   defp delete_done(s, rel) do
     Logger.info("mcp-mount[#{s.name}]: deleted #{rel} on server")
-    File.rm(Path.join([s.mount, rel, ".confirm-delete"]))
+
+    # robot follow-up F16: cleanup is best-effort and usually a no-op — the
+    # `rm -r` flow already removed the marker before the delete ever pushed
+    case File.rm(Path.join([s.mount, rel, ".confirm-delete"])) do
+      :ok ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "mcp-mount[#{s.name}]: stale .confirm-delete under #{rel} not removable: #{inspect(reason)}"
+        )
+    end
 
     s = %{
       s
@@ -1393,7 +1439,10 @@ defmodule McpMount.Mounter do
             end
 
           true ->
-            {conflict(s, rel, abs), false}
+            case landed_retry(s, rel, abs) do
+              {:synced, s2} -> {s2, false}
+              :conflict -> {conflict(s, rel, abs), false}
+            end
         end
 
       {:error, %{errno: :enoent}} ->
@@ -1502,6 +1551,28 @@ defmodule McpMount.Mounter do
               push_attempts: Map.delete(s.push_attempts, rel)
           }
         end
+    end
+  end
+
+  # Robot follow-up F1: a timed-out-but-landed write makes the next push's
+  # stat see a server version ahead of the manifest and would fall straight
+  # into conflict/3 — a spurious `.conflict-<ts>` for content the server
+  # already holds. Re-read the server content FIRST: hash-equal to the local
+  # file means the earlier push landed, so adopt the server version as a
+  # confirmed sync (read-back = confirmation) and skip the rename dance.
+  # Anything else — different content, read failure — is a real conflict
+  # and falls through to the ordinary path.
+  defp landed_retry(s, rel, abs) do
+    with {:ok, %{"content" => content, "version" => version}} <-
+           call(s.conn, "vfs/read", %{"path" => "/" <> rel}),
+         local_hash when is_binary(local_hash) <- file_hash(abs),
+         true <- content_hash(content) == local_hash do
+      mode = if(s.manifest[rel], do: s.manifest[rel].mode, else: 0o644)
+
+      {:synced,
+       acked_sync(s, rel, content, mode, version, s.manifest[rel] && s.manifest[rel].version)}
+    else
+      _ -> :conflict
     end
   end
 
