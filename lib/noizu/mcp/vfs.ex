@@ -45,13 +45,17 @@ defmodule Noizu.MCP.VFS do
   ## Defaults
 
   Read-only backends only implement `stat/2`, `list/3`, and `read/2`. Write
-  (`write/3`, `create/3`, `remove/2`), `move/3`, `search/3`, and `xattr/2`
-  have defaults: writes and moves return `{:error, :enosys}`, `xattr/2`
-  returns `{:ok, %{}}`. Override them to advertise write capability (see
-  `Noizu.MCP.Server.VFS`). A backend that overrides `move/3` additionally
-  gains the `vfs/move` op and the `move` cap in the `vfs/auth` handshake;
-  backends without it see `vfs/move` answered `-32601` before the backend
-  is ever called.
+  (`write/3`, `create/3`, `remove/2`), `move/3`, `rmdir/2`, `search/3`, and
+  `xattr/2` have defaults: writes, moves, and rmdirs return
+  `{:error, :enosys}`, `xattr/2` returns `{:ok, %{}}`. Override them to
+  advertise write capability (see `Noizu.MCP.Server.VFS`). A backend that
+  overrides `move/3` additionally gains the `vfs/move` op and the `move` cap
+  in the `vfs/auth` handshake; backends without it see `vfs/move` answered
+  `-32601` before the backend is ever called. A backend that overrides
+  `rmdir/2` opts into the `rmdir` cap in the `vfs/auth` handshake the same
+  way (see `Noizu.MCP.Server.VFS.rmdir_capable?/1`); the substrate ships no
+  `vfs/rmdir` op yet — consumers gate their own directory-delete flows on
+  the advertised cap.
 
   Every mount also serves a generated, read-only `/README.md` (see
   `Noizu.MCP.VFS.Readme`); a backend customizes its section there by
@@ -133,6 +137,16 @@ defmodule Noizu.MCP.VFS do
   @callback move(from :: String.t(), to :: String.t(), ctx :: Ctx.t()) ::
               {:ok, t()} | {:error, errno()}
 
+  @doc """
+  Remove a directory (rmdir semantics: the path must be an empty directory).
+  Optional: backends without it get a `{:error, :enosys}` default.
+  Overriding `rmdir/2` is how a backend opts into the `rmdir` cap in the
+  `vfs/auth` handshake (see `Noizu.MCP.Server.VFS.rmdir_capable?/1`) — the
+  same implemented-list derivation the `move` cap uses.
+  """
+  @callback rmdir(path :: String.t(), ctx :: Ctx.t()) ::
+              :ok | {:error, errno()}
+
   @doc "Grep-style line search over files under `root`, paginated."
   @callback search(root :: String.t(), query :: String.t(), ctx :: Ctx.t()) ::
               {:ok, [match()], next_cursor :: String.t() | nil}
@@ -148,7 +162,7 @@ defmodule Noizu.MCP.VFS do
   @doc "Short markdown blurb for the backend's section in the mount's generated `/README.md` (see `Noizu.MCP.VFS.Readme`)."
   @callback __mcp_vfs__(:describe) :: String.t() | nil
 
-  @optional_callbacks write: 3, create: 3, remove: 2, move: 3, search: 3, xattr: 2
+  @optional_callbacks write: 3, create: 3, remove: 2, move: 3, rmdir: 2, search: 3, xattr: 2
 
   # <REMOVED UUID HERE> __using__
   defmacro __using__(_opts) do
@@ -165,7 +179,7 @@ defmodule Noizu.MCP.VFS do
   # <REMOVED UUID HERE> __before_compile__
   defmacro __before_compile__(env) do
     required = [stat: 2, list: 3, read: 2]
-    optional = [write: 3, create: 3, remove: 2, move: 3, search: 3, xattr: 2]
+    optional = [write: 3, create: 3, remove: 2, move: 3, rmdir: 2, search: 3, xattr: 2]
 
     implemented =
       (required ++ optional)
