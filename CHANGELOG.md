@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## 2026-10-13
+## [0.6.0] — 2026-10-13
 
 `rmdir` cap advertisement (substrate, server half of the §2 delete story —
 unblocks the docmost-mcp backend): backends opt in by implementing the new
@@ -68,8 +68,6 @@ frames — docmost-mcp's marker-gate delete refusals (#21) — render
 `errno_atom` on the wire instead of falling back to a generic internal
 error; `VFS.errno` type and docs updated to match — #71.
 → stage (#72) → main (#73)
-
-## 2026-10-13
 
 `vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
 the docmost-mcp backend callback lands separately) — #61. → stage (#65) → main (#66)
