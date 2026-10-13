@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 2026-10-13
 
 Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
-(client-only; no server changes) — #57.
+(client-only; no server changes) — #57. → stage (#59) → main (#60)
 
 - **Timeouts are values, not crashes.** `WSConn.call/4` rescues GenServer
   exits: a deadline surfaces as `{:error, :timeout}`, a dead conn as
@@ -30,7 +30,7 @@ Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
   only the escalation path when the in-place resync fails.
 
 Control-write whitelist for the mcp-mount daemon, per VFS-FEATURES-DESIGN
-§3/D3 (client half; no server or auth changes) — #58.
+§3/D3 (client half; no server or auth changes) — #58. → stage (#59) → main (#60)
 
 - **`etc/dev/config/**` is writable from a mount edit.** The watcher queues
   config paths and write-back pushes them through the ordinary `vfs/write`
