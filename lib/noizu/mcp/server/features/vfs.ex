@@ -42,6 +42,7 @@ defmodule Noizu.MCP.Server.Features.VFS do
     enotdir: -32044,
     enotempty: -32045,
     enosys: -32046,
+    eperm: -32047,
     eio: -32048
   }
 

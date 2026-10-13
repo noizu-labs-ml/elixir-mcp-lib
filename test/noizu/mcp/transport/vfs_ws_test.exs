@@ -447,10 +447,11 @@ defmodule Noizu.MCP.Transport.VFSWSTest do
 
   # ── vfs/move + handshake extras ───────────────────────────────────────────
 
-  test "auth result carries proto and caps for a move-capable backend", %{port: port} do
+  test "auth result carries proto and caps for a move/rmdir-capable backend", %{port: port} do
     client = connect_ok!(port, [{"authorization", "Bearer " <> @key}])
 
-    assert {:ok, _, %{"result" => %{"proto" => 3, "caps" => ["move"], "authenticated" => true}}} =
+    assert {:ok, _,
+            %{"result" => %{"proto" => 3, "caps" => ["move", "rmdir"], "authenticated" => true}}} =
              WSClient.request(client, "vfs/auth", %{"api_key" => @key}, 1)
   end
 

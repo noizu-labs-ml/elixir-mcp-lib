@@ -223,6 +223,32 @@ defmodule Noizu.MCP.VFS.Fixture.Memory do
     end)
   end
 
+  # rmdir(2) semantics: ENOENT missing, ENOTDIR on a file, ENOTEMPTY
+  # non-empty; `/` refused like remove/2 (:eacces). Overriding rmdir/2 is
+  # what opts this fixture into the `rmdir` handshake cap (the same
+  # opt-in-by-implementation move/3 got in #61).
+  @impl true
+  def rmdir(path, ctx) do
+    transact(ctx, fn {tree, contents} ->
+      cond do
+        path == "/" ->
+          {:error, :eacces}
+
+        not Map.has_key?(tree, path) ->
+          {:error, :enoent}
+
+        not dir?(tree, path) ->
+          {:error, :enotdir}
+
+        Enum.any?(tree, fn {child, _node} -> parent(child) == path end) ->
+          {:error, :enotempty}
+
+        true ->
+          {:ok, {Map.delete(tree, path), Map.delete(contents, path)}, :ok}
+      end
+    end)
+  end
+
   @impl true
   def search(root, query, ctx) do
     peek(ctx, fn {tree, contents} ->
