@@ -9,8 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 2026-10-13
 
+mcp-mount delete push (`--deletes`), per VFS-FEATURES-DESIGN §2 + D2 (client
+half; the server's `vfs/remove`/`DOCMOST_MCP_VFS_RMDIR`/marker intake lands
+separately).
+
+- **`--deletes` opt-in flag** (default off: a local `rm` stays a silent
+  local-only no-op, byte-for-byte the pre-deletes behavior). With the flag
+  on, a tracked file removed locally pushes `vfs/remove` behind a 500ms
+  double-confirm window — a path back at the tick (editor atomic-save)
+  aborts and re-enters the ordinary write-back.
+- **Page-dir deletes carry a `.confirm-delete` marker** (D2 strictest
+  shape): the marker is written (`vfs/write`) and awaited BEFORE the
+  `vfs/remove`; the server consumes it on success. Dir deletes are
+  childless-only and decompose bottom-up — manifest-file children and
+  still-pending descendant page dirs gate the parent (an `rm -r` lands
+  files, then leaf dirs, then parents).
+- **Caps-gated like moves:** deletes push only when the advertised caps
+  include `rmdir`; unknown caps (pre-handshake servers) park. Spaces
+  (root-level dirs) are never deletable via the mount; a root-level dir's
+  children delete with a loud soft-delete warning.
+- **Refusals park, transport retries:** `:eperm` (marker missing/stale — a
+  rename invalidates it), `:eacces` (server gate off), `:enotempty`
+  (children remain) and method-not-found park the delete with no retry
+  churn; re-authoring the marker or reconnecting re-arms. Unclassified
+  errors retry on the flush cadence and park after the push-attempt cap.
+  `:enoent` counts as success (already gone).
+- **Marker hygiene:** `.confirm-delete` paths are never queued, pushed as
+  page content, or pulled back in either flag state; marker authorization
+  is captured at watcher-event time (auth survives `rm -r` unlinking the
+  marker before the flush) and consumed on success.
+- **Reconnect fix (found by the new tests):** `go_live` now schedules the
+  post-resync flush AFTER re-queuing parked deletes — previously a
+  reconnect that carried only parked deletes (empty pending) never
+  flushed, stranding the parked delete until the next local edit.
+- **Robot review (head 80b7506):** delete authorization is now
+  single-gesture — a server (re)materialization at/under an authorized
+  dir (event pull, resync materialize, conflict rewrite) drops the stale
+  grant, so a later plain `rm -r` cannot spend an authorization whose
+  tree came back from the server; `--deletes` + `--ro` logs a startup
+  warning (and the README says so); a stale/duplicate confirm tick parks
+  defensively instead of `Map.fetch!`-crashing the mounter; a parent dir
+  giving up on children names its parked child deletes in the park log.
+
+## 2026-10-13
+
 `vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
-the docmost-mcp backend callback lands separately).
+the docmost-mcp backend callback lands separately) — #61. → stage (#65) → main (#66)
 
 - **`vfs/move {from, to}` on both VFS transports** (WS + unix socket) and
   the MCP-native feature surface: validates both paths, gates on write caps
@@ -34,7 +78,7 @@ the docmost-mcp backend callback lands separately).
   rename(2)-EINVAL analogue, robot review #61).
 
 mcp-mount move pairing, per VFS-FEATURES-DESIGN §1 + D1 (client half;
-consumes the server's `vfs/move` + proto/caps handshake from above).
+consumes the server's `vfs/move` + proto/caps handshake from above) — #64. → stage (#65) → main (#66)
 
 - **Editor renames promote to ONE `vfs/move`.** A tracked file vanishing
   from disk while an untracked file with identical content appears is

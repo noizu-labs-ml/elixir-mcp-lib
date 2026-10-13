@@ -51,11 +51,38 @@ mix escript.build
 | `--token` | optional bearer token (falls back to `MCP_MOUNT_TOKEN`; empty is allowed). `vfs/auth` is always sent |
 | `--mount` | local directory to materialize the tree into (created if missing) |
 | `--ro` | read-only: no watcher, never pushes local edits |
+| `--deletes` | opt in to pushing local deletions (default off: a local `rm` is local-only) |
 
 A `.mcp-mount/manifest.json` inside the mount dir tracks
 `{path → version, mode, size, content-hash}`; reconnects are a version-compare
 resync against it (no event log). Server deletions are mirrored; `.mcp-mount/`
 and `*.conflict-*` are never pushed.
+
+## Deletes (`--deletes`)
+
+With the flag off, deleting a mounted path is a silent local-only no-op
+(byte-for-byte the pre-deletes behavior). With the flag on:
+
+- **Files**: a locally removed tracked file pushes `vfs/remove` once its path
+  is still absent after a short double-confirm window (an editor atomic-save
+  — remove + recreate inside the window — aborts and re-enters the ordinary
+  write-back).
+- **Page dirs**: a locally removed page dir pushes its `<dir>/.confirm-delete`
+  marker (`vfs/write`) FIRST and only then `vfs/remove` — the server consumes
+  the marker on success. Dir deletes are childless-only: children (and
+  descendant page dirs) must land on the server before the parent; an `rm -r`
+  decomposes bottom-up.
+- **Gate**: deletes push only when the server's advertised caps include
+  `rmdir` (unknown caps park). Spaces (root-level dirs) are never deletable
+  via the mount.
+- **Refusals park**: `:eperm` (missing/stale marker), `:eacces` (server flag
+  off), `:enotempty` (children remain) and method-not-found park the delete
+  instead of retrying — re-author the marker or reconnect to re-arm. Other
+  errors retry on the flush cadence and park after the attempt cap.
+- `.confirm-delete` files are never synced as page content in either
+  direction.
+- `--deletes` with `--ro` is accepted but has no effect (a read-only mount
+  never pushes); the daemon logs a warning at startup.
 
 ## State machine
 

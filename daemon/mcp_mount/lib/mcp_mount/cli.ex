@@ -1,14 +1,17 @@
 defmodule McpMount.CLI do
+  require Logger
+
   @moduledoc """
   `mcp-mount` escript entry point.
 
-      mcp-mount --url ws://host:port/vfs [--token TOKEN] --mount DIR [--ro]
+      mcp-mount --url ws://host:port/vfs [--token TOKEN] --mount DIR [--ro] [--deletes]
 
   Mounts the remote VFS at DIR as real local files and keeps them live.
   `--token` is optional (empty token allowed). The connection still sends
   `vfs/auth`; an empty token is accepted when the server has `auth: nil`
   or optional auth. Token may also come from the `MCP_MOUNT_TOKEN` env var.
-  Runs in the foreground until killed.
+  `--deletes` opts in to pushing local deletions to the server (default
+  off: a local `rm` is local-only). Runs in the foreground until killed.
   """
 
   def main(argv) do
@@ -16,12 +19,12 @@ defmodule McpMount.CLI do
 
     {opts, _rest, invalid} =
       OptionParser.parse(argv,
-        strict: [url: :string, token: :string, mount: :string, ro: :boolean]
+        strict: [url: :string, token: :string, mount: :string, ro: :boolean, deletes: :boolean]
       )
 
     case {invalid, opts[:url], opts[:mount]} do
       {[], url, mount} when is_binary(url) and is_binary(mount) ->
-        run(url, mount, token(opts), !!opts[:ro])
+        run(url, mount, token(opts), !!opts[:ro], !!opts[:deletes])
 
       _ ->
         usage()
@@ -29,8 +32,16 @@ defmodule McpMount.CLI do
     end
   end
 
-  defp run(url, mount, token, ro) do
+  defp run(url, mount, token, ro, deletes) do
     Logger.configure(level: :info)
+
+    # a read-only mount never pushes anything, deletes included — don't let
+    # the flag look broken silently (robot review, head 80b7506)
+    if ro and deletes do
+      Logger.warning(
+        "mcp-mount: --deletes has no effect on a --ro mount (read-only never pushes)"
+      )
+    end
 
     {:ok, _mounter} =
       McpMount.Mounter.start_link(
@@ -38,10 +49,15 @@ defmodule McpMount.CLI do
         token: token,
         mount: mount,
         ro: ro,
+        deletes: deletes,
         conn_mod: McpMount.WSConn
       )
 
-    IO.puts("mcp-mount: #{url} -> #{Path.expand(mount)}#{if ro, do: " (ro)", else: ""}")
+    IO.puts(
+      "mcp-mount: #{url} -> #{Path.expand(mount)}#{if ro, do: " (ro)", else: ""}" <>
+        if(deletes, do: " (deletes)", else: "")
+    )
+
     Process.sleep(:infinity)
   end
 
@@ -55,7 +71,7 @@ defmodule McpMount.CLI do
 
   defp usage do
     IO.puts(:stderr, """
-    usage: mcp-mount --url ws://host:port/vfs [--token TOKEN] --mount DIR [--ro]
+    usage: mcp-mount --url ws://host:port/vfs [--token TOKEN] --mount DIR [--ro] [--deletes]
     """)
   end
 end
