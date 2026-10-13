@@ -9,9 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 2026-10-13
 
+`rmdir` cap advertisement (substrate, server half of the §2 delete story —
+unblocks the docmost-mcp backend): backends opt in by implementing the new
+optional `rmdir/2` callback, and a server with one opted-in backend
+advertises `"caps" => ["move", "rmdir"]` in the `vfs/auth` handshake —
+same implemented-list derivation as the `move` cap
+(`Noizu.MCP.Server.VFS.rmdir_capable?/1`, `proto` stays `3`). The
+substrate ships no `vfs/rmdir` op; mcp-mount's caps-gated delete push
+(#67) flips from parked to live against opted-in servers. Test doubles
+kept at parity: fixture `Memory` implements `rmdir/2` (rmdir(2) errno
+matrix), the mcp-mount fake server double advertises the cap — #70.
+
 mcp-mount delete push (`--deletes`), per VFS-FEATURES-DESIGN §2 + D2 (client
 half; the server's `vfs/remove`/`DOCMOST_MCP_VFS_RMDIR`/marker intake lands
-separately).
+separately) — #67. → stage (#68) → main (#69)
 
 - **`--deletes` opt-in flag** (default off: a local `rm` stays a silent
   local-only no-op, byte-for-byte the pre-deletes behavior). With the flag
@@ -50,6 +61,11 @@ separately).
   warning (and the README says so); a stale/duplicate confirm tick parks
   defensively instead of `Map.fetch!`-crashing the mounter; a parent dir
   giving up on children names its parked child deletes in the park log.
+
+errno registry gains `:eperm` (→ `-32047`) so `{:error, :eperm}` refusal
+frames — docmost-mcp's marker-gate delete refusals (#21) — render
+`errno_atom` on the wire instead of falling back to a generic internal
+error; `VFS.errno` type and docs updated to match.
 
 ## 2026-10-13
 

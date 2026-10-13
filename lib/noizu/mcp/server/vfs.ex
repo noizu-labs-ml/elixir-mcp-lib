@@ -45,6 +45,23 @@ defmodule Noizu.MCP.Server.VFS do
     end
   end
 
+  @doc """
+  True when the backend itself implements `rmdir/2` — the `rmdir` cap in the
+  `vfs/auth` handshake is derived from this, with the same implemented-list
+  derivation as `move_capable?/1`: `Noizu.MCP.VFS`'s `__before_compile__`
+  fills an `{:error, :enosys}` default for backends that omit `rmdir/2`, so
+  the list (not `function_exported?/3`) is what distinguishes a real
+  opt-in; the fallback covers backends compiled without `use Noizu.MCP.VFS`.
+  """
+  # <REMOVED UUID HERE> rmdir_capable?
+  @spec rmdir_capable?(module()) :: boolean()
+  def rmdir_capable?(backend) do
+    case implemented(backend) do
+      implemented when is_list(implemented) -> :rmdir in implemented
+      nil -> function_exported?(backend, :rmdir, 2)
+    end
+  end
+
   @doc "Capability map contributed by a registered backend: `%{\"vfs\" => bool, \"vfs_write\" => bool}`."
   # <REMOVED UUID HERE> capabilities
   @spec capabilities(module()) :: %{String.t() => boolean()}
@@ -57,10 +74,11 @@ defmodule Noizu.MCP.Server.VFS do
   `%{"proto" => 3, "caps" => caps}` (VFS-FEATURES-DESIGN §5.1).
 
   `caps` is the **union** over every registered backend — the wire advertises
-  that `vfs/move` exists somewhere on this server; a call routed to a backend
-  without `move/3` still answers `-32601` per call. Clients feature-gate on
-  `caps` and treat `-32601` as the per-path authority. Old clients ignore
-  both fields.
+  that `vfs/move` exists somewhere on this server, plus `rmdir` when any
+  backend opts in via `rmdir/2` (see `rmdir_capable?/1`); a call routed to a
+  backend without `move/3` still answers `-32601` per call. Clients
+  feature-gate on `caps` and treat `-32601` as the per-path authority. Old
+  clients ignore both fields.
   """
   # <REMOVED UUID HERE> session_info
   @spec session_info(module()) :: %{String.t() => term()}
@@ -68,9 +86,14 @@ defmodule Noizu.MCP.Server.VFS do
     caps =
       case server.__mcp__(:vfs) do
         backends when is_list(backends) ->
-          if Enum.any?(backends, fn {backend, _opts} -> move_capable?(backend) end),
-            do: ["move"],
-            else: []
+          caps =
+            if Enum.any?(backends, fn {backend, _opts} -> move_capable?(backend) end),
+              do: ["move"],
+              else: []
+
+          if Enum.any?(backends, fn {backend, _opts} -> rmdir_capable?(backend) end),
+            do: caps ++ ["rmdir"],
+            else: caps
 
         _ ->
           []

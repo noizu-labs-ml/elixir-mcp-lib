@@ -142,10 +142,10 @@ defmodule Noizu.MCP.Transport.VFSSocketTest do
     assert {:ok, _} = VFSClient.stat(client, "/hello.txt")
   end
 
-  test "auth result carries proto and caps for a move-capable backend", %{memory: path} do
+  test "auth result carries proto and caps for a move/rmdir-capable backend", %{memory: path} do
     client = connect!(path)
 
-    assert {:ok, %{"proto" => 3, "caps" => ["move"], "authenticated" => true}} =
+    assert {:ok, %{"proto" => 3, "caps" => ["move", "rmdir"], "authenticated" => true}} =
              VFSClient.auth(client, @key)
   end
 

@@ -149,6 +149,10 @@ defmodule Noizu.MCP.VFSServerE2ETest do
     @impl true
     def remove("/", _ctx), do: {:error, :eacces}
 
+    # Marker-gate refusal shape (docmost-mcp #21): :eperm must carry
+    # errno_atom on the wire so clients can fast-path park on it.
+    def remove("/eperm-denied", _ctx), do: {:error, :eperm}
+
     def remove(path, _ctx) do
       case lookup(path) do
         :error ->
@@ -816,6 +820,13 @@ defmodule Noizu.MCP.VFSServerE2ETest do
 
       assert {:error, %{"code" => -32_040, "data" => %{"errno_atom" => "eacces"}}} =
                VFSClient.remove(client, "/")
+
+      # :eperm refusal maps to -32047 and renders errno_atom (registry entry).
+      assert {:error, %{"code" => -32_047, "data" => %{"errno_atom" => "eperm"}}} =
+               VFSClient.remove(client, "/eperm-denied")
+
+      assert %{code: -32_047, data: %{errno: :eperm}} =
+               Noizu.MCP.Server.Features.VFS.errno_error(:eperm)
     end
 
     test "vfs_search finds seeded lines with path, line number and text", %{socket: path} do

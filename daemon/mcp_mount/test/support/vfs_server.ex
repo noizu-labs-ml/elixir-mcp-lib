@@ -345,15 +345,16 @@ defmodule McpMount.Test.VfsServer do
     def handle_info(_, state), do: {:ok, state}
 
     defp handle_frame(id, "vfs/auth", %{"token" => @token}, state) do
-      # proto/caps handshake extras (SS5.1): the fixture advertises move
-      # support the way a current server does.
+      # proto/caps handshake extras (SS5.1): the fixture advertises move +
+      # rmdir support the way a current server does (rmdir via the
+      # substrate's rmdir_capable? advertisement).
       {:push,
        {:text,
         ok(id, %{
           "authenticated" => true,
           "session_id" => "test",
           "proto" => 3,
-          "caps" => ["move"]
+          "caps" => ["move", "rmdir"]
         })}, %{state | authed: true}}
     end
 
