@@ -227,6 +227,14 @@ defmodule Noizu.MCP.VFS.Fixture.Memory do
   # non-empty; `/` refused like remove/2 (:eacces). Overriding rmdir/2 is
   # what opts this fixture into the `rmdir` handshake cap (the same
   # opt-in-by-implementation move/3 got in #61).
+  #
+  # The cond order below IS the conformance contract (robot follow-up F17):
+  # structural refusals (`:enoent`/`:enotdir`/`:enotempty`) come before any
+  # policy gate, so consumers layer their authorization checks AFTER this
+  # shape — e.g. docmost's Controlled layer answers marker `:eperm` only
+  # once the base refusals have passed. Each backend keeps its own clause
+  # (Memory composes its tree logic here; other fixtures define theirs) —
+  # the shared battery proves every clause honors this same order.
   @impl true
   def rmdir(path, ctx) do
     transact(ctx, fn {tree, contents} ->

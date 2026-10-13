@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- mcp-mount crash-report redaction: the Mounter's GenServer state holds the
+  mount token, and proc_lib crash reports render that state on termination
+  (live leak 2026-10-13 via a dead-watcher logging crash). New
+  `format_status/1` replaces the token with `<redacted>` in any crash
+  report or `:sys.get_status` output.
+
+- mcp-mount escript stability: an escript built from a stale/mixed
+  `MIX_BUILD_ROOT` booted fine and died on the first watcher event with
+  stdlib/protocol undefs (live 2026-10-13 against the docmost server). Fix:
+  explicit `consolidate_protocols: true` in the escript config, a boot-time
+  runtime sanity probe in the CLI (string-chars/inspect/inspect-opts
+  dispatch) that refuses to mount with exit 78 and a rebuild hint, and a
+  build-root hygiene rule (`rm -rf` first) in the mount guide's build recipes.
+
+- Robot follow-ups F-batch: F17 conformance docs (rmdir refusal-order
+  contract in the substrate `rmdir` moduledoc + fixture cond-order comment)
+  and a cap-derivation union-matrix test pinning `"caps"` across every
+  subset of {move, rmdir} held singly or split across backends, both
+  opt-in orders; F14 move pairing excludes empty-content files (the ""
+  hash is one any new file carries — empty-vs-empty never pairs); F15
+  marker capture now sits behind the ignored/control-path filters so a
+  `.confirm-delete` under `.obsidian/**`, `.mcp-mount/**`, or a
+  `.conflict-*` path never arms a delete authorization; F16 a stale
+  `.confirm-delete` that fails `File.rm` with a non-enoent error logs and
+  continues instead of crashing the delete push; F1 a write whose ack was
+  lost to a transport timeout but which landed server-side is adopted as a
+  confirmed sync on retry (hash-compare read-back) instead of saving a
+  spurious `.conflict-<ts>` copy.
+
 ## [0.6.0] — 2026-10-13
 
 `rmdir` cap advertisement (substrate, server half of the §2 delete story —

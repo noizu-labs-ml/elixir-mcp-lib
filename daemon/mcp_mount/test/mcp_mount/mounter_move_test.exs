@@ -458,4 +458,56 @@ defmodule McpMount.MounterMoveTest do
     assert length(conflict_paths(dir, "docs/hello.txt")) == 1
     assert Process.alive?(mounter)
   end
+
+  # ── robot follow-ups (F-batch) ────────────────────────────────────────────
+
+  # F14: empty content is a "never a pairing key" sentinel — "" is the one
+  # hash ANY new file can carry, so an empty-vs-empty match would retitle an
+  # arbitrary bystander. The legs must fall back to the ordinary flush
+  # (create the new file; the vanished tracked file is a no-op with deletes
+  # off), never a vfs/move.
+  test "empty-vs-empty vanish-plus-create never pairs into a move", %{
+    dir: dir,
+    mounter: mounter
+  } do
+    # track an empty file first: a local create pushes vfs/create with ""
+    drive_write(dir, "docs/empty.txt", "", fn ->
+      Manifest.read(dir)["docs/empty.txt"] != nil and
+        FakeVfs.calls("vfs/create") != []
+    end)
+
+    entry = Manifest.read(dir)["docs/empty.txt"]
+
+    # the "" hash must be what vanished-source pairing would have keyed on
+    assert entry.hash == Base.encode16(:crypto.hash(:sha256, <<>>), case: :lower)
+
+    # editor gesture: the empty file vanishes, another empty file appears
+    File.rm!(Path.join(dir, "docs/empty.txt"))
+    File.write!(Path.join(dir, "docs/other-empty.md"), "")
+
+    inject_pending_for_move(mounter, ["docs/empty.txt", "docs/other-empty.md"])
+
+    wait_until(
+      fn ->
+        if Enum.any?(FakeVfs.calls("vfs/create"), &(&1["path"] == "/docs/other-empty.md")),
+          do: :ok
+      end,
+      8_000
+    )
+
+    # no pairing was armed and no move ever fires (past the confirm window)
+    assert :sys.get_state(mounter).move_pairing == %{}
+    Process.sleep(700)
+    assert FakeVfs.calls("vfs/move") == []
+    assert File.read!(Path.join(dir, "docs/other-empty.md")) == ""
+    assert Process.alive?(mounter)
+  end
+
+  defp inject_pending_for_move(mounter, rels) do
+    :sys.replace_state(mounter, fn st ->
+      %{st | pending: MapSet.union(st.pending, MapSet.new(rels)), timer: nil}
+    end)
+
+    send(mounter, :flush)
+  end
 end

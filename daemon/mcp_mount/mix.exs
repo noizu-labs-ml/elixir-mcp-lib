@@ -10,7 +10,18 @@ defmodule McpMount.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
-      escript: [main_module: McpMount.CLI, name: "mcp-mount", emu_args: "-noshell"],
+      escript: [
+        main_module: McpMount.CLI,
+        name: "mcp-mount",
+        emu_args: "-noshell",
+        # explicit: the escript embeds the Elixir stdlib, so protocol
+        # dispatch inside it must come from a consolidation performed by
+        # THIS build, never from host-shadowing raw beams (2026-10-13 live
+        # incident: an escript from a stale build root booted fine and died
+        # on the first watcher event with stdlib undefs; the CLI also
+        # sanity-probes at boot — see McpMount.CLI)
+        consolidate_protocols: true
+      ],
       deps: deps()
     ]
   end

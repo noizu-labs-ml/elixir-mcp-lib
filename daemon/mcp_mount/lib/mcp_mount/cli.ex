@@ -34,6 +34,7 @@ defmodule McpMount.CLI do
 
   defp run(url, mount, token, ro, deletes) do
     Logger.configure(level: :info)
+    runtime_sanity!()
 
     # a read-only mount never pushes anything, deletes included — don't let
     # the flag look broken silently (robot review, head 80b7506)
@@ -59,6 +60,49 @@ defmodule McpMount.CLI do
     )
 
     Process.sleep(:infinity)
+  end
+
+  # Boot-time runtime sanity (2026-10-13 live incident): the escript embeds
+  # the Elixir stdlib, so an escript built from a stale or mixed
+  # MIX_BUILD_ROOT can shadow the host runtime with an incompatible beam set.
+  # It boots, materializes the snapshot, then dies on the FIRST watcher event
+  # with protocol/stdlib undefs (String.Chars.List, Inspect.Opts,
+  # Exception.blame were the live trio). Probe the exact dispatch paths the
+  # daemon leans on and refuse to mount when the embedded runtime is
+  # inconsistent — failing at boot with a plain message beats dying
+  # mid-mount with the tree half materialized.
+  @doc false
+  def runtime_sanity! do
+    probes = [
+      {"string_chars", fn -> String.Chars.to_string(~c"ok") == "ok" end},
+      {"inspect", fn -> is_binary(inspect(%{"probe" => 1})) end},
+      {"inspect_opts", fn -> Inspect.Opts.new([]) != nil end}
+    ]
+
+    Enum.each(probes, fn {label, probe} ->
+      ok? =
+        try do
+          probe.()
+        rescue
+          _ -> false
+        catch
+          _, _ -> false
+        end
+
+      unless ok? do
+        IO.puts(
+          :stderr,
+          "mcp-mount: embedded runtime failed the #{label} sanity probe — the escript was " <>
+            "most likely built from a stale/mixed build root (an old MIX_BUILD_ROOT left " <>
+            "over from a previous elixir or dependency set). Rebuild with a FRESH build " <>
+            "root (rm -rf $MIX_BUILD_ROOT first, or unset MIX_BUILD_ROOT entirely) and remount."
+        )
+
+        System.halt(78)
+      end
+    end)
+
+    :ok
   end
 
   defp token(opts) do

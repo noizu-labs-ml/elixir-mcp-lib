@@ -151,6 +151,12 @@ defmodule Noizu.MCP.VFS do
   Overriding `rmdir/2` is how a backend opts into the `rmdir` cap in the
   `vfs/auth` handshake (see `Noizu.MCP.Server.VFS.rmdir_capable?/1`) — the
   same implemented-list derivation the `move` cap uses.
+
+  Refusal order is conventional and structural-first: `:enoent` for a
+  missing path, `:enotdir` for a file, `:enotempty` for a non-empty
+  directory — authorization gates (a consumer's confirm-marker `:eperm`,
+  say) layer AFTER these, so clients can rely on the structural errno
+  before the policy one.
   """
   @callback rmdir(path :: String.t(), ctx :: Ctx.t()) ::
               :ok | {:error, errno()}
