@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.1] — 2026-10-14
 
+→ develop #79 · → stage #80 · → main #81 · published to hex as `noizu_mcp` 0.6.1 (tag `v0.6.1`)
+
 - Security dependency bumps (hex audit flagged advisories against the
   develop pins): bandit 1.12.0 → 1.12.5 (3 advisories), mint 1.9.0 →
   1.11.0 (8), plug 1.19.2 → 1.20.3 (3), hpax 1.0.3 → 1.1.0, decimal
