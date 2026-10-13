@@ -201,6 +201,18 @@ defmodule McpMount.Mounter do
     {:ok, state, {:continue, :connect}}
   end
 
+  # proc_lib crash reports render the terminating GenServer's state, and the
+  # state holds the mount token — a live leak on 2026-10-13, when the mounter
+  # crashed while logging a dead-watcher reason and the report echoed the
+  # token. OTP 26+ lets a GenServer redact its status before reports are
+  # rendered (covers SASL reports and :sys.get_status).
+  @impl GenServer
+  def format_status(%{state: %__MODULE__{} = st} = status) do
+    %{status | state: %__MODULE__{st | token: "<redacted>"}}
+  end
+
+  def format_status(status), do: status
+
   @impl GenServer
   def handle_continue(:connect, %__MODULE__{state: st} = s) do
     case s.conn_mod.connect([url: s.url, token: s.token, owner: self()] ++ s.conn_opts) do
