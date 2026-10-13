@@ -142,6 +142,19 @@ defmodule Noizu.MCP.Transport.VFSSocketTest do
     assert {:ok, _} = VFSClient.stat(client, "/hello.txt")
   end
 
+  test "auth result carries proto and caps for a move-capable backend", %{memory: path} do
+    client = connect!(path)
+
+    assert {:ok, %{"proto" => 3, "caps" => ["move"], "authenticated" => true}} =
+             VFSClient.auth(client, @key)
+  end
+
+  test "auth caps are empty for a backend without move", %{null: path} do
+    client = connect!(path)
+
+    assert {:ok, %{"proto" => 3, "caps" => []}} = VFSClient.auth(client, @key)
+  end
+
   # ── ops ───────────────────────────────────────────────────────────────────
 
   test "vfs_stat returns a string-keyed node", %{memory: path} do
@@ -247,6 +260,46 @@ defmodule Noizu.MCP.Transport.VFSSocketTest do
   test "invalid params surface as -32602", %{memory: path} do
     client = authed!(path)
     assert {:error, %{"code" => -32602}} = VFSClient.request(client, "vfs/stat", %{})
+  end
+
+  # ── vfs/move ──────────────────────────────────────────────────────────────
+
+  test "vfs_move renames a file: old path gone, content at the new one", %{memory: path} do
+    client = authed!(path)
+
+    assert {:ok, %{"type" => "file", "size" => 12}} =
+             VFSClient.request(client, "vfs/move", %{
+               "from" => "/hello.txt",
+               "to" => "/renamed.txt"
+             })
+
+    assert {:error, %{"code" => -32002}} = VFSClient.stat(client, "/hello.txt")
+
+    assert {:ok, %{"content" => "hello world\n"}} = VFSClient.read(client, "/renamed.txt")
+  end
+
+  test "vfs_move errno matrix: enoent from, eexist to", %{memory: path} do
+    client = authed!(path)
+
+    assert {:error, %{"code" => -32002, "data" => %{"errno_atom" => "enoent"}}} =
+             VFSClient.request(client, "vfs/move", %{"from" => "/nope.txt", "to" => "/x.txt"})
+
+    assert {:error, %{"code" => -32041, "data" => %{"errno_atom" => "eexist"}}} =
+             VFSClient.request(client, "vfs/move", %{"from" => "/hello.txt", "to" => "/docs/a.md"})
+  end
+
+  test "vfs_move on a backend without move is -32601", %{null: path} do
+    client = authed!(path)
+
+    assert {:error, %{"code" => -32601}} =
+             VFSClient.request(client, "vfs/move", %{"from" => "/a", "to" => "/b"})
+  end
+
+  test "vfs_move invalid params are -32602", %{memory: path} do
+    client = authed!(path)
+
+    assert {:error, %{"code" => -32602}} =
+             VFSClient.request(client, "vfs/move", %{"from" => "/hello.txt"})
   end
 
   # ── pagination ────────────────────────────────────────────────────────────

@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 2026-10-13
 
+`vfs/move` substrate surface, per VFS-FEATURES-DESIGN §1/§5 (server half;
+the docmost-mcp backend callback and mcp-mount mv-pairing land separately).
+
+- **`vfs/move {from, to}` on both VFS transports** (WS + unix socket) and
+  the MCP-native feature surface: validates both paths, gates on write caps
+  for `from` and `to`, moves through the backend's new optional
+  `move/3` callback (behaviour default `{:error, :enosys}`), then publishes
+  the debounced `remove(from)` + `create(to)` event pair.
+- **Backends without `move/3` answer `-32601`** method-not-found —
+  capability is derived from the backend (the `__mcp_vfs__(:implemented)`
+  list, since `__before_compile__` fills defaults for every `use Noizu.MCP.VFS`
+  module), never from config.
+- **Auth handshake gains `proto` and `caps`.** Both transports now return
+  `{"authenticated": true, "session_id": ..., "proto": 3, "caps": ["move"]}`
+  — `proto` bumps to 3 because the auth result shape changed; `caps` lists
+  `move` when ANY registered backend implements it (empty otherwise;
+  derivation hoisted into `Noizu.MCP.Server.VFS.session_info/1` so the
+  transports cannot drift — robot review #61). Old clients that ignore the
+  new fields keep working.
+- `VFSClient.move/4` added; fixture `Memory` backend implements
+  `move/3` (subtree re-pathing, `:eacces`/`:enoent`/`:eexist` errno matrix,
+  and a guard refusing `to` inside `from`'s own subtree — `:eio`, the
+  rename(2)-EINVAL analogue, robot review #61).
+
 Deadline hardening for the mcp-mount daemon, per VFS-FEATURES-DESIGN §4
 (client-only; no server changes) — #57. → stage (#59) → main (#60) → stage (#62) → main (#63)
 
