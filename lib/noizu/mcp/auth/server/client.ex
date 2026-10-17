@@ -292,7 +292,10 @@ defmodule Noizu.MCP.Auth.Server.Client do
   # ── validation helpers ───────────────────────────────────────────────────
 
   defp registration_redirect_uris(params, config) do
-    opts = [allowed_hosts: Keyword.get(config.dcr, :allowed_redirect_hosts)]
+    opts = [
+      allowed_hosts: Keyword.get(config.dcr, :allowed_redirect_hosts),
+      allowed_schemes: Keyword.get(config.dcr, :allowed_redirect_schemes, [])
+    ]
 
     case Map.get(params, "redirect_uris") do
       uris when is_list(uris) and uris != [] and length(uris) <= @max_uris ->
@@ -306,7 +309,10 @@ defmodule Noizu.MCP.Auth.Server.Client do
   # A CIMD document may spell the field either way; the draft uses
   # `redirect_uris`, some clients emit the singular.
   defp cimd_redirect_uris(document, config) do
-    opts = [allowed_hosts: Keyword.get(config.cimd, :allowed_redirect_hosts)]
+    opts = [
+      allowed_hosts: Keyword.get(config.cimd, :allowed_redirect_hosts),
+      allowed_schemes: Keyword.get(config.cimd, :allowed_redirect_schemes, [])
+    ]
 
     case {Map.get(document, "redirect_uris"), Map.get(document, "redirect_uri")} do
       {uris, _} when is_list(uris) and uris != [] and length(uris) <= @max_uris ->

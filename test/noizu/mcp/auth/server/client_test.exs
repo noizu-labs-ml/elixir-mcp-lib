@@ -106,6 +106,37 @@ defmodule Noizu.MCP.Auth.Server.ClientTest do
   end
 
   describe "from_registration/2 — refusing" do
+    test "custom-scheme redirect URIs need dcr.allowed_redirect_schemes (Cursor)" do
+      cursor = %{"redirect_uris" => ["cursor://anysphere.cursor-mcp/oauth/callback"]}
+
+      assert {:error, %Errors{code: :invalid_redirect_uri}} =
+               Client.from_registration(registration(cursor), config())
+
+      cfg = config(dcr: [enabled: true, secret_opts: @fast, allowed_redirect_schemes: ["cursor"]])
+      assert {:ok, client, _secret} = Client.from_registration(registration(cursor), cfg)
+      assert client.redirect_uris == ["cursor://anysphere.cursor-mcp/oauth/callback"]
+
+      for bad <- [
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "file:///etc/passwd",
+            "http://evil.example/cb"
+          ] do
+        cfg =
+          config(
+            dcr: [
+              enabled: true,
+              secret_opts: @fast,
+              allowed_redirect_schemes: ["cursor", "javascript", "data", "file"]
+            ]
+          )
+
+        assert {:error, %Errors{}} =
+                 Client.from_registration(registration(%{"redirect_uris" => [bad]}), cfg),
+               bad
+      end
+    end
+
     test "no redirect_uris at all" do
       assert {:error, %Errors{code: :invalid_redirect_uri}} =
                Client.from_registration(registration(%{"redirect_uris" => []}), config())
