@@ -161,6 +161,73 @@ defmodule Noizu.MCP.Auth.Server.RedirectURITest do
                RedirectURI.validate("myapp:/cb", allow_custom_scheme: true)
     end
 
+    test "allowed_schemes admits an exact private-use scheme (Cursor)" do
+      cursor = "cursor://anysphere.cursor-mcp/oauth/callback"
+      assert {:error, :invalid_redirect_uri} = RedirectURI.validate(cursor)
+      assert {:ok, ^cursor} = RedirectURI.validate(cursor, allowed_schemes: ["cursor"])
+      assert {:ok, _} = RedirectURI.validate(cursor, allowed_schemes: ["CURSOR"])
+
+      assert {:ok, _} =
+               RedirectURI.validate("cursor:/oauth/callback", allowed_schemes: ["cursor"])
+
+      # Exact scheme name: no prefix/suffix lookalikes.
+      assert {:error, _} = RedirectURI.validate("cursorx://a/cb", allowed_schemes: ["cursor"])
+      assert {:error, _} = RedirectURI.validate("xcursor://a/cb", allowed_schemes: ["cursor"])
+      assert {:error, _} = RedirectURI.validate("vscode://a/cb", allowed_schemes: ["cursor"])
+      # Something must follow the scheme; the usual refusals still apply.
+      assert {:error, _} = RedirectURI.validate("cursor:", allowed_schemes: ["cursor"])
+      assert {:error, _} = RedirectURI.validate("cursor://", allowed_schemes: ["cursor"])
+
+      assert {:error, :fragment_not_allowed} =
+               RedirectURI.validate("cursor://a/cb#x", allowed_schemes: ["cursor"])
+
+      assert {:error, :userinfo_not_allowed} =
+               RedirectURI.validate("cursor://u@a/cb", allowed_schemes: ["cursor"])
+
+      assert {:error, _} = RedirectURI.validate("cursor://*/cb", allowed_schemes: ["cursor"])
+    end
+
+    test "dangerous schemes are refused even when a host lists them" do
+      listed = ~w(javascript data file vbscript about blob view-source ws chrome-extension intent)
+
+      for uri <- [
+            "javascript:alert(1)",
+            "javascript://x/%0aalert(1)",
+            "JavaScript:alert(1)",
+            "data:text/html,<script>x</script>",
+            "file:///etc/passwd",
+            "vbscript:msgbox",
+            "about:blank",
+            "blob:https://a/x",
+            "view-source:https://a",
+            "ws://a/cb",
+            "chrome-extension://abc/cb",
+            "intent://a#Intent;end"
+          ] do
+        assert {:error, _} = RedirectURI.validate(uri, allowed_schemes: listed), uri
+      end
+
+      assert RedirectURI.forbidden_scheme?("javascript")
+      assert RedirectURI.forbidden_scheme?("not a scheme")
+      refute RedirectURI.forbidden_scheme?("cursor")
+    end
+
+    test "allowed_schemes never relaxes the http/https rules" do
+      opts = [allowed_schemes: ["http", "https", "cursor"], allowed_hosts: ["claude.ai"]]
+      assert {:error, :insecure_scheme} = RedirectURI.validate("http://evil.example/cb", opts)
+      assert {:error, :host_not_allowed} = RedirectURI.validate("https://evil.example/cb", opts)
+      assert {:ok, _} = RedirectURI.validate("http://127.0.0.1:9/cb", opts)
+    end
+
+    test "a custom-scheme registration matches exactly (no port/path leeway)" do
+      reg = ["cursor://anysphere.cursor-mcp/oauth/callback"]
+      assert RedirectURI.matches?("cursor://anysphere.cursor-mcp/oauth/callback", reg)
+      refute RedirectURI.matches?("cursor://anysphere.cursor-mcp/oauth/callback/", reg)
+      refute RedirectURI.matches?("cursor://anysphere.cursor-mcp:1/oauth/callback", reg)
+      refute RedirectURI.matches?("cursor://evil/oauth/callback", reg)
+      refute RedirectURI.matches?("cursor://anysphere.cursor-mcp/oauth/callback?x=1", reg)
+    end
+
     test "allowed_hosts constrains a dynamic registration but exempts loopback" do
       opts = [allowed_hosts: ["claude.ai"]]
       assert {:ok, _} = RedirectURI.validate("https://claude.ai/cb", opts)

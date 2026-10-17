@@ -90,6 +90,22 @@ Two pipeline requirements, and what each looks like when you miss it:
 > on an issuer with a path or a resource outside it, which catches the common
 > half of this at boot.
 
+### Native clients with a private-use redirect scheme
+
+Cursor returns from OAuth to `cursor://anysphere.cursor-mcp/oauth/callback`.
+A custom scheme is refused by default; allow it **by exact scheme name**:
+
+```elixir
+dcr:  [enabled: true, allowed_redirect_hosts: ["claude.ai"], allowed_redirect_schemes: ["cursor"]],
+cimd: [enabled: true, allowed_redirect_schemes: ["cursor"]]
+```
+
+The client still registers its full redirect URI and the authorization
+request must repeat it byte-for-byte (only loopback URIs are port-agnostic).
+`javascript:`, `data:`, `file:`, the web schemes (http/https keep their own
+TLS-or-loopback rule) and other execution or browser-internal schemes are
+refused even if listed, as is a URI with nothing after the scheme.
+
 ## The flow
 
 ```
