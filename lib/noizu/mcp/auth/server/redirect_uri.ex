@@ -35,6 +35,15 @@ defmodule Noizu.MCP.Auth.Server.RedirectURI do
 
   @loopback_hosts ["127.0.0.1", "::1", "[::1]", "localhost"]
 
+  # Never a redirect target, whatever a host configures: script/data/local
+  # file execution contexts, browser-internal schemes, and the web schemes
+  # (http/https keep their own rules above — TLS, or loopback only).
+  @forbidden_schemes ~w(javascript data file vbscript about blob filesystem view-source
+                        ws wss ftp http https mailto tel sms intent chrome chrome-extension
+                        moz-extension resource jar)
+
+  @scheme_re ~r/^[a-z][a-z0-9+.-]{0,63}$/
+
   @type error ::
           :invalid_redirect_uri
           | :insecure_scheme
@@ -56,6 +65,14 @@ defmodule Noizu.MCP.Auth.Server.RedirectURI do
       RFC 8252 §7.1). Default `false`.
     * `:allow_http_hosts` — extra hosts allowed over plain `http` (a
       development-only escape hatch). Default `[]`.
+    * `:allowed_schemes` — an exact allowlist of private-use schemes a native
+      client may register, e.g. `["cursor"]` for Cursor's
+      `cursor://anysphere.cursor-mcp/oauth/callback`. Each entry must be a
+      plain RFC 3986 scheme name; `javascript`, `data`, `file`, the web schemes
+      and other execution/browser-internal schemes are refused even when
+      listed (`forbidden_scheme?/1`), and a URI with nothing after the scheme
+      is refused. Matching at the authorization endpoint stays exact
+      (`matches?/2`): only loopback URIs are port-agnostic. Default `[]`.
   """
   @spec validate(term(), keyword()) :: {:ok, String.t()} | {:error, error()}
   def validate(uri, opts \\ [])
@@ -151,6 +168,14 @@ defmodule Noizu.MCP.Auth.Server.RedirectURI do
       scheme in ["http", "https"] ->
         {:error, :insecure_scheme}
 
+      forbidden_scheme?(scheme) ->
+        {:error, :invalid_redirect_uri}
+
+      # An explicitly allowlisted private-use scheme (e.g. "cursor"): exact
+      # scheme match, and the URI must carry a target beyond the scheme.
+      scheme in allowed_schemes(opts) ->
+        if custom_target?(parsed), do: {:ok, uri}, else: {:error, :invalid_redirect_uri}
+
       # A private-use scheme has no authority to check.
       Keyword.get(opts, :allow_custom_scheme, false) and String.contains?(scheme, ".") ->
         {:ok, uri}
@@ -198,6 +223,34 @@ defmodule Noizu.MCP.Auth.Server.RedirectURI do
         false
     end
   end
+
+  @doc """
+  True for a scheme that can never be a redirect target (`javascript`,
+  `data`, `file`, `http`/`https` — which have their own rules — and other
+  execution or browser-internal schemes), or that is not a well-formed scheme
+  name at all.
+  """
+  @spec forbidden_scheme?(term()) :: boolean()
+  def forbidden_scheme?(scheme) when is_binary(scheme) do
+    scheme = String.downcase(scheme)
+    scheme in @forbidden_schemes or not Regex.match?(@scheme_re, scheme)
+  end
+
+  def forbidden_scheme?(_scheme), do: true
+
+  # Host-configured allowlist, lowercased; malformed or forbidden entries are
+  # dropped so a typo in config can never widen the set.
+  defp allowed_schemes(opts) do
+    opts
+    |> Keyword.get(:allowed_schemes, [])
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.reject(&forbidden_scheme?/1)
+  end
+
+  defp custom_target?(%URI{host: host, path: path}),
+    do: (is_binary(host) and host != "") or (is_binary(path) and path not in ["", "/"])
 
   defp loopback_host?(host) when is_binary(host), do: String.downcase(host) in @loopback_hosts
   defp loopback_host?(_host), do: false

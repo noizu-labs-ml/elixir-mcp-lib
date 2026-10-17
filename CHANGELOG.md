@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-10-17
+
+→ develop (PR pending) · not yet published to hex
+
+- Authorization server: **private-use redirect schemes for native clients**
+  (Cursor's `cursor://anysphere.cursor-mcp/oauth/callback`). New
+  `dcr: [allowed_redirect_schemes: [...]]` and `cimd: [allowed_redirect_schemes:
+  [...]]` (default `[]`, so nothing changes unless a host opts in), threaded to
+  `RedirectURI.validate/2` as `:allowed_schemes`. Exact scheme names only
+  (case-insensitive; `cursorx`/`xcursor` refused), something must follow the
+  scheme, and fragment/userinfo/wildcard refusals still apply; the authorize
+  request must repeat the registered URI byte-for-byte (only loopback stays
+  port-agnostic). `javascript`, `data`, `file`, `vbscript`, `about`, `blob`,
+  `view-source`, `ws`/`wss`, `intent`, browser-extension and the web schemes are
+  refused even when listed (`RedirectURI.forbidden_scheme?/1`) — http/https keep
+  their TLS-or-loopback rule. Tests in `redirect_uri_test.exs`,
+  `client_test.exs` (DCR), `cimd_test.exs`; guide section in
+  `authorization_server.md`.
+
 ## [0.6.1] — 2026-10-14
 
 → develop #79 · → stage #80 · → main #81 · published to hex as `noizu_mcp` 0.6.1 (tag `v0.6.1`)

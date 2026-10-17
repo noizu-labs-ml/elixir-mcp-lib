@@ -75,8 +75,13 @@ defmodule Noizu.MCP.Auth.Server do
       days, `nil` for none) — the ceiling rotation cannot extend.
     * `:authorization_code_ttl` (default 60), `:login_state_ttl` (default 600).
     * `:dcr` — `[enabled: false, allowed_redirect_hosts: [...],
+      allowed_redirect_schemes: [...],
       initial_access_token: {mod, fun}]`.
-    * `:cimd` — `[enabled: false, fetcher: {mod, opts}, ttl: 3600]`.
+    * `:cimd` — `[enabled: false, fetcher: {mod, opts}, ttl: 3600,
+      allowed_redirect_hosts: [...], allowed_redirect_schemes: [...]]`.
+      `allowed_redirect_schemes` (both blocks) is an exact allowlist of
+      private-use redirect schemes for native clients, e.g. `["cursor"]`; see
+      `Noizu.MCP.Auth.Server.RedirectURI.validate/2`.
     * `:upstream` — `{module, opts}`, see `Noizu.MCP.Auth.Server.Upstream`.
       Defaults to `Upstream.HostSession`, which reuses the host's own login.
     * `:consent` — `[enabled: true, renderer: {mod, fun}, skip_for: [...]]`.
