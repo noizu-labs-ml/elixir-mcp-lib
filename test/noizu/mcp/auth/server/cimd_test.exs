@@ -48,6 +48,26 @@ defmodule Noizu.MCP.Auth.Server.CIMDTest do
     )
   end
 
+  describe "custom-scheme redirect URIs in a CIMD document" do
+    test "accepted only with cimd.allowed_redirect_schemes" do
+      doc = Map.put(@document, "redirect_uris", ["cursor://anysphere.cursor-mcp/oauth/callback"])
+      assert {:error, _} = Client.from_cimd(@client_id, doc, config())
+
+      cfg = config(cimd: [allowed_redirect_schemes: ["cursor"]])
+      assert {:ok, client} = Client.from_cimd(@client_id, doc, cfg)
+      assert client.redirect_uris == ["cursor://anysphere.cursor-mcp/oauth/callback"]
+
+      evil = Map.put(@document, "redirect_uris", ["javascript:alert(1)"])
+
+      assert {:error, _} =
+               Client.from_cimd(
+                 @client_id,
+                 evil,
+                 config(cimd: [allowed_redirect_schemes: ["javascript"]])
+               )
+    end
+  end
+
   describe "cimd_client_id?/1" do
     test "an https URL is a CIMD client_id; nothing else is" do
       assert CIMD.cimd_client_id?("https://claude.ai/client")
