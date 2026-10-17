@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.2] — 2026-10-17
 
-→ develop (PR pending) · not yet published to hex
+→ develop #82 · → stage #83 · → main #84 · tag `v0.6.2` · **not yet published to hex** (manual `mix hex.publish`)
 
 - Authorization server: **private-use redirect schemes for native clients**
   (Cursor's `cursor://anysphere.cursor-mcp/oauth/callback`). New
