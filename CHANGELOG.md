@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 2026-10-26
+- docs: correct stale "main is CI/CD-only" deploy note — merging into main triggers CI/CD (user-verified 2026-10-26)
+
 ## [0.6.2] — 2026-10-17
 
 → develop #82 · → stage #83 · → main #84 · tag `v0.6.2` · **not yet published to hex** (manual `mix hex.publish`)
