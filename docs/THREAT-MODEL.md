@@ -2,7 +2,8 @@
 
 Grounded in code on `develop` + the `epic.content-crud-auth` changeset (review:
 w3-review 2026-10-06; CI/publish: ci-scout 2026-10-07) and the 2026-10-07
-fleet sweep. This repo has no PROJ-ARCH/PROJ-LAYOUT docs yet, so register
+fleet sweep; refreshed 2026-10-26. Architecture/layout grounding:
+[PROJ-ARCH.md](PROJ-ARCH.md) / [PROJ-LAYOUT.md](PROJ-LAYOUT.md) — register
 entries cite modules and test files directly. Maintained via
 `/npl-update-threat-model`.
 
@@ -81,7 +82,7 @@ graph LR
 | T-012 | Low-Med | Info disclosure | `vfs/file.ex children/2` | Symlink inside root leaks target size/mtime/type via `vfs_list` (`File.stat` follows links) | **Mitigated** — lstat-based; escaping/dangling links skipped (tested) |
 | T-013 | Med | Spoofing | `upstream/password` login form | No CSRF state cookie-binding (login-CSRF with attacker-known login_state) | **Open** — decision pending |
 | T-014 | Low | EoP | `dynamic_content.scope_covers?/2` | Granted bare `"*"` matches every write_scope; granted-side glob diverges from `Principal.has_scope?/2` | **Mitigated** — bare `"*"` covers nothing except a `"*"` write_scope (guards + moduledoc) |
-| T-015 | Med | Tampering (regression) | `.github/workflows/elixir.yml` | **No Elixir CI workflow** — library suite never runs on PR/push; security regressions undetected until a host runs tests | **Partial** — workflow added in this epic (dual matrix 1.20.1/29 + 1.18.4/27, SHA-pinned actions, Postgres 17 service feeding `MCP_OAUTH_TEST_DATABASE_URL` so the pg battery finally runs per-PR); closes on merge |
+| T-015 | Med | Tampering (regression) | `.github/workflows/elixir.yml` | **No Elixir CI workflow** — library suite never runs on PR/push; security regressions undetected until a host runs tests | **Mitigated** — workflow landed on `develop` (sharded battery, dual matrix 1.20.1/29 + 1.18.4/27, SHA-pinned actions, Postgres 17 service feeding `MCP_OAUTH_TEST_DATABASE_URL`; incomplete runs fail by design)
 | T-016 | Med | Tampering | `fuse.yml` | Floating action tags (`checkout@v4`, `setup-go@v5`), no SHA pinning | **Open** |
 | T-017 | Low | EoP | repo process | No CODEOWNERS / branch protection; hex publish is manual | **Partial** — manual publish is a human gate; ownership/protection absent |
 | T-018 | Med | Spoofing/Tampering | `mcp-mount` / `mcp-fuse` | VFS mount daemons on the local desktop | **Accepted (partial controls)** — `vfs/auth` API-key handshake required before any other method; residual local trust: unix-socket accessibility rides on filesystem permissions — host/operator must restrict the socket directory (restored from fleet sweep, folded in here) |
@@ -113,7 +114,7 @@ least-privilege (`contents: read` default, `write` only on release jobs);
 
 ## Mitigation Coverage
 
-**22 mitigated · 2 open · 1 open-by-design · 5 partial · 2 accepted · 1 host-audit** (33 registered).
+**23 mitigated · 2 open · 1 open-by-design · 4 partial · 2 accepted · 1 host-audit** (33 registered).
 Remaining open: T-013 (Password login CSRF — decision pending) and T-016 (fuse.yml
 action pinning). Open by design: T-025 (no-ACL-provider inert allow).
 No tickets exist; **this register is the tracker**.
@@ -122,8 +123,8 @@ No tickets exist; **this register is the tracker**.
 
 T-009–T-014 are mitigated in this changeset and verified by the full-suite
 run. T-013 (Password CSRF) is acceptable for first ship only if hosts are told
-the upstream is intranet-grade. T-015's workflow lands with this epic —
-wire it before merge. Hex publishing stays manual — the human in the loop is
+the upstream is intranet-grade. T-015's workflow has landed on `develop` —
+the suite now gates every PR touching the library. Hex publishing stays manual — the human in the loop is
 the current supply-chain gate for the package itself.
 
 From the restored fleet sweep:

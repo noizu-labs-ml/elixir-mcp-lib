@@ -29,7 +29,7 @@ noizu-mcp/
 ├── lib/mix/tasks/                  # mix mcp.client, mix mcp.engine, mix mcp.eval
 ├── test/                           # Mirrors lib (acl…transport) + support fixtures
 ├── priv/                           # spec/ JSON Schema, inspector UI, liquibase/
-├── docs/                           # arch/ (12), adrs/, 01–09 topical, specs/, PROJ-* docs
+├── docs/                           # arch/ (13), adrs/, 01–09 topical, specs/, PROJ-* docs
 ├── guides/                         # 16 ExDoc guides
 ├── cheatsheets/                    # mcp.cheatmd
 ├── examples/                       # echo_stdio, agent_client, http_kitchen_sink, no_dsl_server
@@ -39,7 +39,7 @@ noizu-mcp/
 ├── pg/                             # pg_mcp Rust/pgrx extension + docker e2e/smoke
 ├── scripts/                        # Dev helper scripts (test_sync.sh)
 ├── project-management/PRDs/        # PRD series (INDEX + PRD-1…13)
-├── .github/workflows/              # CI: fuse.yml, pg_mcp.yml, release.yml
+├── .github/workflows/              # CI: elixir.yml, fuse.yml, pg_mcp.yml, pg_mcp_tag.yml, release.yml
 ├── mix.exs                         # noizu_mcp package
 └── README.md
 ```
