@@ -1,5 +1,7 @@
 defprotocol Noizu.MCP.ACL do
   @moduledoc """
+  〚🔌:9a8ad6a0-a16c-5d4b-af17-a18f05377384〛 Noizu.MCP.ACL :: Binary-verdict authorization protocol over a host-implemented policy seam (PRD-2).
+
   The authorization decision protocol (PRD-2): does `subject` get to `action`
   `resource` under `ctx`? Returns `:allow` or `:deny` — no third verdict.
 

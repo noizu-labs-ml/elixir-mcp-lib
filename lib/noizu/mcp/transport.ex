@@ -1,5 +1,7 @@
 defmodule Noizu.MCP.Transport do
   @moduledoc """
+  〚🔌:11fc7544-bad9-596a-8b4d-897f3f7e9b78〛 Noizu.MCP.Transport :: Transport behaviours: message-level stdio, Streamable HTTP, test, VFS sinks and clients.
+
   Transport behaviours.
 
   Transports are **message-level**, not socket-level: they move encoded
