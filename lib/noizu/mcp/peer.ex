@@ -1,5 +1,7 @@
 defmodule Noizu.MCP.Peer do
   @moduledoc """
+  〚📦:74a14f2d-0af7-5cce-8eb0-f84c1064b92d〛 Noizu.MCP.Peer :: Sans-IO session core shared by server sessions and the client.
+
   Sans-IO MCP session core, shared by server sessions and client connections.
 
   Both ends of MCP are symmetric JSON-RPC peers; this module models one end as a

@@ -1,5 +1,7 @@
 # Noizu MCP
 
+〚📁:0bb0af31-93e4-5326-90ee-696676942254〛 Noizu MCP README :: Package entry point: install, quickstart, feature tour.
+
 [![Hex](https://img.shields.io/hexpm/v/noizu_mcp)](https://hex.pm/packages/noizu_mcp)
 [![Hex Docs](https://img.shields.io/badge/docs-hexdocs-blue)](https://hexdocs.pm/noizu_mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)

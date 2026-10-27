@@ -1,0 +1,122 @@
+---
+pointers:
+  02cd02c5-8a58-5ffc-a5b4-a6dc2d04b0fc:
+    created_at: 2026-10-27T01:59:36.867391Z
+    description: Top-level module facade for the MCP library - server and client entry points.
+    file_path: lib/noizu/mcp.ex
+    function: Noizu.MCP
+    kind: module
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp.ex
+        line: 3
+    token: 𔀸𓞭𓍯𓭼
+    updated_at: 2026-10-27T01:59:36.867391Z
+  '0bb0af31-93e4-5326-90ee-696676942254':
+    created_at: 2026-10-27T01:59:36.867366Z
+    description: 'Package entry point: install, quickstart, feature tour.'
+    file_path: README.md
+    function: Noizu MCP README
+    kind: file
+    line: 3
+    locations:
+      - file_path: README.md
+        line: 3
+    token: 𓓪𔙽𔐥𓸴
+    updated_at: 2026-10-27T01:59:36.867366Z
+  11fc7544-bad9-596a-8b4d-897f3f7e9b78:
+    created_at: 2026-10-27T01:59:36.867375Z
+    description: 'Transport behaviours: message-level stdio, Streamable HTTP, test, VFS sinks and clients.'
+    file_path: lib/noizu/mcp/transport.ex
+    function: Noizu.MCP.Transport
+    kind: interface
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/transport.ex
+        line: 3
+    token: 𓔂𔙼𓚇𓅈
+    updated_at: 2026-10-27T01:59:36.867375Z
+  2e9d02ff-8455-56a7-88e5-d6e10e7711f6:
+    created_at: 2026-10-27T01:59:36.867362Z
+    description: 'Single toolset resolution path (D1): catalog/resolve/invoke/permissions.'
+    file_path: lib/noizu/mcp/toolset.ex
+    function: Noizu.MCP.Toolset
+    kind: interface
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/toolset.ex
+        line: 3
+    token: 𓌻𓨅𓩨𓚆
+    updated_at: 2026-10-27T01:59:36.867362Z
+  3bde9c30-e08b-5bcf-b853-db59e2905410:
+    created_at: 2026-10-27T01:59:36.867395Z
+    description: Persistence contract (PRD-4) for lib-owned toolset/grant/negotiation stores.
+    file_path: lib/noizu/mcp/persistence.ex
+    function: Noizu.MCP.Persistence
+    kind: interface
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/persistence.ex
+        line: 3
+    token: 𔕇𔒛𓋄𓵠
+    updated_at: 2026-10-27T01:59:36.867395Z
+  44ccba3a-180f-5c11-9919-8ba9cedc2a36:
+    created_at: 2026-10-27T01:59:36.867379Z
+    description: 'Virtual filesystem behaviour: node trees, errno-mapped errors, TTL cache.'
+    file_path: lib/noizu/mcp/vfs.ex
+    function: Noizu.MCP.VFS
+    kind: interface
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/vfs.ex
+        line: 3
+    token: 𓛶𓖧𓾾𔌦
+    updated_at: 2026-10-27T01:59:36.867379Z
+  5b323faa-03f9-5b0c-9a12-ceb8001dec34:
+    created_at: 2026-10-27T01:59:36.867386Z
+    description: 'Server DSL: use Noizu.MCP.Server behaviour + macros for defining MCP servers.'
+    file_path: lib/noizu/mcp/server.ex
+    function: Noizu.MCP.Server
+    kind: module
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/server.ex
+        line: 3
+    token: 𓨒𐦜𔗹𔑔
+    updated_at: 2026-10-27T01:59:36.867386Z
+  74a14f2d-0af7-5cce-8eb0-f84c1064b92d:
+    created_at: 2026-10-27T01:59:36.867382Z
+    description: Sans-IO session core shared by server sessions and the client.
+    file_path: lib/noizu/mcp/peer.ex
+    function: Noizu.MCP.Peer
+    kind: module
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/peer.ex
+        line: 3
+    token: 𓛾𓺘𓹂𓽝
+    updated_at: 2026-10-27T01:59:36.867382Z
+  9a8ad6a0-a16c-5d4b-af17-a18f05377384:
+    created_at: 2026-10-27T01:59:36.867334Z
+    description: Binary-verdict authorization protocol over a host-implemented policy seam (PRD-2).
+    file_path: lib/noizu/mcp/acl.ex
+    function: Noizu.MCP.ACL
+    kind: interface
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/acl.ex
+        line: 3
+    token: 𓃟𔌎𔓆𔇴
+    updated_at: 2026-10-27T01:59:36.867334Z
+  df55bf13-fc43-536e-b6b2-361e27f9b60e:
+    created_at: 2026-10-27T01:59:36.867357Z
+    description: 'MCP client GenServer: transport lifecycle, handshake, server-initiated callbacks.'
+    file_path: lib/noizu/mcp/client.ex
+    function: Noizu.MCP.Client
+    kind: module
+    line: 3
+    locations:
+      - file_path: lib/noizu/mcp/client.ex
+        line: 3
+    token: 𓇽𓬙𓶑𓺮
+    updated_at: 2026-10-27T01:59:36.867357Z
