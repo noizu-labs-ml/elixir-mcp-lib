@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 2026-10-28
+- docs: add AGENT-README.md (agent orientation)
+
 ## 2026-10-26
 - docs: correct stale "main is CI/CD-only" deploy note — merging into main triggers CI/CD (user-verified 2026-10-26)
 - docs: doc-sweep 2026-10-26 — doc-pointers seed (.meta/pointers.yaml + 10 anchors, #85); threat model: T-015 → mitigated (elixir.yml landed), PROJ-ARCH/LAYOUT grounding; schema: VFS node table documented ([schema/vfs.md](docs/schema/vfs.md)); layout summary sync
