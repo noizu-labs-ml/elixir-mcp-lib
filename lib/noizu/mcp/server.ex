@@ -1,5 +1,7 @@
 defmodule Noizu.MCP.Server do
   @moduledoc """
+  〚📦:5b323faa-03f9-5b0c-9a12-ceb8001dec34〛 Noizu.MCP.Server :: Server DSL: use Noizu.MCP.Server behaviour + macros for defining MCP servers.
+
   Define an MCP server.
 
       defmodule MyApp.MCP do

@@ -1,5 +1,7 @@
 defmodule Noizu.MCP.VFS do
   @moduledoc """
+  〚🔌:44ccba3a-180f-5c11-9919-8ba9cedc2a36〛 Noizu.MCP.VFS :: Virtual filesystem behaviour: node trees, errno-mapped errors, TTL cache.
+
   Virtual filesystem behaviour for MCP servers.
 
   A VFS backend exposes a tree of nodes — directories, files, and control

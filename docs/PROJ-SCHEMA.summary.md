@@ -9,6 +9,7 @@ detail: [PROJ-SCHEMA.md](PROJ-SCHEMA.md) + `schema/` files.
 | OAuth 2.1 AS | Liquibase template | `priv/liquibase/noizu_mcp_oauth.yaml` |
 | Agent keypair/password auth | Liquibase template | `priv/liquibase/noizu_mcp_agent.yaml` |
 | Sync (ADR-009) | Liquibase (admin role) | `priv/liquibase/noizu_mcp_sync.yaml` + `priv/sql/noizu_mcp_sync.sql` |
+| VFS Database node table | Liquibase template | `priv/liquibase/noizu_mcp_vfs.yaml` |
 
 ```
 noizu_mcp_toolsets            slug PK                     custom toolsets
@@ -40,6 +41,7 @@ mcp_sync.source_records       (binding_id, resource_key)  source projection
 mcp_sync.source_changes       (binding_id, counter)       change feed
 mcp_sync.source_operations    (binding_id, operation_id)  idempotency ledger
 mcp_sync.source_snapshots     id PK                       15-min snapshots
+noizu_mcp_vfs_nodes           path PK, parent idx         VFS.Database files+dirs, version counter
 ```
 
 ```mermaid
@@ -56,6 +58,7 @@ erDiagram
     mcp_sync_records ||--o{ mcp_sync_outbox : ""
     mcp_sync_outbox |o--o{ mcp_sync_conflicts : ""
     mcp_sync_bindings ||--o{ mcp_sync_checkpoints : ""
+    noizu_mcp_vfs_nodes |o--o{ noizu_mcp_vfs_nodes : "parent_path"
 ```
 
 Conventions: `inserted_at`/`updated_at` timestamptz; SHA-256 hex `char(64)`

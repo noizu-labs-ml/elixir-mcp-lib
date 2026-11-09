@@ -48,7 +48,7 @@ noizu-mcp/
 │   └── docker/                 #   E2E compose + smoke SQL + install image
 ├── scripts/                    # Dev helper scripts (test_sync.sh)
 ├── project-management/         # PRD series (INDEX.md, PRD-1…13)
-├── .github/workflows/          # CI: fuse.yml, pg_mcp.yml, release.yml
+├── .github/workflows/          # CI: elixir.yml, fuse.yml, pg_mcp.yml, pg_mcp_tag.yml, release.yml
 ├── AGENT.md, AGENTS.md,        # Agent guidance (kept aligned)
 │   CLAUDE.md
 ├── .dialyzer_ignore.exs        # Dialyzer warning suppressions

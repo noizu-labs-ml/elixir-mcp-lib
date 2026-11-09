@@ -1,5 +1,7 @@
 defmodule Noizu.MCP.Persistence do
   @moduledoc """
+  〚🔌:3bde9c30-e08b-5bcf-b853-db59e2905410〛 Noizu.MCP.Persistence :: Persistence contract (PRD-4) for lib-owned toolset/grant/negotiation stores.
+
   The persistence contract (PRD-4 §4.1) for lib-owned toolset state: DB-defined
   toolsets, per-caller grants, and consent negotiations, across the `"toolsets"`,
   `"toolset_grants"`, `"toolset_negotiations"` store keys — plus `"engine_servers"`
