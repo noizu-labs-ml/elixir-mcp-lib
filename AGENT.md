@@ -10,7 +10,7 @@ Claude Code loads [CLAUDE.md](./CLAUDE.md). Same policy; this file is the harnes
 2. **No shell in main thread** — delegate to taskers.
 3. **Worktrees**: all work on worktrees; `epic.<group>` consolidation branches off `develop`; squash-PR provenance into epics.
 4. MAIN checkout owns `deps/_build`; worktrees symlink deps (absolute path).
-5. **PRs target `develop`.** Never merge or push `main` (CI/CD-only release path).
+5. **PRs target `develop`.** A merge into `main` triggers CI/CD (release path); promotions land via `stage` → `main` PRs.
 
 ## Identity
 
@@ -32,7 +32,7 @@ Hex-published as `noizu_mcp` (consumers pin `~> 0.1.x`) — bump `version` + CHA
 
 - Submodules sit on **`develop`** — keep your checkout on `develop`.
 - All PRs target **`develop`** (feature/bug/task branches fork from `develop`).
-- **`main` is CI/CD-only**: CI/CD automation performs all merges into `main` (release path). Never merge to or push `main` by hand.
+- **`main` is release-triggered**: a merge into `main` triggers CI/CD (image build → `bump-chart` → ArgoCD sync). Promotions land via `stage` → `main` PRs per the monorepo merge matrix.
 
 ## Pointers
 

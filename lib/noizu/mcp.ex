@@ -1,5 +1,7 @@
 defmodule Noizu.MCP do
   @moduledoc """
+  〚📦:02cd02c5-8a58-5ffc-a5b4-a6dc2d04b0fc〛 Noizu.MCP :: Top-level module facade for the MCP library - server and client entry points.
+
   Model Context Protocol (MCP) for Elixir — server and client.
 
   `Noizu.MCP` implements the [Model Context Protocol](https://modelcontextprotocol.io)

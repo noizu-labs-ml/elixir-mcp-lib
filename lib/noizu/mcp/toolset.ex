@@ -1,5 +1,7 @@
 defprotocol Noizu.MCP.Toolset do
   @moduledoc """
+  〚🔌:2e9d02ff-8455-56a7-88e5-d6e10e7711f6〛 Noizu.MCP.Toolset :: Single toolset resolution path (D1): catalog/resolve/invoke/permissions.
+
   The single toolset resolution path (D1): `tools/list`, `tools/call`, and the
   catalog tool all consume listing/dispatch through this protocol, and every
   implementation materializes the *effective* tool surface (definitions after

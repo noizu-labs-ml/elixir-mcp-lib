@@ -7,9 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-11-09
+
+→ develop #TBD · → stage #TBD · → main #TBD · published to hex as `noizu_mcp` 0.6.3 (tag `v0.6.3`)
+
+Docs-grade release — no runtime code changes; `mix.exs` version bump only.
+
+- changelog publication-record correction: the 0.6.2 entry falsely claimed
+  "**not yet published to hex**" — hex.pm has carried `noizu_mcp` 0.6.2 since
+  2026-10-17 (docs included). The 0.6.2 leg line now states the publication,
+  matching the 0.6.1 entry's wording.
+- doc-pointers seed (#85): `.meta/pointers.yaml` plus 10 anchor markers —
+  README sections and 9 module `@moduledoc` anchor lines — so doc pointers
+  resolve to stable source locations.
+- doc-sweep 2026-10-26: layout/arch/schema/threat-model alignment (T-015
+  marked mitigated — elixir.yml landed; PROJ-ARCH/LAYOUT grounding; the VFS
+  node table documented in `docs/schema/vfs.md`; layout summary sync).
+- AGENT-README.md (agent orientation) and a deploy-note correction — merging
+  into `main` triggers CI/CD; the old "main is CI/CD-only" note was stale.
+- README updates and repo CLAUDE.md Publishing-section refresh (hex latest
+  0.6.2 → releasing 0.6.3; consumers pin `~> 0.6`; manual `mix hex.publish`
+  with 2FA remains the publish mechanism).
+
+## 2026-10-28
+- docs: add AGENT-README.md (agent orientation)
+
+## 2026-10-26
+- docs: correct stale "main is CI/CD-only" deploy note — merging into main triggers CI/CD (user-verified 2026-10-26)
+- docs: doc-sweep 2026-10-26 — doc-pointers seed (.meta/pointers.yaml + 10 anchors, #85); threat model: T-015 → mitigated (elixir.yml landed), PROJ-ARCH/LAYOUT grounding; schema: VFS node table documented ([schema/vfs.md](docs/schema/vfs.md)); layout summary sync
+
 ## [0.6.2] — 2026-10-17
 
-→ develop (PR pending) · not yet published to hex
+→ develop #82 · → stage #83 · → main #84 · published to hex as `noizu_mcp` 0.6.2 (tag `v0.6.2`)
 
 - Authorization server: **private-use redirect schemes for native clients**
   (Cursor's `cursor://anysphere.cursor-mcp/oauth/callback`). New

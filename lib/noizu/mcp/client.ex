@@ -1,5 +1,7 @@
 defmodule Noizu.MCP.Client do
   @moduledoc """
+  〚📦:df55bf13-fc43-536e-b6b2-361e27f9b60e〛 Noizu.MCP.Client :: MCP client GenServer: transport lifecycle, handshake, server-initiated callbacks.
+
   MCP client: connect to an MCP server over a transport and call its tools,
   resources, and prompts.
 

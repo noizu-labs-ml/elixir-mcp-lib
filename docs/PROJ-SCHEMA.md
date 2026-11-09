@@ -9,6 +9,7 @@ SQL artifact below is shipped for the *host* to apply. Two application paths:
 | OAuth 2.1 AS tables | Host, via Liquibase template | `priv/liquibase/noizu_mcp_oauth.yaml` | [schema/oauth.md](schema/oauth.md) |
 | Agent keypair/password auth tables | Host, via Liquibase template | `priv/liquibase/noizu_mcp_agent.yaml` | [schema/agent.md](schema/agent.md) |
 | Sync schema (`mcp_sync`, ADR-009/PRD-13) | Host admin role, via Liquibase | `priv/liquibase/noizu_mcp_sync.yaml` → `priv/sql/noizu_mcp_sync.sql` | [schema/sync.md](schema/sync.md) |
+| VFS Database node table | Host, via Liquibase template | `priv/liquibase/noizu_mcp_vfs.yaml` | [schema/vfs.md](schema/vfs.md) |
 
 Liquibase changelogs are the authoritative source; this doc mirrors them.
 Code layout: see [PROJ-LAYOUT.md](PROJ-LAYOUT.md).
@@ -50,6 +51,7 @@ erDiagram
     mcp_sync_bindings ||--o{ mcp_sync_source_changes : ""
     mcp_sync_bindings ||--o{ mcp_sync_source_operations : ""
     mcp_sync_bindings ||--o{ mcp_sync_source_snapshots : ""
+    noizu_mcp_vfs_nodes |o--o{ noizu_mcp_vfs_nodes : "parent_path (logical)"
 ```
 
 ```plantuml
@@ -92,6 +94,9 @@ package "mcp_sync (ADR-009)" {
   entity mcp_sync_source_operations
   entity mcp_sync_source_snapshots
 }
+package "VFS Database (template)" {
+  entity noizu_mcp_vfs_nodes
+}
 
 noizu_mcp_toolsets ||--o{ noizu_mcp_toolset_grants
 noizu_mcp_toolsets ||--o{ noizu_mcp_toolset_negotiations
@@ -114,6 +119,7 @@ mcp_sync_bindings ||--o{ mcp_sync_source_records
 mcp_sync_bindings ||--o{ mcp_sync_source_changes
 mcp_sync_bindings ||--o{ mcp_sync_source_operations
 mcp_sync_bindings ||--o{ mcp_sync_source_snapshots
+noizu_mcp_vfs_nodes |o--o{ noizu_mcp_vfs_nodes : parent_path
 @enduml
 ```
 
@@ -150,6 +156,7 @@ mcp_sync_bindings ||--o{ mcp_sync_source_snapshots
 | `mcp_sync.source_changes` | `(binding_id, counter)` | sync | Source change feed (tombstoning) |
 | `mcp_sync.source_operations` | `(binding_id, operation_id)` | sync | Source idempotency ledger (request_hash + outcome) |
 | `mcp_sync.source_snapshots` | `id uuid` | sync | Consistent snapshot blobs (15-min default expiry) |
+| `noizu_mcp_vfs_nodes` | `path text` | vfs | VFS.Database nodes: files (BYTEA payload) + explicit dirs; backend-bumped monotonic `version` |
 
 Column-level detail, indexes, constraints, and the `mcp_sync` RLS/trigger
 machinery: see the `schema/` files linked in the first table.
