@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.3] — 2026-11-09
 
-→ develop #TBD · → stage #TBD · → main #TBD · published to hex as `noizu_mcp` 0.6.3 (tag `v0.6.3`)
+→ develop #86 · → stage #87 · → main #88 · tags `v0.6.3` + `release/v0.6.3` · hex publication pending (manual `mix hex.publish`, 2FA)
 
 Docs-grade release — no runtime code changes; `mix.exs` version bump only.
 
