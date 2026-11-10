@@ -7,9 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-11-10
+
+Security dependency sweep (OSV-verified 2026-11-10) — no product code changes.
+
+- bandit 1.12.5 → 1.14.1 — EEF-CVE-2026-105659 / EEF-CVE-2026-105660 (fixed
+  1.13.0), EEF-CVE-2026-108525 … EEF-CVE-2026-115269 (fixed 1.14.0),
+  EEF-CVE-2026-116078 (fixed 1.14.1) — 14 CVEs, network DoS family. Existing
+  constraint `~> 1.5` already permitted the fix; unchanged.
+- jsv 0.19.4 → 0.26.2 — EEF-CVE-2026-117680. Lock-only bump: the existing
+  `~> 0.19` constraint (`>= 0.19.0 and < 1.0.0`) already permits the patched
+  release, so `mix.exs` is unchanged; `mix.lock` holds 0.26.2.
+- jose 1.11.12 → 1.11.13 — EEF-CVE-2026-65625 … EEF-CVE-2026-65632 (8 CVEs).
+- ecto 3.14.1 → 3.14.3 — EEF-CVE-2026-118391 (reached via `ecto_sql ~> 3.11`).
+- plug_crypto 2.2.0 → 2.2.1 — EEF-CVE-2026-105963 (`secret_key_base` disclosure
+  via stacktrace).
+- Transitive moves: thousand_island 1.5.0 → 1.6.0 (required by bandit 1.14.x),
+  nimble_options 1.1.1 → 1.2.0, texture 1.0.1 → 2.0.0 (jsv 0.26.2 requires
+  texture `>= 1.2.1`; the previous 1.0.1 pin no longer satisfies it).
+
 ## [0.6.3] — 2026-11-09
 
-→ develop #TBD · → stage #TBD · → main #TBD · published to hex as `noizu_mcp` 0.6.3 (tag `v0.6.3`)
+→ develop #86 · → stage #87 · → main #88 · tags `v0.6.3` + `release/v0.6.3` · published to hex as `noizu_mcp` 0.6.3 (tag `v0.6.3`)
 
 Docs-grade release — no runtime code changes; `mix.exs` version bump only.
 
