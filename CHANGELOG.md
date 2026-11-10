@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.4] — 2026-11-10
 
+→ develop #89 · → stage #90 · → main #91 · tags `v0.6.4` + `release/v0.6.4` · hex publication pending (manual `mix hex.publish` with 2FA)
+
 Security dependency sweep (OSV-verified 2026-11-10) — no product code changes.
 
 - bandit 1.12.5 → 1.14.1 — EEF-CVE-2026-105659 / EEF-CVE-2026-105660 (fixed
