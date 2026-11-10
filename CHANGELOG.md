@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.4] — 2026-11-10
 
-→ develop #89 · → stage #90 · → main #91 · tags `v0.6.4` + `release/v0.6.4` · hex publication pending (manual `mix hex.publish` with 2FA)
+→ develop #89 · → stage #90 · → main #91 · tags `v0.6.4` + `release/v0.6.4` · published to hex as `noizu_mcp` 0.6.4 (tag `v0.6.4`)
 
 Security dependency sweep (OSV-verified 2026-11-10) — no product code changes.
 
