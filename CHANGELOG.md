@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-11-12
+
+→ develop #92 · → stage #93 · → main #94 · tag `v0.6.5` · published to hex as `noizu_mcp` 0.6.5 (tag `v0.6.5`)
+
+Severed-SSE-stream observability — no behavior change beyond logging/telemetry.
+
+- `Transport.StreamableHTTP.Plug` now emits `[:noizu_mcp, :streamable_http, :stream_closed]`
+  telemetry (`duration_ms` measurement; `reason` + `session_id` metadata) and one
+  `Logger.warning` line whenever a chunked SSE stream terminates without a final
+  response reaching the client: client disconnect mid-stream (`:client_closed`),
+  session process death (`:session_down`), request-deadline expiry on an SSE
+  stream (`:deadline`). Previously the `:closed` tear-down paths demonitored and
+  returned silently — mid-call transport drops left no server-side trace.
+- Covers both the POST request-upgrade loop and the GET general stream; clean
+  server-initiated closes (`:mcp_http_close`) stay unlogged.
+- No payload content (bodies, auth material) ever reaches the event or log line.
+
 ## [0.6.4] — 2026-11-10
+
+→ develop #89 · → stage #90 · → main #91 · tags `v0.6.4` + `release/v0.6.4` · published to hex as `noizu_mcp` 0.6.4 (tag `v0.6.4`)
 
 Security dependency sweep (OSV-verified 2026-11-10) — no product code changes.
 
