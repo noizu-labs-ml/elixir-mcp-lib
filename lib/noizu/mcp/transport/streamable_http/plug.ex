@@ -212,7 +212,6 @@ if Code.ensure_loaded?(Plug.Conn) do
       case get_req_header(conn, "authorization") do
         ["Bearer " <> token | _] -> token
         ["bearer " <> token | _] -> token
-
         # Other schemes (RFC 7617 `Basic`, say) reach the verifier with the
         # scheme intact, so a verifier that understands them can dispatch on
         # it — `Noizu.MCP.Auth.BasicVerifier` parses the pair out. Verifiers
@@ -571,12 +570,16 @@ if Code.ensure_loaded?(Plug.Conn) do
           end
 
         {:DOWN, ^monitor, :process, _pid, _reason} ->
-          if sse?, do: conn, else: send_resp(conn, 500, "Session terminated")
+          if sse? do
+            stream_closed(conn, :session_down)
+          else
+            send_resp(conn, 500, "Session terminated")
+          end
       after
         min(remaining, if(sse?, do: opts.keepalive, else: opts.sse_commit_after)) ->
           cond do
             remaining <= 0 and sse? ->
-              conn
+              stream_closed(conn, :deadline)
 
             remaining <= 0 ->
               Process.demonitor(monitor, [:flush])
@@ -606,13 +609,42 @@ if Code.ensure_loaded?(Plug.Conn) do
       |> put_resp_content_type("text/event-stream")
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
+      |> assign(:mcp_sse_started_at, System.monotonic_time(:millisecond))
+    end
+
+    # ── stream severance telemetry ───────────────────────────────────────────
+
+    # A severed SSE stream (client disconnect, session death, deadline expiry)
+    # used to vanish without a server-side trace. Emit one telemetry event and
+    # one warning line per terminated stream so mid-call transport drops are
+    # observable. Never log request/response bodies or auth material.
+    defp stream_closed(conn, reason) do
+      require Logger
+
+      started = conn.assigns[:mcp_sse_started_at]
+      duration_ms = if started, do: max(System.monotonic_time(:millisecond) - started, 0), else: 0
+      session_id = session_id!(conn) || "unknown"
+
+      :telemetry.execute(
+        [:noizu_mcp, :streamable_http, :stream_closed],
+        %{duration_ms: duration_ms},
+        %{reason: reason, session_id: session_id}
+      )
+
+      Logger.warning(
+        "noizu_mcp streamable_http: SSE stream closed " <>
+          "(reason=#{inspect(reason)}, session=#{session_id}, duration_ms=#{duration_ms})"
+      )
+
+      conn
     end
 
     # Streams one SSE chunk. A client that disconnected mid-stream (tab closed,
     # client timeout during a long tool call) makes Plug return
     # {:error, :closed} — matching bare {:ok, _} raised MatchError and crashed
     # the request process (observed ×3 in stage logs). Report :closed so the
-    # stream loop tears down cleanly instead.
+    # stream loop tears down cleanly instead, and mark the severance so the
+    # drop is observable in telemetry/logs (previously silent).
     defp sse_chunk(conn, data) do
       require Logger
 
@@ -621,7 +653,7 @@ if Code.ensure_loaded?(Plug.Conn) do
           {:ok, conn}
 
         {:error, :closed} ->
-          Logger.debug("noizu_mcp SSE stream: client closed the connection; stopping stream")
+          stream_closed(conn, :client_closed)
           :closed
       end
     end
@@ -659,6 +691,7 @@ if Code.ensure_loaded?(Plug.Conn) do
               |> put_resp_content_type("text/event-stream")
               |> put_resp_header("cache-control", "no-cache")
               |> send_chunked(200)
+              |> assign(:mcp_sse_started_at, System.monotonic_time(:millisecond))
 
             last_event_id = conn |> get_req_header("last-event-id") |> List.first()
 
@@ -669,7 +702,7 @@ if Code.ensure_loaded?(Plug.Conn) do
                 fn {event_id, binary}, conn ->
                   case chunk(conn, SSE.encode(binary, id: event_id)) do
                     {:ok, conn} -> {:cont, conn}
-                    {:error, _} -> {:halt, conn}
+                    {:error, _} -> stream_closed(conn, :client_closed) |> then(&{:halt, &1})
                   end
                 end
               )
@@ -693,19 +726,19 @@ if Code.ensure_loaded?(Plug.Conn) do
         {:mcp_http_event, event_id, binary} ->
           case chunk(conn, SSE.encode(binary, id: event_id)) do
             {:ok, conn} -> stream_get(conn, opts, monitor)
-            {:error, _closed} -> conn
+            {:error, _closed} -> stream_closed(conn, :client_closed)
           end
 
         :mcp_http_close ->
           conn
 
         {:DOWN, ^monitor, :process, _pid, _reason} ->
-          conn
+          stream_closed(conn, :session_down)
       after
         opts.keepalive ->
           case chunk(conn, ": keepalive\n\n") do
             {:ok, conn} -> stream_get(conn, opts, monitor)
-            {:error, _closed} -> conn
+            {:error, _closed} -> stream_closed(conn, :client_closed)
           end
       end
     end

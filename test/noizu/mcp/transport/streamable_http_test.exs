@@ -350,6 +350,113 @@ defmodule Noizu.MCP.Transport.StreamableHTTPTest do
       # teardown; pre-fix Plug.call/2 raised here.
       assert %Plug.Conn{status: 200} = StreamableHTTP.Plug.call(conn, opts)
     end
+
+    test "a closed chunk emits stream_closed telemetry (client_closed)" do
+      handler_id = "sse-drop-telemetry-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:noizu_mcp, :streamable_http, :stream_closed],
+          fn _event, measurements, metadata, _ ->
+            send(test_pid, {:stream_closed_evt, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      opts = StreamableHTTP.Plug.init(server: Fixtures.Server, sse_commit_after: 5_000)
+      {session_id, _} = initialize()
+
+      body =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 12,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "get_weather",
+            "arguments" => %{"location" => "NYC"},
+            "_meta" => %{"progressToken" => "pt"}
+          }
+        })
+
+      conn =
+        closed_conn(:post, "/", body, [
+          {"mcp-session-id", session_id},
+          {"mcp-protocol-version", "2025-11-25"}
+        ])
+
+      assert %Plug.Conn{status: 200} = StreamableHTTP.Plug.call(conn, opts)
+
+      # The first chunk into the closed connection must mark the severance:
+      # duration since the SSE upgrade, the reason, and the session — no body
+      # or auth material. (Concurrent async tests may tear streams down too;
+      # pin our event by session id.)
+      assert_received {:stream_closed_evt, %{duration_ms: duration_ms},
+                       %{reason: :client_closed, session_id: ^session_id}}
+
+      assert is_integer(duration_ms) and duration_ms >= 0
+    end
+
+    test "session death mid-SSE-stream emits stream_closed telemetry (session_down)" do
+      handler_id = "sse-drop-telemetry-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:noizu_mcp, :streamable_http, :stream_closed],
+          fn _event, measurements, metadata, _ ->
+            send(test_pid, {:stream_closed_evt, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      opts = StreamableHTTP.Plug.init(server: Fixtures.Server, sse_commit_after: 50)
+      {session_id, _} = initialize()
+
+      body =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 13,
+          "method" => "tools/call",
+          "params" => %{"name" => "slow", "arguments" => %{"ms" => 1_500}}
+        })
+
+      # The request loop lives in a spawned process so this test can kill the
+      # session mid-stream: the timer commits to SSE (~50ms), the keepalive
+      # chunk succeeds on the normal test adapter, and the loop parks in the
+      # receive waiting on the handler.
+      task =
+        Task.async(fn ->
+          conn(:post, "/", body)
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("accept", "application/json, text/event-stream")
+          |> put_req_header("mcp-session-id", session_id)
+          |> put_req_header("mcp-protocol-version", "2025-11-25")
+          |> StreamableHTTP.Plug.call(opts)
+        end)
+
+      # Past the commit window and monitor setup; the slow tool still runs.
+      Process.sleep(150)
+
+      [{session_pid, _}] =
+        Registry.lookup(Module.concat(Fixtures.Server, Registry), {:session, session_id})
+
+      Process.exit(session_pid, :kill)
+
+      conn = Task.await(task, 5_000)
+      assert conn.status == 200
+
+      assert_received {:stream_closed_evt, %{duration_ms: duration_ms},
+                       %{reason: :session_down, session_id: ^session_id}}
+
+      assert is_integer(duration_ms) and duration_ms >= 0
+    end
   end
 
   describe "full round-trip over Bandit" do
